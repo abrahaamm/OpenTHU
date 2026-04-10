@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="opencray_background">#FFF3F7FB</color>
+    <color name="opencray_surface">#FFFFFBF5</color>
+    <color name="opencray_ink">#FF14213D</color>
+    <color name="opencray_muted">#FF5C6B73</color>
+    <color name="opencray_primary">#FF1957D2</color>
+</resources>

@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">OpenCray</string>
+    <string name="app_subtitle">An Android system-level agent prototype built on top of an OpenClaw-style runtime.</string>
+    <string name="connect_button">Update Agent Link</string>
+    <string name="capability_label">Capability Layers</string>
+    <string name="events_label">Runtime Events</string>
+    <string name="tab_context">Context</string>
+    <string name="tab_actions">Actions</string>
+    <string name="tab_safety">Safety</string>
+    <string name="context_title">Context Feed</string>
+    <string name="context_feed_label">Observed mobile context</string>
+    <string name="actions_title">Action Center</string>
+    <string name="action_feed_label">Planned actions</string>
+    <string name="safety_title">Safety Console</string>
+    <string name="host_hint">Host, e.g. 192.168.0.88</string>
+    <string name="port_hint">Port, e.g. 18789</string>
+    <string name="tls_label">Use TLS</string>
+    <string name="capability_notification">Enable notification context</string>
+    <string name="capability_cross_app">Enable cross-app action loop</string>
+    <string name="capability_safety">Enable safety guard</string>
+    <string name="action_primary">Execute route continuation</string>
+    <string name="action_secondary">Execute code fill</string>
+    <string name="action_tertiary">Execute food-order setup</string>
+    <string name="approve_button">Approve pending high-risk actions</string>
+    <string name="common_apps_label">Testable common apps</string>
+    <string name="launch_wechat">Launch WeChat</string>
+    <string name="launch_alipay">Launch Alipay</string>
+    <string name="launch_amap">Launch Amap</string>
+    <string name="launch_taobao">Launch Taobao</string>
+</resources>

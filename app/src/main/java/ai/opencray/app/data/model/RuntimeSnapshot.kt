@@ -1,0 +1,24 @@
+package ai.opencray.app.data.model
+
+import ai.opencray.app.domain.model.AgentCapability
+import ai.opencray.app.domain.model.CommonApp
+import ai.opencray.app.domain.model.ContextSignal
+import ai.opencray.app.domain.model.SafetyRecord
+import ai.opencray.app.domain.model.SystemAction
+
+data class RuntimeSnapshot(
+  val appTitle: String,
+  val nodeName: String,
+  val connectionStatus: String,
+  val transportLabel: String,
+  val host: String,
+  val port: Int,
+  val tlsEnabled: Boolean,
+  val featureFlags: List<String>,
+  val capabilities: List<AgentCapability>,
+  val commonApps: List<CommonApp>,
+  val contextSignals: List<ContextSignal>,
+  val systemActions: List<SystemAction>,
+  val safetyRecords: List<SafetyRecord>,
+  val recentEvents: List<String>,
+)
