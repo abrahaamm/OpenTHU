@@ -2,24 +2,21 @@
 
 OpenCray is an Android system-agent prototype built on top of an OpenClaw-style runtime layout.
 
-Instead of acting like a plain chat client, OpenCray is oriented around:
+Its goal is not to be just another chat client. The project is organized around three core ideas:
 
-- `Context`: what is happening on the phone right now
-- `Actions`: what the agent can do across apps and system surfaces
-- `Safety`: what must be approved, logged, and auditable
+- `Context`: capture what is happening on the phone right now
+- `Actions`: turn that context into executable mobile actions
+- `Safety`: make those actions reviewable, controllable, and auditable
 
-## Current prototype
+## Current scope
 
-The current Android app includes:
+The current version is an Android prototype with:
 
-- A `Context` page with mocked notification/share/foreground-app signals
-- An `Actions` page with:
-  - agent link settings
-  - capability toggles
-  - executable prototype actions
-  - common-app detection and app launch buttons
-- A `Safety` page with pending approval and audit log simulation
-- A common-app test panel that can detect and launch:
+- a `Context / Actions / Safety` app structure
+- a lightweight runtime, repository, and domain model layout
+- mocked mobile context signals
+- prototype system actions and safety records
+- common-app detection and launch testing for:
   - WeChat
   - Alipay
   - Amap
@@ -27,20 +24,39 @@ The current Android app includes:
   - Meituan
   - QQ
 
-## Testable app-launch actions
+This means OpenCray can already be used to verify a basic system-agent loop on device:
 
-The prototype can detect and try to launch several common Android apps if they are installed:
+1. detect whether common apps are installed
+2. expose them as candidate action targets
+3. trigger real app launches
+4. write the result back into the runtime state and event log
 
-- WeChat
-- Alipay
-- Amap
-- Taobao
-- Meituan
-- QQ
+## What is still missing
 
-This makes it possible to verify that OpenCray is no longer just rendering text; it can now trigger real app-opening behavior on device.
+The project is still a prototype. The major unfinished areas are:
 
-## APK scripts
+- real context ingestion
+  - notifications
+  - share intents
+  - foreground-app state
+- real cross-app execution
+  - deep links
+  - structured intents
+  - accessibility-driven UI automation
+- stronger safety controls
+  - per-action approval
+  - execution provenance
+  - replayable audit trails
+- backend integration
+  - real OpenClaw gateway/protocol connection
+  - planner/tool execution loop
+  - persistent task state
+
+In short:
+
+> OpenClaw provides the runtime direction; OpenCray is meant to become the Android-side eyes, hands, and safety layer.
+
+## Scripts
 
 ```bash
 ./scripts/download_official_apks.sh
@@ -48,23 +64,16 @@ This makes it possible to verify that OpenCray is no longer just rendering text;
 ./scripts/verify_common_apps.sh
 ```
 
-At the moment, the repository includes one APK that was downloaded from an official public source:
+These scripts support local testing of the common-app launch flow. At the moment:
 
-- `test-apks/amap-official.apk`
-
-For several other common apps, the official sites do not expose a stable public APK URL suitable for scripted download, so the script leaves notes in `test-apks/README.txt` and expects manual installation from official channels.
+- `Amap` is included as a locally downloaded official APK for testing
+- several other apps must still be installed manually from their official channels, because their public sites do not expose stable scripted APK download links
 
 ## Build
 
-If your local Gradle config contains a stale proxy, use:
+If your local Gradle config contains a stale proxy, build with:
 
 ```bash
 cd OpenCray
 ./gradlew -Dhttp.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyHost= -Dhttps.proxyPort= :app:assembleDebug
 ```
-
-## Next steps
-
-- Replace mocked context with real `NotificationListenerService` and share-intent ingestion
-- Introduce real `AccessibilityService` execution for cross-app workflows
-- Expand safety into per-action approval, provenance, and replay
