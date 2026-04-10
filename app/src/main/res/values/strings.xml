@@ -27,4 +27,6 @@
     <string name="launch_alipay">Launch Alipay</string>
     <string name="launch_amap">Launch Amap</string>
     <string name="launch_taobao">Launch Taobao</string>
+    <string name="launch_meituan">Launch Meituan</string>
+    <string name="launch_qq">Launch QQ</string>
 </resources>

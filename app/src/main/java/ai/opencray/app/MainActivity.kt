@@ -50,6 +50,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var launchAlipayButton: Button
   private lateinit var launchAmapButton: Button
   private lateinit var launchTaobaoButton: Button
+  private lateinit var launchMeituanButton: Button
+  private lateinit var launchQqButton: Button
   private lateinit var approveButton: Button
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -100,6 +102,8 @@ class MainActivity : AppCompatActivity() {
     launchAlipayButton = findViewById(R.id.launch_alipay_button)
     launchAmapButton = findViewById(R.id.launch_amap_button)
     launchTaobaoButton = findViewById(R.id.launch_taobao_button)
+    launchMeituanButton = findViewById(R.id.launch_meituan_button)
+    launchQqButton = findViewById(R.id.launch_qq_button)
     approveButton = findViewById(R.id.approve_button)
   }
 
@@ -147,6 +151,8 @@ class MainActivity : AppCompatActivity() {
     launchAlipayButton.setOnClickListener { launchCommonApp("alipay") }
     launchAmapButton.setOnClickListener { launchCommonApp("amap") }
     launchTaobaoButton.setOnClickListener { launchCommonApp("taobao") }
+    launchMeituanButton.setOnClickListener { launchCommonApp("meituan") }
+    launchQqButton.setOnClickListener { launchCommonApp("qq") }
 
     notificationToggle.setOnCheckedChangeListener { _, isChecked ->
       viewModel.toggleCapability("notification_context", isChecked)

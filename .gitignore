@@ -6,3 +6,4 @@ app/build/
 captures/
 *.iml
 .DS_Store
+test-apks/*.apk

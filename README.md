@@ -19,6 +19,13 @@ The current Android app includes:
   - executable prototype actions
   - common-app detection and app launch buttons
 - A `Safety` page with pending approval and audit log simulation
+- A common-app test panel that can detect and launch:
+  - WeChat
+  - Alipay
+  - Amap
+  - Taobao
+  - Meituan
+  - QQ
 
 ## Testable app-launch actions
 
@@ -32,6 +39,20 @@ The prototype can detect and try to launch several common Android apps if they a
 - QQ
 
 This makes it possible to verify that OpenCray is no longer just rendering text; it can now trigger real app-opening behavior on device.
+
+## APK scripts
+
+```bash
+./scripts/download_official_apks.sh
+./scripts/install_apks.sh
+./scripts/verify_common_apps.sh
+```
+
+At the moment, the repository includes one APK that was downloaded from an official public source:
+
+- `test-apks/amap-official.apk`
+
+For several other common apps, the official sites do not expose a stable public APK URL suitable for scripted download, so the script leaves notes in `test-apks/README.txt` and expects manual installation from official channels.
 
 ## Build
 
