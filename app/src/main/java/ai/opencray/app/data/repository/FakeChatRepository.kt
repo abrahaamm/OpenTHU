@@ -6,18 +6,18 @@ import java.util.UUID
 
 class FakeChatRepository : ChatRepository {
   private var messages =
-      listOf(
-        ChatMessage(
-          id = UUID.randomUUID().toString(),
-          role = ChatRole.System,
-          text = "OpenCray scaffold online. Runtime and features can plug in here.",
-        ),
-        ChatMessage(
-          id = UUID.randomUUID().toString(),
-          role = ChatRole.Assistant,
-          text = "现在可以继续接入真实网关、设备能力和协议层。",
-        ),
-      )
+    listOf(
+      ChatMessage(
+        id = UUID.randomUUID().toString(),
+        role = ChatRole.System,
+        text = "OpenCray scaffold online. Runtime and features can plug in here.",
+      ),
+      ChatMessage(
+        id = UUID.randomUUID().toString(),
+        role = ChatRole.Assistant,
+        text = "可以输入校园目标，我会自动规划任务并执行审查。",
+      ),
+    )
 
   override fun getMessages(): List<ChatMessage> = messages
 
@@ -25,20 +25,26 @@ class FakeChatRepository : ChatRepository {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return
 
-    messages =
-      messages +
-        ChatMessage(
-          id = UUID.randomUUID().toString(),
-          role = ChatRole.User,
-          text = trimmed,
-        )
+    appendMessage(ChatRole.User, trimmed)
+    appendMessage(
+      ChatRole.Assistant,
+      "收到目标：$trimmed\n我会先规划动作，再走审查与执行链路。",
+    )
+  }
+
+  override fun appendMessage(
+    role: ChatRole,
+    text: String,
+  ) {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return
 
     messages =
       messages +
         ChatMessage(
           id = UUID.randomUUID().toString(),
-          role = ChatRole.Assistant,
-          text = "收到：$trimmed\n\n这里之后可以替换成真正的 OpenCray agent/gateway 响应链路。",
+          role = role,
+          text = trimmed,
         )
   }
 

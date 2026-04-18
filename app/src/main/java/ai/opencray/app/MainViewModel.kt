@@ -3,9 +3,12 @@ package ai.opencray.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import ai.opencray.app.data.model.RuntimeSnapshot
+import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AppDestination
+import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.CommonApp
 import ai.opencray.app.domain.model.ContextSignal
+import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
@@ -16,25 +19,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     (app as OpenCrayApplication).appContainer.runtime
 
   private var selectedDestination: AppDestination = AppDestination.Context
-  private var composerText: String = ""
+  private var goalDraft: String = ""
   private var hostText: String = runtime.snapshot().host
   private var portText: String = runtime.snapshot().port.toString()
   private var tlsEnabled: Boolean = runtime.snapshot().tlsEnabled
 
-  private fun buildUiState(): MainUiState =
-    MainUiState(
+  private fun buildUiState(): MainUiState {
+    val snapshot = runtime.snapshot()
+    return MainUiState(
       currentDestination = selectedDestination,
-      draft = composerText,
+      goalDraft = goalDraft,
       host = hostText,
       port = portText,
       tlsEnabled = tlsEnabled,
-      snapshot = runtime.snapshot(),
-      commonApps = runtime.snapshot().commonApps,
-      contextSignals = runtime.snapshot().contextSignals,
-      systemActions = runtime.snapshot().systemActions,
-      safetyRecords = runtime.snapshot().safetyRecords,
+      snapshot = snapshot,
+      commonApps = snapshot.commonApps,
+      contextSignals = snapshot.contextSignals,
+      systemActions = snapshot.systemActions,
+      safetyRecords = snapshot.safetyRecords,
+      tasks = snapshot.tasks,
+      memoryRecords = snapshot.memoryRecords,
+      auditTrail = snapshot.auditTrail,
       chatMessages = runtime.chatMessages(),
     )
+  }
 
   init {
     runtime.boot()
@@ -46,8 +54,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = destination
   }
 
-  fun updateDraft(value: String) {
-    composerText = value
+  fun updateGoalDraft(value: String) {
+    goalDraft = value
   }
 
   fun updateHost(value: String) {
@@ -76,12 +84,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setCapabilityEnabled(capabilityId = capabilityId, enabled = enabled)
   }
 
-  fun sendDraft() {
-    val text = composerText.trim()
+  fun submitGoal() {
+    val text = goalDraft.trim()
     if (text.isEmpty()) return
-    composerText = ""
-    runtime.sendChatMessage(text)
+    goalDraft = ""
+    runtime.planGoal(text)
     selectedDestination = AppDestination.Actions
+  }
+
+  fun runAgentPlan() {
+    runtime.runActions()
+    selectedDestination = AppDestination.Safety
   }
 
   fun clearChat() {
@@ -113,7 +126,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
 data class MainUiState(
   val currentDestination: AppDestination,
-  val draft: String,
+  val goalDraft: String,
   val host: String,
   val port: String,
   val tlsEnabled: Boolean,
@@ -122,5 +135,8 @@ data class MainUiState(
   val contextSignals: List<ContextSignal>,
   val systemActions: List<SystemAction>,
   val safetyRecords: List<SafetyRecord>,
+  val tasks: List<AgentTask>,
+  val memoryRecords: List<MemoryRecord>,
+  val auditTrail: List<AuditEntry>,
   val chatMessages: List<ChatMessage>,
 )

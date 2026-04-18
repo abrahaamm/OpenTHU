@@ -6,6 +6,8 @@ import ai.opencray.app.domain.model.CommonApp
 interface RuntimeRepository {
   fun getSnapshot(): RuntimeSnapshot
 
+  fun replaceSnapshot(snapshot: RuntimeSnapshot)
+
   fun markRuntimeBooted()
 
   fun updateConnectionStatus(status: String)

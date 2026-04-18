@@ -14,6 +14,9 @@
     <string name="safety_title">Safety Console</string>
     <string name="host_hint">Host, e.g. 192.168.0.88</string>
     <string name="port_hint">Port, e.g. 18789</string>
+    <string name="goal_hint">Describe your campus goal, e.g. 帮我关注清华活动并为课程DDL设置提醒</string>
+    <string name="plan_goal_button">Plan Goal</string>
+    <string name="run_agent_button">Run Approved Actions</string>
     <string name="tls_label">Use TLS</string>
     <string name="capability_notification">Enable notification context</string>
     <string name="capability_cross_app">Enable cross-app action loop</string>

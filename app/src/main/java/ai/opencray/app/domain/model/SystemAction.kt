@@ -6,5 +6,8 @@ data class SystemAction(
   val summary: String,
   val riskLevel: String,
   val requiresApproval: Boolean,
+  val confidence: Int = 60,
+  val explain: String = "",
+  val status: String = "planned",
   val lastResult: String? = null,
 )

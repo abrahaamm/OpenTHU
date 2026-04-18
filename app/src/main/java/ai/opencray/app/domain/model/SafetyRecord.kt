@@ -5,4 +5,6 @@ data class SafetyRecord(
   val title: String,
   val detail: String,
   val status: String,
+  val actionId: String? = null,
+  val timestampEpochMs: Long = System.currentTimeMillis(),
 )

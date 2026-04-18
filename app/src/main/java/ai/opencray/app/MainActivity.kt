@@ -14,6 +14,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
+import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.system.AppLaunchController
 import ai.opencray.app.system.CommonAppsRegistry
 
@@ -32,6 +33,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var eventsView: TextView
   private lateinit var hostInput: EditText
   private lateinit var portInput: EditText
+  private lateinit var goalInput: EditText
   private lateinit var tlsToggle: CheckBox
   private lateinit var contextPanel: LinearLayout
   private lateinit var actionsPanel: LinearLayout
@@ -43,6 +45,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var crossAppToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
   private lateinit var connectButton: Button
+  private lateinit var planGoalButton: Button
+  private lateinit var runAgentButton: Button
   private lateinit var actionPrimaryButton: Button
   private lateinit var actionSecondaryButton: Button
   private lateinit var actionTertiaryButton: Button
@@ -84,6 +88,7 @@ class MainActivity : AppCompatActivity() {
     eventsView = findViewById(R.id.events_text)
     hostInput = findViewById(R.id.host_input)
     portInput = findViewById(R.id.port_input)
+    goalInput = findViewById(R.id.goal_input)
     tlsToggle = findViewById(R.id.tls_toggle)
     contextPanel = findViewById(R.id.context_panel)
     actionsPanel = findViewById(R.id.actions_panel)
@@ -95,6 +100,8 @@ class MainActivity : AppCompatActivity() {
     crossAppToggle = findViewById(R.id.capability_cross_app_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
     connectButton = findViewById(R.id.connect_button)
+    planGoalButton = findViewById(R.id.plan_goal_button)
+    runAgentButton = findViewById(R.id.run_agent_button)
     actionPrimaryButton = findViewById(R.id.action_primary_button)
     actionSecondaryButton = findViewById(R.id.action_secondary_button)
     actionTertiaryButton = findViewById(R.id.action_tertiary_button)
@@ -129,18 +136,20 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
-    actionPrimaryButton.setOnClickListener {
-      viewModel.executeAction("open_map_route")
+    planGoalButton.setOnClickListener {
+      viewModel.updateGoalDraft(goalInput.text.toString())
+      viewModel.submitGoal()
       render()
     }
-    actionSecondaryButton.setOnClickListener {
-      viewModel.executeAction("fill_verification_code")
+
+    runAgentButton.setOnClickListener {
+      viewModel.runAgentPlan()
       render()
     }
-    actionTertiaryButton.setOnClickListener {
-      viewModel.executeAction("launch_food_order")
-      render()
-    }
+
+    actionPrimaryButton.setOnClickListener { executeActionByIndex(0) }
+    actionSecondaryButton.setOnClickListener { executeActionByIndex(1) }
+    actionTertiaryButton.setOnClickListener { executeActionByIndex(2) }
 
     approveButton.setOnClickListener {
       viewModel.approvePendingActions()
@@ -182,27 +191,47 @@ class MainActivity : AppCompatActivity() {
 
     statusView.text = "Status: ${state.snapshot.connectionStatus}"
     transportView.text = "Transport: ${state.snapshot.transportLabel}"
-    hostInput.setText(state.host)
-    portInput.setText(state.port)
+
+    if (hostInput.text.toString() != state.host) hostInput.setText(state.host)
+    if (portInput.text.toString() != state.port) portInput.setText(state.port)
+    if (goalInput.text.toString() != state.goalDraft) goalInput.setText(state.goalDraft)
     tlsToggle.isChecked = state.tlsEnabled
 
     contextSummaryView.text =
       buildString {
         append("Node: ${state.snapshot.nodeName}\n")
         append("Signals: ${state.contextSignals.size}\n")
+        append("Tasks: ${state.tasks.size}\n")
+        append("Memory: ${state.memoryRecords.size}\n")
+        append("Audit entries: ${state.auditTrail.size}\n")
         append("Flags: ${state.snapshot.featureFlags.joinToString()}")
       }
 
     contextFeedView.text =
-      state.contextSignals.joinToString(separator = "\n\n") { signal ->
-        "${signal.title}\n${signal.detail}\nSource: ${signal.source}"
+      buildString {
+        append("Context Signals\n")
+        append(
+          state.contextSignals.joinToString(separator = "\n\n") { signal ->
+            "${signal.title}\n${signal.detail}\nSource: ${signal.source}"
+          },
+        )
+
+        val memoryPreview = state.memoryRecords.take(5)
+        if (memoryPreview.isNotEmpty()) {
+          append("\n\nMemory Preview\n")
+          append(
+            memoryPreview.joinToString(separator = "\n") { memory ->
+              "[${memory.scope}] ${memory.key}: ${memory.value} (w=${memory.weight})"
+            },
+          )
+        }
       }
 
     actionFeedView.text =
       state.systemActions.joinToString(separator = "\n\n") { action ->
-        val approval = if (action.requiresApproval) "Approval required" else "Instant"
+        val approval = if (action.requiresApproval) "Approval required" else "Auto/instant"
         val result = action.lastResult ?: "Not executed yet"
-        "${action.title}\n${action.summary}\nRisk: ${action.riskLevel} · $approval\nLast result: $result"
+        "${action.title}\n${action.summary}\nRisk: ${action.riskLevel} · $approval · Status: ${action.status}\nConfidence: ${action.confidence}%\nReason: ${action.explain}\nLast result: $result"
       }
 
     commonAppsView.text =
@@ -212,11 +241,26 @@ class MainActivity : AppCompatActivity() {
       }
 
     safetyFeedView.text =
-      state.safetyRecords.joinToString(separator = "\n\n") { record ->
-        "${record.title}\n${record.detail}\nStatus: ${record.status}"
+      buildString {
+        append("Safety Records\n")
+        append(
+          state.safetyRecords.take(12).joinToString(separator = "\n\n") { record ->
+            "${record.title}\n${record.detail}\nStatus: ${record.status}"
+          },
+        )
+
+        val auditPreview = state.auditTrail.take(12)
+        if (auditPreview.isNotEmpty()) {
+          append("\n\nAudit Trail\n")
+          append(
+            auditPreview.joinToString(separator = "\n") { entry ->
+              "[${entry.stage}] ${entry.actionId}: ${entry.message}"
+            },
+          )
+        }
       }
 
-    eventsView.text = state.snapshot.recentEvents.joinToString(separator = "\n• ", prefix = "• ")
+    eventsView.text = state.snapshot.recentEvents.take(20).joinToString(separator = "\n• ", prefix = "• ")
 
     state.snapshot.capabilities.associateBy { it.id }.let { capabilities ->
       notificationToggle.setOnCheckedChangeListener(null)
@@ -240,6 +284,38 @@ class MainActivity : AppCompatActivity() {
         render()
       }
     }
+
+    configureActionButton(actionPrimaryButton, state.systemActions, 0, "No action #1")
+    configureActionButton(actionSecondaryButton, state.systemActions, 1, "No action #2")
+    configureActionButton(actionTertiaryButton, state.systemActions, 2, "No action #3")
+  }
+
+  private fun configureActionButton(
+    button: Button,
+    actions: List<SystemAction>,
+    index: Int,
+    fallbackText: String,
+  ) {
+    val action = actions.getOrNull(index)
+    if (action == null) {
+      button.text = fallbackText
+      button.isEnabled = false
+      return
+    }
+
+    button.text = "Execute: ${action.title}"
+    button.isEnabled = true
+  }
+
+  private fun executeActionByIndex(index: Int) {
+    val action = viewModel.getUiState().systemActions.getOrNull(index)
+    if (action == null) {
+      Toast.makeText(this, "No action at slot ${index + 1}", Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    viewModel.executeAction(action.id)
+    render()
   }
 
   private fun refreshCommonApps() {

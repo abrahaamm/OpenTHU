@@ -1,8 +1,11 @@
 package ai.opencray.app.data.model
 
 import ai.opencray.app.domain.model.AgentCapability
+import ai.opencray.app.domain.model.AgentTask
+import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.CommonApp
 import ai.opencray.app.domain.model.ContextSignal
+import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 
@@ -20,5 +23,8 @@ data class RuntimeSnapshot(
   val contextSignals: List<ContextSignal>,
   val systemActions: List<SystemAction>,
   val safetyRecords: List<SafetyRecord>,
+  val tasks: List<AgentTask>,
+  val memoryRecords: List<MemoryRecord>,
+  val auditTrail: List<AuditEntry>,
   val recentEvents: List<String>,
 )
