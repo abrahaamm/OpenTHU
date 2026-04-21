@@ -10,7 +10,7 @@ class FakeChatRepository : ChatRepository {
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = ChatRole.System,
-        text = "OpenCray scaffold online. Runtime and features can plug in here.",
+        text = "OpenTHU scaffold online. Runtime and features can plug in here.",
       ),
       ChatMessage(
         id = UUID.randomUUID().toString(),

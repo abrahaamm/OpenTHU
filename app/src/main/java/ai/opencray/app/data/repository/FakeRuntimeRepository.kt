@@ -12,7 +12,7 @@ import java.util.UUID
 class FakeRuntimeRepository : RuntimeRepository {
   private var snapshot =
     RuntimeSnapshot(
-      appTitle = "OpenCray",
+      appTitle = "OpenTHU",
       nodeName = "Cray Node Alpha",
       connectionStatus = "Bootstrapping",
       transportLabel = "Android system agent prototype",

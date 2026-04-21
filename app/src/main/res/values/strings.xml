@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">OpenCray</string>
+    <string name="app_name">OpenTHU</string>
     <string name="app_subtitle">An Android system-level agent prototype built on top of an OpenClaw-style runtime.</string>
     <string name="connect_button">Update Agent Link</string>
     <string name="capability_label">Capability Layers</string>

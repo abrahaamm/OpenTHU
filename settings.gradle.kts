@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "OpenCray"
+rootProject.name = "OpenTHU"
 include(":app")

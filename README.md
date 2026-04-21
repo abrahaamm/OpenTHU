@@ -1,6 +1,6 @@
-# OpenCray
+# OpenTHU
 
-OpenCray is an Android system-agent prototype built on top of an OpenClaw-style runtime layout.
+OpenTHU is an Android system-agent prototype built on top of an OpenClaw-style runtime layout.
 
 Its goal is not to be just another chat client. The project is organized around three core ideas:
 
@@ -24,7 +24,7 @@ The current version is an Android prototype with:
   - Meituan
   - QQ
 
-This means OpenCray can already be used to verify a basic system-agent loop on device:
+This means OpenTHU can already be used to verify a basic system-agent loop on device:
 
 1. detect whether common apps are installed
 2. expose them as candidate action targets
@@ -54,7 +54,7 @@ The project is still a prototype. The major unfinished areas are:
 
 In short:
 
-> OpenClaw provides the runtime direction; OpenCray is meant to become the Android-side eyes, hands, and safety layer.
+> OpenClaw provides the runtime direction; OpenTHU is meant to become the Android-side eyes, hands, and safety layer.
 
 ## Scripts
 
@@ -74,6 +74,6 @@ These scripts support local testing of the common-app launch flow. At the moment
 If your local Gradle config contains a stale proxy, build with:
 
 ```bash
-cd OpenCray
+cd OpenTHU
 ./gradlew -Dhttp.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyHost= -Dhttps.proxyPort= :app:assembleDebug
 ```
