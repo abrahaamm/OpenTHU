@@ -77,3 +77,20 @@ If your local Gradle config contains a stale proxy, build with:
 cd OpenTHU
 ./gradlew -Dhttp.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyHost= -Dhttps.proxyPort= :app:assembleDebug
 ```
+
+## LangGraph Agent Pipeline
+
+A standalone LangGraph implementation of the agent flow is available at:
+
+- `agent/langgraph/openthu_agent.py`
+- `agent/langgraph/README.md`
+
+Pipeline order:
+
+1. requirement normalization
+2. planning
+3. safety review
+4. execution
+5. failed-action replanning
+6. audit record
+7. memory update
