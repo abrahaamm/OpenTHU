@@ -44,19 +44,6 @@ class ActionPlanner {
         )
     }
 
-    if (containsAny(normalized, listOf("微信", "支付", "验证码", "alipay", "wechat", "qq"))) {
-      actions +=
-        SystemAction(
-          id = "cross_app_sensitive",
-          title = "Sensitive Cross-App Automation",
-          summary = "Run cross-app automation that may touch personal account operations.",
-          riskLevel = "high",
-          requiresApproval = true,
-          confidence = 65,
-          explain = "Contains account/payment-like signal and requires explicit confirmation.",
-        )
-    }
-
     if (actions.isEmpty()) {
       val fallbackAction =
         snapshot.systemActions.firstOrNull()?.copy(

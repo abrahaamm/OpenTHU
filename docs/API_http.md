@@ -1,45 +1,44 @@
-# learnX 接口文档
+# 上游接口参考文档（供 Skill 实现参考）
 
-> learnX 是清华大学网络学堂（learn.tsinghua.edu.cn）的第三方移动客户端，基于 React Native 开发。本文档描述其数据获取逻辑与底层 HTTP 接口。
+> 本文档描述清华大学校园系统（learn.tsinghua.edu.cn / id.tsinghua.edu.cn / zhjw.cic.tsinghua.edu.cn）的底层 HTTP 接口。
+>
+> **在 OpenTHU 架构中，这些接口由 Agent 内置的数据类 Skill 直接调用，不经过独立的 Backend 服务。**
+> 接口参考来源：learnX（thu-learn-lib）开源项目的代码分析。
 
----
-
-## 一、整体架构
+## 接口调用关系（OpenTHU Skill 架构）
 
 ```
-用户操作
-  └─► Redux Action (src/data/actions/)
-        └─► Learn2018Helper (thu-learn-lib 库)
+用户意图
+  └─► LangGraph Workflow（plan 节点）
+        └─► 数据类 Skill（如 get_assignments / get_courses 等）
               └─► HTTP 请求 → learn.tsinghua.edu.cn / id.tsinghua.edu.cn
-                    └─► 返回数据 → Redux Store (src/data/store.ts)
+                    └─► 返回标准化数据 → AgentState
 ```
 
-### 核心依赖
+**Skill 与上游接口的对应关系见 `docs/API.md` §8 映射表。**
 
-| 模块 | 说明 |
-|------|------|
-| `thu-learn-lib` (github:robertying/thu-learn-lib) | 封装了所有对清华网络学堂的 HTTP 请求，是本项目数据获取的核心库 |
-| `axios` | 用于文件提交等部分请求 |
-| `@react-native-cookies/cookies` | 管理登录 Cookie（JSESSIONID） |
-| Redux + typesafe-actions | 状态管理，所有异步数据均通过 Action → Reducer 流转 |
+### 参考库说明
 
-### 数据源入口
+| 模块 | 说明 | 用途 |
+|------|------|------|
+| `thu-learn-lib` (github:robertying/thu-learn-lib) | 封装清华网络学堂 HTTP 请求 | Skill 实现的参考/依赖库 |
+| `axios` | HTTP 客户端 | 文件提交等请求 |
+| `@react-native-cookies/cookies` | 管理登录 Cookie（JSESSIONID） | Skill 会话管理参考 |
 
-文件：`src/data/source.ts`
+### Session 管理（Skill 侧实现要点）
 
-```ts
-export let dataSource: Learn2018Helper;
+Skill 层统一持有会话态，参考 `provider` 模式：
 
-export const resetDataSource = () => {
-  dataSource = new Learn2018Helper({
-    provider: () => ({
-      username, password, fingerPrint, fingerGenPrint, fingerGenPrint3,
-    }),
-  });
-};
+```python
+# Python Skill 侧会话管理（伪代码）
+class SessionProvider:
+    def get_session(self) -> Session:
+        if self._session.is_expired():
+            self._session = login_skill.invoke(self._credentials)
+        return self._session
 ```
 
-`dataSource` 是 `Learn2018Helper` 的全局单例，所有 Action 均通过它发起请求。使用 `provider` 模式时，库在 Session 过期后会自动重新登录。
+会话过期时，数据类 Skill 自动调用 `login` Skill 重建会话，上层 Workflow 无需感知。
 
 ---
 
@@ -402,21 +401,22 @@ wlkcid={courseId}
 
 ---
 
-## 十一、数据流总结
+## 十一、数据流总结（OpenTHU Skill 调用视角）
 
 ```
-App 启动
-  ├─ login() ──────────────────────────► id.tsinghua.edu.cn（SSO 登录）
-  │                                        └─ 获取 JSESSIONID Cookie
-  ├─ getUserInfo() ────────────────────► learn.tsinghua.edu.cn（用户信息）
-  ├─ getCurrentSemester() ─────────────► learn.tsinghua.edu.cn（当前学期）
-  ├─ getAllSemesters() ─────────────────► learn.tsinghua.edu.cn（学期列表）
-  └─ getCoursesForSemester(id) ────────► learn.tsinghua.edu.cn（课程列表）
-        └─ 获得 courseIds[]
-              ├─ getAllNoticesForCourses(courseIds) ──► 通知列表（含附件）
-              ├─ getAllFilesForCourses(courseIds) ────► 文件列表
-              └─ getAllAssignmentsForCourses(courseIds) ► 作业/DDL 列表
+LangGraph Workflow 触发
+  ├─ login Skill ──────────────────────► id.tsinghua.edu.cn（SSO 登录）
+  │                                        └─ 获取 JSESSIONID Cookie → AgentState.session
+  ├─ get_user_info Skill ──────────────► learn.tsinghua.edu.cn（用户信息）
+  ├─ get_semesters Skill ──────────────► learn.tsinghua.edu.cn（当前学期 + 学期列表）
+  └─ get_courses Skill ────────────────► learn.tsinghua.edu.cn（课程列表）
+        └─ 获得 course_ids[]
+              ├─ get_notices Skill（并发）──────► 通知列表（含附件）
+              ├─ get_files Skill（并发）────────► 文件列表
+              └─ get_assignments Skill（并发）──► 作业/DDL 列表
 ```
+
+所有数据类 Skill 共享同一 `session`，无需重复认证。Skill 结果写入 `AgentState`，供 `plan` 节点编排后续动作类 Skill 调用。
 
 ---
 
@@ -440,4 +440,8 @@ App 启动
 
 ---
 
+<<<<<<< HEAD
 *文档生成于 2026-04-22，基于 learnX v16.4.4 代码分析*
+=======
+*上游接口参考来源：learnX v16.4.4 代码分析（2026-04-22）；OpenTHU Skill 架构适配更新于 2026-04-24*
+>>>>>>> origin/feature/agent-core

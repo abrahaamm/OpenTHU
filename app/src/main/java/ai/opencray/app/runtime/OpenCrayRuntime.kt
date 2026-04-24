@@ -8,7 +8,6 @@ import ai.opencray.app.data.repository.ChatRepository
 import ai.opencray.app.data.repository.RuntimeRepository
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
-import ai.opencray.app.domain.model.CommonApp
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.execution.ActionExecutor
@@ -121,19 +120,6 @@ class OpenCrayRuntime(
     )
 
     runActions()
-  }
-
-  fun updateCommonApps(apps: List<CommonApp>) {
-    runtimeRepository.updateCommonApps(apps)
-  }
-
-  fun noteAppLaunch(
-    appLabel: String,
-    succeeded: Boolean,
-  ) {
-    val result = if (succeeded) "opened" else "not installed or not launchable"
-    runtimeRepository.updateConnectionStatus("App action: $appLabel $result")
-    runtimeRepository.appendEvent("Common app launch requested: $appLabel -> $result")
   }
 
   fun planGoal(goal: String) {

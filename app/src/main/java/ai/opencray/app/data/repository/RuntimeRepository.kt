@@ -1,7 +1,6 @@
 package ai.opencray.app.data.repository
 
 import ai.opencray.app.data.model.RuntimeSnapshot
-import ai.opencray.app.domain.model.CommonApp
 
 interface RuntimeRepository {
   fun getSnapshot(): RuntimeSnapshot
@@ -26,8 +25,6 @@ interface RuntimeRepository {
   fun markActionExecuted(actionId: String)
 
   fun approvePendingSafety()
-
-  fun updateCommonApps(apps: List<CommonApp>)
 
   fun appendEvent(event: String)
 }

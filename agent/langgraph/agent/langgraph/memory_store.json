@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "ts": "2026-04-22T11:31:40.899573+00:00",
+      "user_id": "debug_user",
+      "objective": "帮我关注清华活动并把课程DDL加到日历和提醒",
+      "entities": [
+        "schedule",
+        "campus_info"
+      ],
+      "success_count": 3,
+      "failure_count": 0,
+      "blocked_count": 0
+    }
+  ]
+}

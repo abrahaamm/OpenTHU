@@ -7,3 +7,6 @@ captures/
 *.iml
 .DS_Store
 test-apks/*.apk
+agent/langgraph/memory_store.json
+*.zip
+*.xlsx

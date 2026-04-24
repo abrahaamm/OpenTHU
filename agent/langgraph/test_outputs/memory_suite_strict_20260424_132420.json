@@ -1,0 +1,280 @@
+{
+  "entries": [
+    {
+      "ts": "2026-04-24T05:24:30.760643+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_f243e1b2df",
+      "task_status": "in_progress",
+      "objective": "请帮我登录清华信息门户",
+      "entities": [
+        "notices",
+        "auth"
+      ],
+      "planned_skill_count": 4,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 1
+    },
+    {
+      "ts": "2026-04-24T05:24:30.762072+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_a3c10585b9",
+      "task_status": "planned",
+      "objective": "请帮我刷新会话",
+      "entities": [
+        "session_refresh"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 0,
+      "blocked_count": 1
+    },
+    {
+      "ts": "2026-04-24T05:24:30.763136+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_bb2af1cffd",
+      "task_status": "planned",
+      "objective": "请帮我退出登录",
+      "entities": [
+        "logout",
+        "auth"
+      ],
+      "planned_skill_count": 2,
+      "success_count": 0,
+      "failure_count": 0,
+      "blocked_count": 2
+    },
+    {
+      "ts": "2026-04-24T05:24:30.764173+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_e245abf67e",
+      "task_status": "in_progress",
+      "objective": "帮我查一下我的个人信息和院系",
+      "entities": [
+        "user_profile"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.765171+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_43eb364fc4",
+      "task_status": "in_progress",
+      "objective": "帮我获取学期列表",
+      "entities": [
+        "semesters"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.766201+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_9afda4dfac",
+      "task_status": "in_progress",
+      "objective": "帮我获取当前学期课程信息",
+      "entities": [
+        "courses",
+        "semesters"
+      ],
+      "planned_skill_count": 3,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.767260+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_02edc24ac5",
+      "task_status": "in_progress",
+      "objective": "帮我获取一下当前清华信息门户的消息",
+      "entities": [
+        "notices"
+      ],
+      "planned_skill_count": 3,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.768316+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_5074733db8",
+      "task_status": "in_progress",
+      "objective": "帮我获取课程文件和课件",
+      "entities": [
+        "courses",
+        "files"
+      ],
+      "planned_skill_count": 3,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.769366+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_939c0e2e76",
+      "task_status": "in_progress",
+      "objective": "帮我获取当前作业和DDL",
+      "entities": [
+        "assignments"
+      ],
+      "planned_skill_count": 3,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.770581+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_743ec0661f",
+      "task_status": "in_progress",
+      "objective": "帮我查看教务日历和校历",
+      "entities": [
+        "academic_calendar",
+        "calendar"
+      ],
+      "planned_skill_count": 2,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 1
+    },
+    {
+      "ts": "2026-04-24T05:24:30.771858+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_69266346c8",
+      "task_status": "in_progress",
+      "objective": "帮我看近期校园活动和讲座",
+      "entities": [
+        "activities"
+      ],
+      "planned_skill_count": 2,
+      "success_count": 0,
+      "failure_count": 2,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.773315+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_bc9ef93a2b",
+      "task_status": "in_progress",
+      "objective": "帮我搜索机器学习相关作业和通知",
+      "entities": [
+        "assignments",
+        "notices",
+        "search"
+      ],
+      "planned_skill_count": 5,
+      "success_count": 0,
+      "failure_count": 5,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.774659+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_8ffb05e82b",
+      "task_status": "in_progress",
+      "objective": "帮我创建一个提醒事项，提醒我明天交作业",
+      "entities": [
+        "assignments",
+        "reminder"
+      ],
+      "planned_skill_count": 4,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 1
+    },
+    {
+      "ts": "2026-04-24T05:24:30.775895+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_d3d19661d6",
+      "task_status": "in_progress",
+      "objective": "把这周的作业DDL加到日历",
+      "entities": [
+        "assignments",
+        "calendar"
+      ],
+      "planned_skill_count": 4,
+      "success_count": 0,
+      "failure_count": 3,
+      "blocked_count": 1
+    },
+    {
+      "ts": "2026-04-24T05:24:30.777070+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_8ec20a98f9",
+      "task_status": "in_progress",
+      "objective": "请帮我设置一个明早8点的闹钟",
+      "entities": [
+        "alarm"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.778537+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_e06f3831b9",
+      "task_status": "in_progress",
+      "objective": "帮我展示当前学习任务摘要",
+      "entities": [
+        "general_task"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.779769+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_70196907f1",
+      "task_status": "in_progress",
+      "objective": "请给我推送一个学习提醒notification",
+      "entities": [
+        "reminder",
+        "notification"
+      ],
+      "planned_skill_count": 2,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 1
+    },
+    {
+      "ts": "2026-04-24T05:24:30.780872+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_b724a48dad",
+      "task_status": "in_progress",
+      "objective": "请打开这个链接 https://learn.tsinghua.edu.cn",
+      "entities": [
+        "general_task"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 1,
+      "blocked_count": 0
+    },
+    {
+      "ts": "2026-04-24T05:24:30.782011+00:00",
+      "user_id": "workflow_suite_user",
+      "task_id": "task_aac8359f2b",
+      "task_status": "planned",
+      "objective": "帮我打开微信app",
+      "entities": [
+        "cross_app"
+      ],
+      "planned_skill_count": 1,
+      "success_count": 0,
+      "failure_count": 0,
+      "blocked_count": 1
+    }
+  ]
+}

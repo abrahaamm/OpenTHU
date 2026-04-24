@@ -19,17 +19,9 @@
     <string name="run_agent_button">Run Approved Actions</string>
     <string name="tls_label">Use TLS</string>
     <string name="capability_notification">Enable notification context</string>
-    <string name="capability_cross_app">Enable cross-app action loop</string>
     <string name="capability_safety">Enable safety guard</string>
-    <string name="action_primary">Execute route continuation</string>
-    <string name="action_secondary">Execute code fill</string>
-    <string name="action_tertiary">Execute food-order setup</string>
+    <string name="action_primary">Execute planned action #1</string>
+    <string name="action_secondary">Execute planned action #2</string>
+    <string name="action_tertiary">Execute planned action #3</string>
     <string name="approve_button">Approve pending high-risk actions</string>
-    <string name="common_apps_label">Testable common apps</string>
-    <string name="launch_wechat">Launch WeChat</string>
-    <string name="launch_alipay">Launch Alipay</string>
-    <string name="launch_amap">Launch Amap</string>
-    <string name="launch_taobao">Launch Taobao</string>
-    <string name="launch_meituan">Launch Meituan</string>
-    <string name="launch_qq">Launch QQ</string>
 </resources>
