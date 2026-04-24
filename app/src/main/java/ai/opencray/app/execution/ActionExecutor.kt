@@ -21,18 +21,6 @@ class ActionExecutor(
       "create_calendar_event" -> executeCalendarIntent(goal)
       "set_alarm_reminder" -> executeAlarmIntent(goal)
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
-      "cross_app_sensitive" ->
-        ActionExecutionReport(
-          success = false,
-          message = "Sensitive cross-app action requires stronger device hooks and user confirmation.",
-          recoverable = true,
-        )
-      "manual_confirm_flow" ->
-        ActionExecutionReport(
-          success = true,
-          message = "Switched to manual confirmation flow.",
-          recoverable = false,
-        )
       "open_context_review" ->
         ActionExecutionReport(
           success = true,

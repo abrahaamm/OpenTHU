@@ -192,7 +192,6 @@ def build_default_registry() -> SkillRegistry:
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
-        SkillSpec("launch_app", "Launch another app via Android intent", "action", "high", True),
     ]:
         registry.register_spec(spec)
 

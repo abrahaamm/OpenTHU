@@ -15,20 +15,15 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.SystemAction
-import ai.opencray.app.system.AppLaunchController
-import ai.opencray.app.system.CommonAppsRegistry
 
 class MainActivity : AppCompatActivity() {
   private lateinit var viewModel: MainViewModel
-  private lateinit var commonAppsRegistry: CommonAppsRegistry
-  private lateinit var appLaunchController: AppLaunchController
 
   private lateinit var statusView: TextView
   private lateinit var transportView: TextView
   private lateinit var contextSummaryView: TextView
   private lateinit var contextFeedView: TextView
   private lateinit var actionFeedView: TextView
-  private lateinit var commonAppsView: TextView
   private lateinit var safetyFeedView: TextView
   private lateinit var eventsView: TextView
   private lateinit var hostInput: EditText
@@ -42,7 +37,6 @@ class MainActivity : AppCompatActivity() {
   private lateinit var actionsTab: Button
   private lateinit var safetyTab: Button
   private lateinit var notificationToggle: CheckBox
-  private lateinit var crossAppToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
   private lateinit var connectButton: Button
   private lateinit var planGoalButton: Button
@@ -50,12 +44,6 @@ class MainActivity : AppCompatActivity() {
   private lateinit var actionPrimaryButton: Button
   private lateinit var actionSecondaryButton: Button
   private lateinit var actionTertiaryButton: Button
-  private lateinit var launchWeChatButton: Button
-  private lateinit var launchAlipayButton: Button
-  private lateinit var launchAmapButton: Button
-  private lateinit var launchTaobaoButton: Button
-  private lateinit var launchMeituanButton: Button
-  private lateinit var launchQqButton: Button
   private lateinit var approveButton: Button
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,8 +51,6 @@ class MainActivity : AppCompatActivity() {
     enableEdgeToEdge()
     setContentView(R.layout.activity_main)
     viewModel = ViewModelProvider(this)[MainViewModel::class.java]
-    commonAppsRegistry = CommonAppsRegistry(this)
-    appLaunchController = AppLaunchController(this)
 
     ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { view, insets ->
       val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -83,7 +69,6 @@ class MainActivity : AppCompatActivity() {
     contextSummaryView = findViewById(R.id.context_summary_text)
     contextFeedView = findViewById(R.id.context_feed_text)
     actionFeedView = findViewById(R.id.action_feed_text)
-    commonAppsView = findViewById(R.id.common_apps_text)
     safetyFeedView = findViewById(R.id.safety_feed_text)
     eventsView = findViewById(R.id.events_text)
     hostInput = findViewById(R.id.host_input)
@@ -97,7 +82,6 @@ class MainActivity : AppCompatActivity() {
     actionsTab = findViewById(R.id.actions_tab)
     safetyTab = findViewById(R.id.safety_tab)
     notificationToggle = findViewById(R.id.capability_notification_toggle)
-    crossAppToggle = findViewById(R.id.capability_cross_app_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
     connectButton = findViewById(R.id.connect_button)
     planGoalButton = findViewById(R.id.plan_goal_button)
@@ -105,12 +89,6 @@ class MainActivity : AppCompatActivity() {
     actionPrimaryButton = findViewById(R.id.action_primary_button)
     actionSecondaryButton = findViewById(R.id.action_secondary_button)
     actionTertiaryButton = findViewById(R.id.action_tertiary_button)
-    launchWeChatButton = findViewById(R.id.launch_wechat_button)
-    launchAlipayButton = findViewById(R.id.launch_alipay_button)
-    launchAmapButton = findViewById(R.id.launch_amap_button)
-    launchTaobaoButton = findViewById(R.id.launch_taobao_button)
-    launchMeituanButton = findViewById(R.id.launch_meituan_button)
-    launchQqButton = findViewById(R.id.launch_qq_button)
     approveButton = findViewById(R.id.approve_button)
   }
 
@@ -156,19 +134,8 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
-    launchWeChatButton.setOnClickListener { launchCommonApp("wechat") }
-    launchAlipayButton.setOnClickListener { launchCommonApp("alipay") }
-    launchAmapButton.setOnClickListener { launchCommonApp("amap") }
-    launchTaobaoButton.setOnClickListener { launchCommonApp("taobao") }
-    launchMeituanButton.setOnClickListener { launchCommonApp("meituan") }
-    launchQqButton.setOnClickListener { launchCommonApp("qq") }
-
     notificationToggle.setOnCheckedChangeListener { _, isChecked ->
       viewModel.toggleCapability("notification_context", isChecked)
-      render()
-    }
-    crossAppToggle.setOnCheckedChangeListener { _, isChecked ->
-      viewModel.toggleCapability("cross_app_actions", isChecked)
       render()
     }
     safetyGuardToggle.setOnCheckedChangeListener { _, isChecked ->
@@ -178,7 +145,6 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun render() {
-    refreshCommonApps()
     val state = viewModel.getUiState()
 
     contextPanel.visibility = if (state.currentDestination == AppDestination.Context) View.VISIBLE else View.GONE
@@ -234,12 +200,6 @@ class MainActivity : AppCompatActivity() {
         "${action.title}\n${action.summary}\nRisk: ${action.riskLevel} · $approval · Status: ${action.status}\nConfidence: ${action.confidence}%\nReason: ${action.explain}\nLast result: $result"
       }
 
-    commonAppsView.text =
-      state.commonApps.joinToString(separator = "\n") { app ->
-        val status = if (app.installed) "installed" else "missing"
-        "${app.label}: $status (${app.packageName})"
-      }
-
     safetyFeedView.text =
       buildString {
         append("Safety Records\n")
@@ -264,19 +224,13 @@ class MainActivity : AppCompatActivity() {
 
     state.snapshot.capabilities.associateBy { it.id }.let { capabilities ->
       notificationToggle.setOnCheckedChangeListener(null)
-      crossAppToggle.setOnCheckedChangeListener(null)
       safetyGuardToggle.setOnCheckedChangeListener(null)
 
       notificationToggle.isChecked = capabilities["notification_context"]?.enabled == true
-      crossAppToggle.isChecked = capabilities["cross_app_actions"]?.enabled == true
       safetyGuardToggle.isChecked = capabilities["safety_guard"]?.enabled == true
 
       notificationToggle.setOnCheckedChangeListener { _, isChecked ->
         viewModel.toggleCapability("notification_context", isChecked)
-        render()
-      }
-      crossAppToggle.setOnCheckedChangeListener { _, isChecked ->
-        viewModel.toggleCapability("cross_app_actions", isChecked)
         render()
       }
       safetyGuardToggle.setOnCheckedChangeListener { _, isChecked ->
@@ -315,25 +269,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     viewModel.executeAction(action.id)
-    render()
-  }
-
-  private fun refreshCommonApps() {
-    val state = viewModel.getUiState()
-    val refreshedApps = commonAppsRegistry.resolveInstalledApps(state.commonApps)
-    viewModel.updateCommonApps(refreshedApps)
-  }
-
-  private fun launchCommonApp(appId: String) {
-    val state = viewModel.getUiState()
-    val app = state.commonApps.firstOrNull { it.id == appId } ?: return
-    val succeeded = appLaunchController.launch(app)
-    viewModel.noteAppLaunch(app.label, succeeded)
-    Toast.makeText(
-      this,
-      if (succeeded) "${app.label} opened" else "${app.label} not installed",
-      Toast.LENGTH_SHORT,
-    ).show()
     render()
   }
 }

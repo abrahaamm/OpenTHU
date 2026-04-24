@@ -32,7 +32,7 @@ flowchart TD
     F --> K
 
     K --> L["Data Skills<br/>courses / assignments / notices / files / activities / search"]
-    K --> M["Action Skills<br/>reminder / calendar / alarm / notification / open_url / launch_app"]
+    K --> M["Action Skills<br/>reminder / calendar / alarm / notification / open_url"]
 ```
 
 ## Project Layout

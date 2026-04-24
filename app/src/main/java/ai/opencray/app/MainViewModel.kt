@@ -6,7 +6,6 @@ import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.AuditEntry
-import ai.opencray.app.domain.model.CommonApp
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
@@ -33,7 +32,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       port = portText,
       tlsEnabled = tlsEnabled,
       snapshot = snapshot,
-      commonApps = snapshot.commonApps,
       contextSignals = snapshot.contextSignals,
       systemActions = snapshot.systemActions,
       safetyRecords = snapshot.safetyRecords,
@@ -110,18 +108,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.approvePendingActions()
     selectedDestination = AppDestination.Safety
   }
-
-  fun updateCommonApps(apps: List<CommonApp>) {
-    runtime.updateCommonApps(apps)
-  }
-
-  fun noteAppLaunch(
-    appLabel: String,
-    succeeded: Boolean,
-  ) {
-    runtime.noteAppLaunch(appLabel = appLabel, succeeded = succeeded)
-    selectedDestination = AppDestination.Actions
-  }
 }
 
 data class MainUiState(
@@ -131,7 +117,6 @@ data class MainUiState(
   val port: String,
   val tlsEnabled: Boolean,
   val snapshot: RuntimeSnapshot,
-  val commonApps: List<CommonApp>,
   val contextSignals: List<ContextSignal>,
   val systemActions: List<SystemAction>,
   val safetyRecords: List<SafetyRecord>,

@@ -42,7 +42,6 @@ OpenTHU 当前已有 Android 端原型（Context / Actions / Safety 三层）和
    - 展示摘要（`show_summary`）
    - 打开链接（`open_url`）
    - 发送通知（`send_notification`）
-   - 受控跨应用跳转（`launch_app`）
 
 3. **Workflow（保留并增强）**：
    - 任务规划（Plan）
@@ -61,7 +60,7 @@ OpenTHU 当前已有 Android 端原型（Context / Actions / Safety 三层）和
 
 1. 独立 Backend HTTP 服务（数据聚合职责移入 Agent Skills）
 2. 自动提交作业到上游系统（保留 Skill 设计，不做默认自动执行）
-3. 无人工确认的高风险跨应用自动化（支付、账号敏感操作）
+3. 第三方应用自动化与跨应用跳转（如微信、支付宝等）
 4. 多学校适配（当前仅清华）
 5. 完整多端产品（iOS/Web 仅预留协议兼容）
 
@@ -252,13 +251,6 @@ Workflow 按需调用对应 Skill，无需独立后端服务：
 输出：跳转状态  
 风险等级：low  
 规则：优先内置 WebView；外部链接需用户确认。
-
-## SK-17 launch_app（跨应用跳转）
-
-输入：`package_name`、`action`（可选）、`extras`（可选）  
-输出：启动状态  
-风险等级：high（需审批）  
-规则：发送 Android Intent；高风险，必须通过 PolicyEngine 审批后执行。
 
 ## 7. Workflow 节点设计
 

@@ -2,7 +2,6 @@ package ai.opencray.app.data.repository
 
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.domain.model.AgentCapability
-import ai.opencray.app.domain.model.CommonApp
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
@@ -19,7 +18,7 @@ class FakeRuntimeRepository : RuntimeRepository {
       host = "192.168.0.88",
       port = 18789,
       tlsEnabled = false,
-      featureFlags = listOf("context-aware", "cross-app", "safety-audit", "action-loop", "memory"),
+      featureFlags = listOf("context-aware", "system-intents", "safety-audit", "action-loop", "memory"),
       capabilities =
         listOf(
           AgentCapability(
@@ -28,24 +27,10 @@ class FakeRuntimeRepository : RuntimeRepository {
             description = "读取通知和近期事件，给系统级 agent 提供现场上下文。",
           ),
           AgentCapability(
-            id = "cross_app_actions",
-            title = "Cross-App Actions",
-            description = "预留跨 App 操作、Intent 跳转和 UI 自动化执行链路。",
-          ),
-          AgentCapability(
             id = "safety_guard",
             title = "Safety Guard",
             description = "高风险动作确认、审计记录和可回放执行轨迹。",
           ),
-        ),
-      commonApps =
-        listOf(
-          CommonApp(id = "wechat", label = "WeChat", packageName = "com.tencent.mm"),
-          CommonApp(id = "alipay", label = "Alipay", packageName = "com.eg.android.AlipayGphone"),
-          CommonApp(id = "amap", label = "Amap", packageName = "com.autonavi.minimap"),
-          CommonApp(id = "taobao", label = "Taobao", packageName = "com.taobao.taobao"),
-          CommonApp(id = "meituan", label = "Meituan", packageName = "com.sankuai.meituan"),
-          CommonApp(id = "qq", label = "QQ", packageName = "com.tencent.mobileqq"),
         ),
       contextSignals =
         listOf(
@@ -216,10 +201,6 @@ class FakeRuntimeRepository : RuntimeRepository {
             }
           },
       )
-  }
-
-  override fun updateCommonApps(apps: List<CommonApp>) {
-    snapshot = snapshot.copy(commonApps = apps)
   }
 
   override fun appendEvent(event: String) {

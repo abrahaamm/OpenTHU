@@ -101,6 +101,6 @@ It intentionally does not implement:
 - login adapters
 - course / assignment / notice fetchers
 - Android calendar / reminder / alarm writers
-- notification or app-launch concrete handlers
+- notification concrete handlers
 
 Those implementations should be registered later behind `SkillRegistry`.

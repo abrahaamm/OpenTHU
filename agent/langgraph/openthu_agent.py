@@ -40,6 +40,9 @@ class AgentState(TypedDict, total=False):
     approval_records: list[dict[str, Any]]
     memory_update: dict[str, Any]
     final_response: dict[str, Any]
+    trace_log: list[dict[str, Any]]
+    normalizer_source: str
+    planner_source: str
 
 
 class StructuredPrompt(TypedDict):
@@ -66,8 +69,11 @@ def normalize_risk(risk_level: str) -> str:
 class RequirementLLM:
     """Normalize user requirement into a stable prompt structure."""
 
-    def __init__(self, model: str = "gpt-4.1-mini") -> None:
+    def __init__(self, model: str = "gpt-4.1-mini", base_url: str = "") -> None:
         self.model = model
+        self.base_url = base_url.strip()
+        self.last_mode = "fallback"
+        self.last_error = ""
 
     def normalize(self, user_input: str) -> dict[str, Any]:
         openai_key = os.getenv("OPENAI_API_KEY")
@@ -77,24 +83,57 @@ class RequirementLLM:
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=openai_key)
+            if self.base_url:
+                client = OpenAI(api_key=openai_key, base_url=self.base_url)
+            else:
+                client = OpenAI(api_key=openai_key)
             system_prompt = (
                 "Convert the user requirement into strict JSON with keys: "
                 "objective, entities, constraints, success_criteria, sensitivity. "
                 "Use concise, execution-oriented values. Return JSON only."
             )
-            response = client.responses.create(
-                model=self.model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_input},
-                ],
-                max_output_tokens=500,
-                temperature=0.1,
-            )
-            return json.loads(response.output_text.strip())
-        except Exception:
+            try:
+                response = client.responses.create(
+                    model=self.model,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_input},
+                    ],
+                    max_output_tokens=500,
+                    temperature=0.1,
+                )
+                self.last_mode = "llm_responses"
+                self.last_error = ""
+                return json.loads(self._extract_json_text(response.output_text.strip()))
+            except Exception:
+                completion = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_input},
+                    ],
+                    max_tokens=500,
+                    temperature=0.1,
+                )
+                content = completion.choices[0].message.content or ""
+                self.last_mode = "llm_chat_completions"
+                self.last_error = ""
+                return json.loads(self._extract_json_text(content.strip()))
+        except Exception as exc:
+            self.last_mode = "fallback"
+            self.last_error = f"{type(exc).__name__}: {exc}"
             return self._fallback(user_input)
+
+    def _extract_json_text(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
+        return stripped
 
     def _fallback(self, user_input: str) -> dict[str, Any]:
         lower = user_input.lower()
@@ -105,7 +144,7 @@ class RequirementLLM:
             entities.append("assignments")
         if any(token in lower for token in ["课程", "课表", "上课", "course", "schedule"]):
             entities.append("courses")
-        if any(token in lower for token in ["通知", "公告", "notice"]):
+        if any(token in lower for token in ["通知", "公告", "notice", "消息", "门户"]):
             entities.append("notices")
         if any(token in lower for token in ["文件", "课件", "资料", "file"]):
             entities.append("files")
@@ -113,6 +152,12 @@ class RequirementLLM:
             entities.append("activities")
         if any(token in lower for token in ["搜索", "查找", "search"]):
             entities.append("search")
+        if any(token in lower for token in ["个人信息", "学号", "院系", "profile", "user info"]):
+            entities.append("user_profile")
+        if any(token in lower for token in ["学期", "semester"]):
+            entities.append("semesters")
+        if any(token in lower for token in ["校历", "教务日历", "academic calendar"]):
+            entities.append("academic_calendar")
         if any(token in lower for token in ["提醒", "待办", "reminder"]):
             entities.append("reminder")
         if any(token in lower for token in ["日历", "calendar"]):
@@ -121,9 +166,10 @@ class RequirementLLM:
             entities.append("alarm")
         if any(token in lower for token in ["通知我", "推送", "notification"]):
             entities.append("notification")
-        if any(token in lower for token in ["app", "微信", "qq", "支付宝", "launch"]):
-            entities.append("cross_app")
-            sensitivity = "high"
+        if any(token in lower for token in ["刷新会话", "刷新登录", "refresh session"]):
+            entities.append("session_refresh")
+        if any(token in lower for token in ["退出登录", "注销", "logout"]):
+            entities.append("logout")
         if any(token in lower for token in ["登录", "password", "验证码", "login", "account"]):
             entities.append("auth")
             sensitivity = "high"
@@ -152,9 +198,11 @@ class OpenTHULangGraphAgent:
         self,
         memory_file: Path,
         skill_registry: SkillRegistry | None = None,
+        llm_model: str = "gpt-4.1-mini",
+        llm_base_url: str = "",
     ) -> None:
         self.memory_file = memory_file
-        self.llm = RequirementLLM()
+        self.llm = RequirementLLM(model=llm_model, base_url=llm_base_url)
         self.skill_registry = skill_registry or build_default_registry()
         self.graph = self._build_graph()
 
@@ -218,13 +266,27 @@ class OpenTHULangGraphAgent:
         return {
             "standardized_prompt": standardized,
             "normalization_warnings": warnings,
+            "normalizer_source": self.llm.last_mode,
+            "trace_log": self._append_trace(
+                state,
+                node="normalize_requirement",
+                detail={
+                    "entities": standardized["entities"],
+                    "sensitivity": standardized["sensitivity"],
+                    "warnings_count": len(warnings),
+                    "source": self.llm.last_mode,
+                    "error": self.llm.last_error,
+                },
+            ),
         }
 
     def _plan_skills(self, state: AgentState) -> dict[str, Any]:
         structured_prompt = self._coerce_prompt_from_state(state)
         planned = self._plan_skills_via_llm(state, structured_prompt)
+        planner_source = "llm"
         if not planned:
             planned = self._fallback_skill_plan(state, structured_prompt)
+            planner_source = "fallback"
 
         if not planned:
             planned = [
@@ -239,10 +301,21 @@ class OpenTHULangGraphAgent:
                     description="在端侧展示规划失败原因，等待用户补充信息",
                 )
             ]
+            planner_source = "fallback"
 
         return {
             "skill_plan": planned,
+            "planner_source": planner_source,
             "task_status": "planned",
+            "trace_log": self._append_trace(
+                state,
+                node="plan_skills",
+                detail={
+                    "planned_count": len(planned),
+                    "planned_skills": [item.get("skill_name", "") for item in planned],
+                    "source": planner_source,
+                },
+            ),
         }
 
     def _safety_check(self, state: AgentState) -> dict[str, Any]:
@@ -325,6 +398,15 @@ class OpenTHULangGraphAgent:
                 "risk_details": risk_details,
             },
             "task_status": "in_progress" if approved else "planned",
+            "trace_log": self._append_trace(
+                state,
+                node="safety_check",
+                detail={
+                    "approved_count": len(approved),
+                    "blocked_count": len(blocked),
+                    "blocked_skills": [item.get("skill_name", "") for item in blocked],
+                },
+            ),
         }
 
     def _execute_skills(self, state: AgentState) -> dict[str, Any]:
@@ -389,6 +471,15 @@ class OpenTHULangGraphAgent:
             "failed_skills": failed_skills,
             "needs_replan": bool(failed_skills),
             "task_status": task_status,
+            "trace_log": self._append_trace(
+                state,
+                node="execute_skills",
+                detail={
+                    "executed_count": len(skill_results),
+                    "failed_count": len(failed_skills),
+                    "result_codes": [item.get("code", "") for item in skill_results],
+                },
+            ),
         }
 
     def _route_after_execution(self, state: AgentState) -> str:
@@ -421,6 +512,14 @@ class OpenTHULangGraphAgent:
         return {
             "replanned_skills": replanned,
             "task_status": "in_progress",
+            "trace_log": self._append_trace(
+                state,
+                node="replan_failed",
+                detail={
+                    "replanned_count": len(replanned),
+                    "replanned_skills": [item.get("skill_name", "") for item in replanned],
+                },
+            ),
         }
 
     def _audit_record(self, state: AgentState) -> dict[str, Any]:
@@ -497,7 +596,14 @@ class OpenTHULangGraphAgent:
                 }
             )
 
-        return {"audit_log": audit_log}
+        return {
+            "audit_log": audit_log,
+            "trace_log": self._append_trace(
+                state,
+                node="audit_record",
+                detail={"audit_count": len(audit_log)},
+            ),
+        }
 
     def _memory_update(self, state: AgentState) -> dict[str, Any]:
         memory = self._load_memory()
@@ -516,7 +622,18 @@ class OpenTHULangGraphAgent:
         memory.setdefault("entries", []).append(entry)
         memory["entries"] = memory["entries"][-100:]
         self._save_memory(memory)
-        return {"memory_update": entry}
+        return {
+            "memory_update": entry,
+            "trace_log": self._append_trace(
+                state,
+                node="memory_update",
+                detail={
+                    "task_status": entry["task_status"],
+                    "success_count": entry["success_count"],
+                    "failure_count": entry["failure_count"],
+                },
+            ),
+        }
 
     def _finalize(self, state: AgentState) -> dict[str, Any]:
         code, message = self._summarize_outcome(state)
@@ -541,6 +658,9 @@ class OpenTHULangGraphAgent:
                 "audit_log": state.get("audit_log", []),
                 "memory_update": state.get("memory_update", {}),
                 "available_skills": self.skill_registry.describe_for_planner(),
+                "trace_log": state.get("trace_log", []),
+                "normalizer_source": state.get("normalizer_source", "fallback"),
+                "planner_source": state.get("planner_source", "fallback"),
             },
         }
         return {"final_response": response}
@@ -577,17 +697,32 @@ class OpenTHULangGraphAgent:
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=openai_key)
-            response = client.responses.create(
-                model=self.llm.model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                max_output_tokens=1000,
-                temperature=0.2,
-            )
-            parsed = json.loads(response.output_text.strip())
+            client = self._create_openai_client(OpenAI, openai_key)
+            user_content = json.dumps(payload, ensure_ascii=False)
+            try:
+                response = client.responses.create(
+                    model=self.llm.model,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_output_tokens=1000,
+                    temperature=0.2,
+                )
+                raw_text = response.output_text.strip()
+            except Exception:
+                completion = client.chat.completions.create(
+                    model=self.llm.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=1000,
+                    temperature=0.2,
+                )
+                raw_text = (completion.choices[0].message.content or "").strip()
+
+            parsed = json.loads(self._extract_json_text(raw_text))
             if not isinstance(parsed, list):
                 return []
             return self._sanitize_skill_plan(parsed, state["task_id"])
@@ -637,6 +772,33 @@ class OpenTHULangGraphAgent:
                     args=args,
                     description=description,
                 )
+            )
+
+        if "auth" in entities:
+            append_skill(
+                "login",
+                {
+                    "username": "<REDACTED_USERNAME>",
+                    "password": "<REDACTED_PASSWORD>",
+                },
+                "建立清华会话",
+            )
+        if "session_refresh" in entities:
+            append_skill("refresh_session", {}, "刷新当前会话状态")
+        if "logout" in entities:
+            append_skill("logout", {}, "注销当前会话")
+        if "user_profile" in entities:
+            append_skill("get_user_info", {}, "获取当前用户基础信息")
+        if "semesters" in entities:
+            append_skill("get_semesters", {}, "获取学期列表和当前学期")
+        if "academic_calendar" in entities:
+            append_skill(
+                "get_academic_calendar",
+                {
+                    "start_date": datetime.now(timezone.utc).strftime("%Y%m%d"),
+                    "end_date": (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y%m%d"),
+                },
+                "获取教务日历事件",
             )
 
         if "courses" in entities or "assignments" in entities or "notices" in entities or "files" in entities:
@@ -721,17 +883,6 @@ class OpenTHULangGraphAgent:
                 "打开用户提到的目标链接",
             )
 
-        if "cross_app" in entities:
-            append_skill(
-                "launch_app",
-                {
-                    "package_name": "com.tencent.mm",
-                    "action": "android.intent.action.VIEW",
-                    "extras": {"objective": objective},
-                },
-                "执行受控跨应用跳转",
-            )
-
         return self._dedupe_skill_plan(plan)[:8]
 
     def _assess_skill_risk(
@@ -758,9 +909,6 @@ class OpenTHULangGraphAgent:
         spec = self.skill_registry.get_spec(skill_name)
         base_risk = normalize_risk(spec.risk_level if spec else planned_skill.get("risk_level", "medium"))
 
-        if skill_name == "launch_app":
-            return "high", "launch_app always requires the strongest guardrail"
-
         if any(token in args_text for token in ["password", "token", "ticket", "otp", "验证码"]):
             return "high", "credential-like parameters detected"
 
@@ -784,11 +932,11 @@ class OpenTHULangGraphAgent:
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=openai_key)
+            client = self._create_openai_client(OpenAI, openai_key)
             system_prompt = (
                 "You are a mobile agent safety reviewer. "
                 "Classify the risk of one planned skill invocation as low, medium, or high. "
-                "If the skill touches credentials, authentication, account state, or external app jumping, "
+                "If the skill touches credentials, authentication, or account state, "
                 "treat it as high. If it writes into system apps like reminders or calendar, treat it as at least medium. "
                 "Return strict JSON only: {\"risk\":\"low|medium|high\",\"reason\":\"short reason\"}."
             )
@@ -796,16 +944,31 @@ class OpenTHULangGraphAgent:
                 "structured_prompt": structured_prompt,
                 "planned_skill": planned_skill,
             }
-            response = client.responses.create(
-                model=self.llm.model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                max_output_tokens=250,
-                temperature=0.0,
-            )
-            parsed = json.loads(response.output_text.strip())
+            user_content = json.dumps(payload, ensure_ascii=False)
+            try:
+                response = client.responses.create(
+                    model=self.llm.model,
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_output_tokens=250,
+                    temperature=0.0,
+                )
+                raw_text = response.output_text.strip()
+            except Exception:
+                completion = client.chat.completions.create(
+                    model=self.llm.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=250,
+                    temperature=0.0,
+                )
+                raw_text = (completion.choices[0].message.content or "").strip()
+
+            parsed = json.loads(self._extract_json_text(raw_text))
             risk = normalize_risk(parsed.get("risk", "medium"))
             reason = str(parsed.get("reason", "")).strip() or "LLM risk assessment"
             return risk, reason
@@ -954,6 +1117,38 @@ class OpenTHULangGraphAgent:
         match = re.search(r"https?://\S+", text)
         return match.group(0) if match else None
 
+    def _extract_json_text(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            stripped = "\n".join(lines).strip()
+        return stripped
+
+    def _create_openai_client(self, openai_cls: Any, api_key: str) -> Any:
+        if self.llm.base_url:
+            return openai_cls(api_key=api_key, base_url=self.llm.base_url)
+        return openai_cls(api_key=api_key)
+
+    def _append_trace(
+        self,
+        state: AgentState,
+        node: str,
+        detail: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        trace = list(state.get("trace_log", []))
+        trace.append(
+            {
+                "ts": utc_now(),
+                "node": node,
+                "detail": detail,
+            }
+        )
+        return trace
+
     def _load_memory(self) -> dict[str, Any]:
         if not self.memory_file.exists():
             return {"entries": []}
@@ -977,6 +1172,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--session-id", default="", help="Optional local session identifier for debugging")
     parser.add_argument("--semester-id", default="", help="Optional semester identifier")
     parser.add_argument(
+        "--llm-model",
+        default="gpt-4.1-mini",
+        help="LLM model for requirement normalization and planning",
+    )
+    parser.add_argument(
+        "--llm-base-url",
+        default="",
+        help="Optional OpenAI-compatible base URL (for third-party providers)",
+    )
+    parser.add_argument(
         "--approve-sensitive",
         action="store_true",
         help="Approve skills that require user confirmation for this run",
@@ -992,7 +1197,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     session = {"session_id": args.session_id} if args.session_id else {}
-    agent = OpenTHULangGraphAgent(memory_file=Path(args.memory_file))
+    agent = OpenTHULangGraphAgent(
+        memory_file=Path(args.memory_file),
+        llm_model=args.llm_model,
+        llm_base_url=args.llm_base_url,
+    )
     result = agent.run(
         user_input=args.input,
         user_id=args.user_id,

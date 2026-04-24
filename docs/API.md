@@ -552,27 +552,6 @@ class SkillResult:
 
 **返回**：`{ "status": "opened" }`
 
-## 5.7 `launch_app`
-
-**风险等级**：high（必须审批）  
-**用途**：跨应用 Intent 启动，触发第三方应用动作。
-
-**入参**：
-
-```python
-{
-    "request_id": "req_xxx",
-    "package_name": "com.tencent.wework",
-    "action": "android.intent.action.VIEW",
-    "extras": { "key": "value" }    # 可选
-}
-```
-
-**返回**：`{ "status": "launched" }`  
-**规则**：`risk_level=high`，必须通过 PolicyEngine 审批后执行。
-
----
-
 ## 6. Workflow 内部协议
 
 ## 6.1 AgentState（LangGraph State 定义）
@@ -709,7 +688,6 @@ Skill 调用状态：
 | `create_reminder` | Android System | `android.provider.CalendarContract.Reminders` | Intent |
 | `create_calendar_event` | Android System | `android.intent.action.INSERT` → `content://com.android.calendar/events` | Intent |
 | `set_alarm` | Android System | `android.intent.action.SET_ALARM` | Intent |
-| `launch_app` | Android System | `android.intent.action.VIEW` | Intent |
 
 ---
 
