@@ -1,509 +1,367 @@
 # OpenTHU Calendar Skill 规范文档
 
-版本：v1.0-draft  
+版本：v1.1-draft  
 日期：2026-04-25  
 状态：Draft
 
 ## 1. 文档目标
 
-本文档定义 OpenTHU `calendar skill` 的完整技术规范，用于指导以下能力的一致实现：
-- Agent 基于 `create_calendar_event` 动作写入 Android 系统日历
-- 执行过程可审批、可审计、可回放
-- Skill 与 MCP 组件解耦，支持后续扩展（更新、删除、批量、冲突策略）
+本文档定义 OpenTHU 中 `create_calendar_event` Skill 的完整规范，包括：
+- 在 Skill-first 架构中的分层位置与边界
+- 功能范围与非目标
+- 接口、参数、返回、状态机、错误码、审批协议
+- 与当前代码实现的一致性约束与演进计划
 
-本文档与以下文档协同：
-- `docs/API.md`：Agent <-> Backend 正式接口契约
-- `docs/RD.md`：需求、验收与非功能约束
+本文档是对 `docs/API.md` 中 `create_calendar_event` 条目的专项展开。
 
-## 2. 范围定义
+## 2. 关联文档与代码基线
 
-## 2.1 In Scope（本阶段）
+关联文档：
+- `docs/RD.md`
+- `docs/API.md`
+- `README.md`
 
-1. 创建日历事件（单条/批量）
-2. 写入目标日历（默认日历或指定日历）
-3. 设置提醒（分钟级偏移）
-4. 写入结果结构化回传（含每条事件执行结果）
-5. 与审批、审计链路打通
-6. 幂等与重试协议
+当前代码基线（2026-04-25）：
+- `agent/langgraph/skill_core.py`
+- `agent/langgraph/openthu_agent.py`
+- `app/src/main/java/ai/opencray/app/execution/ActionExecutor.kt`
+- `app/src/main/java/ai/opencray/app/safety/PolicyEngine.kt`
+- `app/src/main/AndroidManifest.xml`
 
-## 2.2 Out of Scope（后续阶段）
+## 3. 架构定位
 
-1. 删除已有系统日历事件（高风险，默认关闭）
-2. 修改已有系统日历事件（仅预留接口）
-3. 云端日历同步保障（Google/Exchange 账户同步时延不在本系统 SLA）
-4. 参会人邀请与回执（仅在上层业务明确要求后引入）
+## 3.1 总体架构（已切换）
 
-## 3. 术语与约定
-
-- `Skill`：面向 Agent 的能力编排层，负责把动作参数组织为可执行工具调用。
-- `MCP Calendar Server`：提供标准化工具接口，屏蔽 Android 平台细节。
-- `Calendar Executor`：Android 侧最终执行器，调用 `CalendarContract` 写入系统日历。
-- `Action`：Backend 下发的标准动作，`type=create_calendar_event`。
-- `request_id`：写接口幂等键（跨重试保持不变）。
-- `dedupe_key`：事件级幂等键（同一 action 内每个事件唯一）。
-
-规范关键字：
-- `MUST`：必须遵守
-- `SHOULD`：建议遵守，需有明确理由才可偏离
-- `MAY`：可选
-
-## 4. 架构总览
-
-采用“Skill 编排 + MCP 执行 + Android 适配”的三层架构：
+OpenTHU 当前采用 Skill-first 架构，不依赖独立 Backend 规划服务：
 
 ```text
-User Goal
-  -> Backend Planner (/agent/tasks/plan)
-    -> Agent Action Runner
-      -> Calendar Skill (参数校验/策略决策/调用编排)
-        -> MCP Calendar Server (tool contract)
-          -> Android Calendar Executor (CalendarContract Provider)
-            -> System Calendar
-      -> Result Reporter (/agent/tasks/{task_id}/actions/{action_id}/result)
+User Input
+  -> LangGraph Workflow
+     -> normalize_requirement
+     -> plan_skills
+     -> safety_check
+     -> execute_skills
+     -> replan_failed (if needed)
+     -> audit_record
+     -> memory_update
 ```
 
-## 4.1 分层职责
+`create_calendar_event` 作为动作类 Skill 参与 `plan -> safety -> execute -> audit` 主链路。
 
-1. Backend Planner
-- 生成 `create_calendar_event` 动作与风险标记
-- 提供 `action_id/risk_level/requires_approval/args`
+## 3.2 协议边界
 
-2. Agent Action Runner
-- 串联审批门禁、Skill 执行、结果回传
-- 维护 action 生命周期状态
+1. 编排层（LangGraph）
+- 通过 `SkillRegistry` 获取 `SkillSpec`
+- 产出 `SkillInvocation`
+- 接收 `SkillResult`
+- 进行风险门禁、执行调度、审计记录
 
-3. Calendar Skill
-- 校验 `args` 结构与业务规则
-- 规范化时间、时区、提醒参数
-- 计算事件级 `dedupe_key`
-- 组织 MCP 工具调用
+2. Skill 实现层（Calendar Handler）
+- 校验与规范化入参
+- 调用 Android 日历能力
+- 产出结构化结果与错误码
 
-4. MCP Calendar Server
-- 对外暴露工具：权限检查、日历查询、事件写入
-- 提供稳定错误码与结构化结果
+3. Android 执行层
+- 当前最小实现：`Intent.ACTION_INSERT + CalendarContract.Events.CONTENT_URI`
+- 可选增强实现：`Calendar Provider` 直接写入
 
-5. Android Calendar Executor
-- 请求/检查 `WRITE_CALENDAR` 权限
-- 调用 `CalendarContract.Events` 与 `CalendarContract.Reminders`
-- 返回系统 `event_id` 与写入状态
+## 4. 功能范围
 
-## 4.2 核心设计原则
+## 4.1 In Scope（v1.1）
 
-1. 非破坏优先：本期仅新增事件，不自动删除或覆盖
-2. 安全优先：审批优先于执行，高风险动作默认阻断
-3. 幂等优先：同一 `request_id + action_id + dedupe_key` 不重复写入
-4. 可观测优先：每条事件必须有可追踪执行结果
-5. 向后兼容：对现有 `docs/API.md` 为增量扩展，不破坏已有字段
+1. 单事件创建（与 `docs/API.md` 当前定义一致）
+2. 风险等级 `medium`，默认需审批
+3. 执行结果结构化返回到 `SkillResult.data`
+4. 审计字段可追溯：`task_id/request_id/skill_name`
 
-## 5. 能力模型
+## 4.2 Out of Scope（v1.1）
 
-## 5.1 动作类型
+1. 批量事件写入（`events[]`）
+2. 更新、删除既有事件
+3. 参会人、重复规则（RRULE）高级字段
+4. 强一致写入确认（Intent 模式下不可保证）
 
-固定使用：
-- `type = create_calendar_event`
+## 5. Skill 规格定义
 
-## 5.2 操作模式
+## 5.1 SkillSpec（注册元数据）
 
-- `operation = create`（本期唯一必选值）
-- `operation = upsert`（预留）
-- `operation = delete`（预留，默认禁用）
+`create_calendar_event` 的注册元数据必须满足：
+- `skill_name`: `create_calendar_event`
+- `category`: `action`
+- `risk_level`: `medium`
+- `requires_approval`: `true`
+- `session_required`: `false`
 
-## 5.3 风险分级建议
+说明：该约束与 `agent/langgraph/skill_core.py` 中默认注册表一致。
 
-1. `low`
-- 单条写入，未来 30 天内，默认日历，提醒 <= 2 个
+## 5.2 SkillInvocation 入参协议
 
-2. `medium`
-- 批量写入（2-20 条）
-- 写入非默认日历
-- 全天事件跨多天
+## 5.2.1 必选字段（v1.1）
 
-3. `high`
-- 批量 > 20 条
-- 跨 365 天范围写入
-- 删除或覆盖（未来版本）
-
-高风险动作 `MUST` 经过审批后执行。
-
-## 6. 接口与协议定义
-
-## 6.1 Backend -> Agent（Action Args）
-
-在 `docs/API.md` 的 `create_calendar_event.args` 基础上，定义如下结构：
-
-```json
+```python
 {
-  "skill_version": "1.0.0",
-  "operation": "create",
-  "default_timezone": "Asia/Shanghai",
-  "target_calendar": {
-    "strategy": "default",
-    "calendar_id": null,
-    "calendar_name_hint": null
-  },
-  "idempotency": {
-    "scope": "action",
-    "request_id": "req_plan_001",
-    "action_id": "act_2"
-  },
-  "events": [
-    {
-      "dedupe_key": "ddl-cs101-2026-05-01",
-      "title": "CS101 作业截止提醒",
-      "description": "提交实验报告",
-      "location": "线上提交",
-      "start_at": "2026-05-01T20:00:00+08:00",
-      "end_at": "2026-05-01T20:30:00+08:00",
-      "all_day": false,
-      "timezone": "Asia/Shanghai",
-      "reminders": [
-        { "minutes_before": 1440, "method": "alert" },
-        { "minutes_before": 30, "method": "alert" }
-      ],
-      "metadata": {
-        "course_id": "wlkcid_xxx",
-        "source": "assignment_deadline",
-        "external_ref": "assignment_123"
-      }
-    }
-  ]
+    "request_id": "req_xxx",
+    "title": "期中考试：人工智能导论",
+    "start_time": "2026-05-02T09:00:00Z",
+    "end_time": "2026-05-02T11:00:00Z"
 }
 ```
 
-### 6.1.1 字段约束
+## 5.2.2 可选字段（v1.1）
 
-1. 顶层字段
-- `skill_version`：`MUST` 为语义化版本号
-- `operation`：本期 `MUST` 为 `create`
-- `default_timezone`：IANA 时区，缺省 `Asia/Shanghai`
-- `events`：`MUST` 非空，长度 `1..50`
-
-2. 事件字段
-- `dedupe_key`：`MUST` 非空，长度 `1..128`，在同一 action 内唯一
-- `title`：`MUST` 非空，长度 `1..200`
-- `start_at/end_at`：`MUST` 为 ISO8601，且 `start_at < end_at`
-- `all_day=true` 时：`start_at/end_at` `SHOULD` 对齐到本地日界
-- `reminders`：`MAY` 为空；若不为空，单事件最多 5 条
-- `minutes_before`：取值 `0..10080`（最多提前 7 天）
-
-## 6.2 Agent -> MCP（Tool Contract）
-
-MCP Server 至少提供以下工具：
-
-1. `calendar.check_permission`
-- 输入：`{}`
-- 输出：
-```json
+```python
 {
-  "granted": true,
-  "can_request_runtime_permission": true
+    "location": "六教6A001",
+    "description": "闭卷考试"
 }
 ```
 
-2. `calendar.list_calendars`
-- 输入：`{}`
-- 输出：
-```json
+## 5.2.3 向后兼容扩展字段（建议）
+
+以下字段可在不破坏 v1.1 的前提下增量支持：
+
+```python
 {
-  "items": [
-    {
-      "calendar_id": "12",
-      "display_name": "My Calendar",
-      "account_name": "user@gmail.com",
-      "is_primary": true,
-      "writable": true
-    }
-  ]
+    "timezone": "Asia/Shanghai",
+    "all_day": False,
+    "source": "assignment_deadline",
+    "external_ref": "assignment_123",
+    "dedupe_key": "ddl-ai-2026-05-02"
 }
 ```
 
-3. `calendar.create_events`
-- 输入：与 `6.1` 中 `target_calendar + events + idempotency` 对齐
-- 输出：
-```json
+## 5.2.4 参数校验规则
+
+1. `title` 长度：`1..200`
+2. `start_time/end_time` 必须是 ISO8601 字符串
+3. `end_time` 必须晚于 `start_time`
+4. 若提供 `timezone`，必须是合法 IANA 时区
+5. 参数不合法返回 `INVALID_PARAM`
+
+## 6. SkillResult 返回协议
+
+## 6.1 通用外层
+
+遵循 `SkillResult` 结构：
+
+```python
 {
-  "summary": {
-    "total": 2,
-    "created": 2,
-    "skipped": 0,
-    "failed": 0
-  },
-  "results": [
-    {
-      "dedupe_key": "ddl-cs101-2026-05-01",
-      "status": "created",
-      "calendar_event_id": "8342",
-      "calendar_id": "12"
-    }
-  ]
+    "skill_name": "create_calendar_event",
+    "request_id": "req_xxx",
+    "code": "OK",
+    "data": {},
+    "from_cache": False,
+    "fetched_at": "2026-04-25T12:00:00Z",
+    "source": "android_calendar_intent"
 }
 ```
 
-4. `calendar.upsert_events`（预留）
-- 本期可返回 `NOT_IMPLEMENTED`
+## 6.2 `data` 字段定义
 
-## 6.3 Agent -> Backend（结果回传扩展）
-
-使用既有接口：
-- `POST /agent/tasks/{task_id}/actions/{action_id}/result`
-
-推荐 `artifacts` 结构：
-
-```json
+```python
 {
-  "calendar_write": {
-    "operation": "create",
-    "total": 2,
-    "created": 1,
-    "skipped": 1,
-    "failed": 0,
-    "results": [
-      {
-        "dedupe_key": "ddl-cs101-2026-05-01",
-        "status": "created",
-        "calendar_event_id": "8342",
-        "calendar_id": "12"
-      },
-      {
-        "dedupe_key": "ddl-ma101-2026-05-02",
-        "status": "skipped_idempotent",
-        "calendar_event_id": "8201",
-        "calendar_id": "12"
-      }
-    ]
-  }
+    "status": "launched|created|pending_user_confirmation|failed",
+    "event_id": "string|null",
+    "write_mode": "intent|provider",
+    "message": "string"
 }
 ```
 
-## 7. 状态机定义
+字段说明：
+- `status=launched`：已成功拉起日历创建界面
+- `status=pending_user_confirmation`：等待用户在日历 App 内最终确认
+- `status=created`：已确认创建成功（通常仅 Provider 模式可稳定给出）
+- `event_id`：Intent 模式允许为 `null`
 
-## 7.1 Action 状态
+## 6.3 与 API 文档的兼容关系
 
-- `planned` -> `pending_approval` -> `approved` -> `executed`
-- 失败分支：任意状态 -> `failed`
+`docs/API.md` 当前示例为：
 
-约束：
-1. `requires_approval=true` 时，`MUST` 先进入 `pending_approval`
-2. 未审批执行 `MUST` 返回 `APPROVAL_REQUIRED`
-3. 部分成功写入时，action 状态 `SHOULD` 仍为 `executed`，并在 `artifacts` 标注失败明细
+```python
+{ "event_id": "...", "status": "created" }
+```
 
-## 7.2 事件级状态
+本规范将其视为“理想成功形态”，并补充当前 Intent 模式下的可观测状态，避免实现与文档语义冲突。
 
-- `created`
-- `skipped_idempotent`
-- `failed_validation`
-- `failed_permission`
-- `failed_provider_io`
-- `failed_unknown`
+## 7. 执行模式定义
 
-## 8. 幂等、重试与一致性
+## 7.1 模式 A：Intent（当前默认）
 
-## 8.1 幂等键
+执行方式：
+- 构造 `Intent.ACTION_INSERT`
+- `data = CalendarContract.Events.CONTENT_URI`
+- 填充 `TITLE/BEGIN/END/LOCATION/DESCRIPTION`
+- `startActivity(intent)`
 
-事件级唯一键定义：
-- `idempotency_key = hash(request_id + action_id + dedupe_key)`
+优点：
+- 权限成本低，设备兼容性好
 
-规则：
-1. 同一 `idempotency_key` 在 TTL（建议 7 天）内重复请求，`MUST` 返回 `skipped_idempotent`
-2. 重试时 `request_id` 与 `action_id` `MUST` 保持不变
+限制：
+- 无法稳定获取 `event_id`
+- 无法保证用户最终点击“保存”
+- 幂等只能做到“请求级避免重复拉起”，不能保证“系统事件不重复”
 
-## 8.2 重试策略
+## 7.2 模式 B：Provider（后续增强）
 
-1. 可重试错误：`PROVIDER_TIMEOUT`、`TEMPORARY_IO_ERROR`
-2. 不可重试错误：`INVALID_PARAM`、`PERMISSION_DENIED`
-3. 重试建议：指数退避，`1s/2s/4s`，最大 3 次
+执行方式：
+- 直接写入 `CalendarContract.Events`
+- 可选写入 `CalendarContract.Reminders`
 
-## 8.3 部分成功策略
+优点：
+- 可拿到 `event_id`
+- 可实现更强幂等与批量能力
 
-批量写入允许部分成功：
-- 回传层面 `success=true` 仅在 `failed=0` 时使用
-- 若存在失败，`success=false`，同时附带 `results` 明细，避免丢失已创建的 `event_id`
+前提：
+- 声明并申请 `READ_CALENDAR/WRITE_CALENDAR`
+- 处理多账户日历选择与写权限校验
 
-## 9. 时间与时区协议
+## 8. 审批与风险协议
 
-1. 输入时间 `MUST` 使用 ISO8601（带偏移或 `Z`）
-2. 若事件未显式提供 `timezone`，`MUST` 回退到 `default_timezone`
-3. 写入系统日历前，执行器 `SHOULD` 转换为设备时区语义
-4. Backend 审计与存储时间 `MUST` 使用 UTC
-5. 跨天/夏令时边界场景 `MUST` 以事件原始时区解释，禁止按 UTC 直接切割全天事件
+1. 默认风险等级：`medium`
+2. `requires_approval=true`
+3. 在 `safety_check` 阶段：
+- 若 `approve_sensitive=false`，进入 `pending_approval`，本次不执行
+- 若 `approve_sensitive=true`，可进入 `approved` 并执行
+4. 未审批执行应返回 `APPROVAL_REQUIRED`
 
-## 10. 权限与安全
+状态流转：
+- `planned -> pending_approval -> approved -> executed|failed`
 
-## 10.1 Android 权限
+## 9. 幂等与重试协议
 
-`MUST` 声明并在运行时申请：
-- `android.permission.READ_CALENDAR`
-- `android.permission.WRITE_CALENDAR`
+## 9.1 幂等键
 
-## 10.2 数据最小化
-
-1. Skill 不保存用户完整日程正文历史，仅保存执行必要字段
-2. 本地缓存的幂等记录 `SHOULD` 仅保留 `idempotency_key + event_id + timestamp`
-3. 敏感文本（如作业内容）`SHOULD` 仅用于本次执行，不落长期日志
-
-## 10.3 审批与门禁
-
-1. `risk_level=high`：强制审批
-2. `risk_level=medium`：默认无需审批，可由策略开关提升为审批
-3. 用户拒绝审批后，action `MUST` 进入 `failed` 且错误码为 `ACTION_NOT_ALLOWED`
-
-## 11. 错误码与映射
-
-## 11.1 Skill/MCP 错误码
-
-- `CAL_INVALID_PARAM`
-- `CAL_PERMISSION_DENIED`
-- `CAL_CALENDAR_NOT_FOUND`
-- `CAL_NOT_WRITABLE`
-- `CAL_INVALID_TIME_RANGE`
-- `CAL_TOO_MANY_EVENTS`
-- `CAL_PROVIDER_TIMEOUT`
-- `CAL_PROVIDER_IO`
-- `CAL_NOT_IMPLEMENTED`
-
-## 11.2 与 API 通用码映射
-
-- 参数类错误 -> `INVALID_PARAM`
-- 权限类错误 -> `ACTION_NOT_ALLOWED`
-- 审批缺失 -> `APPROVAL_REQUIRED`
-- 上游/系统暂时异常 -> `INTERNAL_ERROR`
-
-## 12. 审计与可观测性
-
-## 12.1 审计字段（最小集合）
-
-- `session_id`
-- `task_id`
-- `action_id`
+最小幂等键：
 - `request_id`
-- `risk_level`
-- `approval_id`（如有）
-- `operation`
-- `events_total/created/skipped/failed`
-- `timestamp`
 
-## 12.2 指标（Metrics）
+建议增强：
+- `request_id + dedupe_key`
 
-- `calendar_action_total{status}`
-- `calendar_event_total{result}`
-- `calendar_action_latency_ms`
-- `calendar_permission_denied_total`
-- `calendar_idempotent_skip_total`
+## 9.2 重试策略
 
-## 13. 非功能要求
+1. 可重试：
+- `SKILL_EXECUTION_FAILED`（可恢复异常）
 
-1. 性能：20 条事件批量创建 P95 < 3s（本地执行，不含人工审批）
-2. 可用性：MCP 调用成功率月度 >= 99.5%
-3. 可维护性：接口字段向后兼容，新增字段必须为可选
-4. 可测试性：每个错误码至少 1 条自动化用例覆盖
+2. 不可重试：
+- `INVALID_PARAM`
+- `ACTION_NOT_ALLOWED`
 
-## 14. 验收标准与测试矩阵
+3. 建议重试节奏：
+- `1s / 2s / 4s`，最多 3 次
 
-## 14.1 功能验收
+## 10. 错误码与映射
 
-1. 单条创建成功，返回 `calendar_event_id`
-2. 批量创建部分失败，回传逐条结果
-3. 重试同一请求不重复写入（命中幂等）
-4. 未授权权限时正确失败并提示
-5. 高风险动作未审批不可执行
+Skill 层返回码遵循 `docs/API.md` 通用码：
+- `OK`
+- `INVALID_PARAM`
+- `APPROVAL_REQUIRED`
+- `ACTION_NOT_ALLOWED`
+- `SKILL_EXECUTION_FAILED`
 
-## 14.2 边界用例
+建议消息规范（`data.message`）：
+- 参数错误：`invalid time range` / `missing required field`
+- 审批缺失：`approval required for medium risk calendar write`
+- Intent 失败：`calendar intent launch failed: <reason>`
 
-1. 全天事件跨 DST 边界
-2. `end_at <= start_at`
-3. 超过 50 条事件写入
-4. 非可写日历 ID
-5. 同一 action 内重复 `dedupe_key`
+## 11. 安全与隐私
 
-## 15. 版本治理
+1. 日历写入前必须经过 PolicyEngine 风险门禁
+2. 审计日志必须记录 `task_id/request_id/skill_name/result`
+3. 不在日志中持久化敏感上下文正文（最小化原则）
+4. Intent 模式不需要日历读写权限；Provider 模式必须显式申请权限
 
-1. `skill_version` 使用 SemVer
-2. 兼容规则：
-- `major` 变化可包含不兼容变更
-- `minor/patch` `MUST` 向后兼容
-3. Agent 与 MCP `SHOULD` 在握手时上报：
-- `supported_skill_versions`
-- `supported_operations`
+## 12. 与当前代码的一致性检查
 
-## 16. 实施里程碑建议
+## 12.1 已对齐项
 
-1. M1（MVP）
-- 支持 `operation=create`
-- 支持默认日历写入与提醒
-- 打通审批、审计、幂等最小闭环
+1. Skill 名称：`create_calendar_event`
+2. 风险分级：`medium`
+3. 执行链路：`plan_skills -> safety_check -> execute_skills`
+4. Android 端当前执行方式：`Intent.ACTION_INSERT`
 
-2. M2（增强）
-- 支持指定日历写入
-- 支持批量冲突检测与更细粒度错误码
+## 12.2 待修复差异（建议）
 
-3. M3（扩展）
-- 引入 `upsert`
-- 评估受控删除（强审批 + 双重确认）
+1. `AndroidManifest.xml` 尚未声明日历权限  
+说明：若保持 Intent-only 可暂不加；若启用 Provider 必须补齐。
 
-## 17. 附录：最小可执行示例
+2. Android 原型 `ActionPlanner` 中 `create_calendar_event` 当前标记为 low/无需审批  
+说明：与 `docs/API.md`、LangGraph `SkillSpec` 不一致，应统一为 medium/需审批。
 
-## 17.1 Action 示例
+3. Intent 模式缺少“最终是否创建成功”的回执闭环  
+说明：建议在 UI 层补充用户确认回传或迁移 Provider 模式。
 
-```json
+## 13. 测试与验收
+
+## 13.1 最小验收（v1.1）
+
+1. 规划包含 `create_calendar_event` 时可正确进入安全审查
+2. 未审批时动作处于 `pending_approval`
+3. 审批通过后可成功拉起日历创建界面
+4. `SkillResult` 返回结构完整，`request_id` 可追踪
+5. 失败时返回明确错误码和错误信息
+
+## 13.2 边界用例
+
+1. `end_time <= start_time`
+2. 缺少 `title`
+3. 无可处理日历应用
+4. 设备时区与输入时区不一致
+5. 重复 `request_id` 提交
+
+## 14. 版本演进计划
+
+1. v1.1（当前）
+- 单事件 + Intent 模式
+- 审批门禁 + 审计闭环
+
+2. v1.2（建议）
+- Provider 模式落地
+- 可返回稳定 `event_id`
+- 支持 `dedupe_key`
+
+3. v1.3（建议）
+- 批量 `events[]`
+- 提醒项、冲突检测、增强幂等
+
+## 15. 示例
+
+## 15.1 SkillInvocation 示例
+
+```python
 {
-  "action_id": "act_2",
-  "type": "create_calendar_event",
-  "title": "创建作业提醒",
-  "risk_level": "medium",
-  "requires_approval": false,
-  "args": {
-    "skill_version": "1.0.0",
-    "operation": "create",
-    "default_timezone": "Asia/Shanghai",
-    "target_calendar": { "strategy": "default" },
-    "idempotency": {
-      "scope": "action",
-      "request_id": "req_plan_001",
-      "action_id": "act_2"
+    "skill_name": "create_calendar_event",
+    "request_id": "req_cal_001",
+    "task_id": "task_abc123",
+    "args": {
+        "request_id": "req_cal_001",
+        "title": "机器学习作业截止提醒",
+        "start_time": "2026-04-30T22:00:00Z",
+        "end_time": "2026-04-30T22:30:00Z",
+        "location": "线上提交",
+        "description": "DDL 23:59"
     },
-    "events": [
-      {
-        "dedupe_key": "ddl-os-2026-05-03",
-        "title": "操作系统作业截止",
-        "start_at": "2026-05-03T20:00:00+08:00",
-        "end_at": "2026-05-03T20:20:00+08:00",
-        "all_day": false,
-        "reminders": [
-          { "minutes_before": 60, "method": "alert" }
-        ]
-      }
-    ]
-  }
+    "risk_level": "medium",
+    "requires_approval": True,
+    "description": "将作业 DDL 写入系统日历",
+    "status": "planned"
 }
 ```
 
-## 17.2 结果回传示例
+## 15.2 SkillResult 示例（Intent 模式）
 
-```json
+```python
 {
-  "request_id": "req_result_001",
-  "agent_id": "agent_android_xxx",
-  "status": "executed",
-  "success": true,
-  "message": "calendar events created",
-  "started_at": "2026-04-25T10:00:00Z",
-  "finished_at": "2026-04-25T10:00:01Z",
-  "artifacts": {
-    "calendar_write": {
-      "operation": "create",
-      "total": 1,
-      "created": 1,
-      "skipped": 0,
-      "failed": 0,
-      "results": [
-        {
-          "dedupe_key": "ddl-os-2026-05-03",
-          "status": "created",
-          "calendar_event_id": "9527",
-          "calendar_id": "12"
-        }
-      ]
-    }
-  }
+    "skill_name": "create_calendar_event",
+    "request_id": "req_cal_001",
+    "code": "OK",
+    "data": {
+        "status": "pending_user_confirmation",
+        "event_id": None,
+        "write_mode": "intent",
+        "message": "Calendar insert page launched"
+    },
+    "from_cache": False,
+    "fetched_at": "2026-04-25T12:10:00Z",
+    "source": "android_calendar_intent"
 }
 ```
