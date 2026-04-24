@@ -11,6 +11,7 @@
 说明：
 - 上游 URL 与关键字段参考 `docs/API_http.md`
 - 本文档定义的是 OpenTHU 自有 API，不等同于上游原始 API
+- Calendar Skill 的架构与协议细则参考 `docs/CALENDAR_SKILL.md`
 
 ## 2. 交互角色与职责
 
