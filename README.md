@@ -1,96 +1,121 @@
 # OpenTHU
 
-OpenTHU is an Android system-agent prototype built on top of an OpenClaw-style runtime layout.
+OpenTHU is a mobile agent project for Tsinghua student scenarios. It combines:
 
-Its goal is not to be just another chat client. The project is organized around three core ideas:
+- an Android prototype app in `app/`
+- a LangGraph-based agent core in `agent/langgraph/`
+- a skill-first architecture defined in `docs/`
 
-- `Context`: capture what is happening on the phone right now
-- `Actions`: turn that context into executable mobile actions
-- `Safety`: make those actions reviewable, controllable, and auditable
+The current direction is no longer "Android app + separate backend planner". We now treat the agent itself as the orchestration core:
 
-## Current scope
+- user goals are normalized on-device / in-agent
+- the workflow plans a sequence of skill invocations
+- data access and local actions are both represented as skills
+- safety, approval, execution, audit, and memory stay in the agent runtime
 
-The current version is an Android prototype with:
+## Current Architecture
 
-- a `Context / Actions / Safety` app structure
-- a lightweight runtime, repository, and domain model layout
-- mocked mobile context signals
-- prototype system actions and safety records
-- common-app detection and launch testing for:
-  - WeChat
-  - Alipay
-  - Amap
-  - Taobao
-  - Meituan
-  - QQ
+```mermaid
+flowchart TD
+    A["User Input"] --> B["LangGraph Workflow"]
+    B --> C["normalize_requirement"]
+    C --> D["plan_skills"]
+    D --> E["safety_check"]
+    E --> F["execute_skills"]
+    F --> G{"failed?"}
+    G -- "yes" --> H["replan_failed"]
+    G -- "no" --> I["audit_record"]
+    H --> I
+    I --> J["memory_update"]
 
-This means OpenTHU can already be used to verify a basic system-agent loop on device:
+    D --> K["SkillRegistry"]
+    F --> K
 
-1. detect whether common apps are installed
-2. expose them as candidate action targets
-3. trigger real app launches
-4. write the result back into the runtime state and event log
-
-## What is still missing
-
-The project is still a prototype. The major unfinished areas are:
-
-- real context ingestion
-  - notifications
-  - share intents
-  - foreground-app state
-- real cross-app execution
-  - deep links
-  - structured intents
-  - accessibility-driven UI automation
-- stronger safety controls
-  - per-action approval
-  - execution provenance
-  - replayable audit trails
-- backend integration
-  - real OpenClaw gateway/protocol connection
-  - planner/tool execution loop
-  - persistent task state
-
-In short:
-
-> OpenClaw provides the runtime direction; OpenTHU is meant to become the Android-side eyes, hands, and safety layer.
-
-## Scripts
-
-```bash
-./scripts/download_official_apks.sh
-./scripts/install_apks.sh
-./scripts/verify_common_apps.sh
+    K --> L["Data Skills<br/>courses / assignments / notices / files / activities / search"]
+    K --> M["Action Skills<br/>reminder / calendar / alarm / notification / open_url / launch_app"]
 ```
 
-These scripts support local testing of the common-app launch flow. At the moment:
+## Project Layout
 
-- `Amap` is included as a locally downloaded official APK for testing
-- several other apps must still be installed manually from their official channels, because their public sites do not expose stable scripted APK download links
+- `/app`
+  - existing Android prototype
+  - UI, runtime state, safety layer, and local system integration experiments
+- `/agent/langgraph`
+  - current agent core framework
+  - skill registry, workflow orchestration, safety review, audit, memory
+- `/docs`
+  - `RD.md`: product scope and system boundary
+  - `API.md`: skill contracts and workflow state model
+  - `API_http.md`: upstream Tsinghua interface references for future skill implementers
+- `/scripts`
+  - prototype Android testing helpers
+
+## What Changed
+
+The architecture has been shifted to a skill-first model:
+
+1. The old standalone backend planning dependency is removed from the agent core.
+2. Reminders, calendar, alarms, assignments, courses, notices, activities, search, and related capabilities are all modeled as skills.
+3. The workflow keeps the original core loop:
+   - requirement normalization
+   - planning
+   - safety check
+   - approval
+   - execution
+   - replan
+   - audit
+   - memory update
+4. Concrete skill implementations are intentionally decoupled from the core runtime.
+
+## Current Status
+
+The LangGraph core now provides:
+
+- a docs-aligned `AgentState`
+- a `SkillRegistry` boundary for injecting skills
+- LLM-first skill planning with deterministic fallback
+- hybrid safety review
+  - rule-based risk assessment
+  - optional LLM risk assessment
+  - final risk uses the stricter result
+- execution through registered skill handlers
+- failure replanning
+- audit log generation
+- lightweight memory persistence
+
+What is not implemented here:
+
+- the actual skill bodies
+- upstream Tsinghua HTTP adapters
+- Android reminder/calendar/alarm concrete executors inside the Python runtime
+
+Those are meant to be added later by separate skill implementers behind the same registry interface.
+
+## LangGraph Core
+
+The current agent entrypoint is:
+
+- [openthu_agent.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/openthu_agent.py)
+
+The skill abstraction lives in:
+
+- [skill_core.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skill_core.py)
 
 ## Build
 
-If your local Gradle config contains a stale proxy, build with:
+Android build:
 
 ```bash
-cd OpenTHU
 ./gradlew -Dhttp.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyHost= -Dhttps.proxyPort= :app:assembleDebug
 ```
 
-## LangGraph Agent Pipeline
+LangGraph local run:
 
-A standalone LangGraph implementation of the agent flow is available at:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r agent/langgraph/requirements.txt
 
-- `agent/langgraph/openthu_agent.py`
-- `agent/langgraph/README.md`
-
-Pipeline order:
-
-1. requirement normalization
-2. planning
-3. safety review
-4. execution
-5. failed-action replanning
-6. audit record
-7. memory update
+python3 agent/langgraph/openthu_agent.py \
+  --input "帮我整理本周作业并加到提醒和日历"
+```
