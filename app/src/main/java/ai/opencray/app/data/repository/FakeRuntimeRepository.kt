@@ -68,8 +68,13 @@ class FakeRuntimeRepository : RuntimeRepository {
             id = "create_calendar_event",
             title = "Create Calendar Event",
             summary = "Create schedule item from parsed campus event/course info.",
-            riskLevel = "low",
-            requiresApproval = false,
+            riskLevel = "medium",
+            requiresApproval = true,
+            params =
+              mapOf(
+                "title" to "OpenTHU campus task",
+                "description" to "Seed event from prototype",
+              ),
             confidence = 80,
             explain = "Seed action for schedule setup.",
           ),

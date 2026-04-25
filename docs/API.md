@@ -1,4 +1,4 @@
-﻿# OpenTHU Skill 接口文档（API）
+﻿﻿# OpenTHU Skill 接口文档（API）
 
 版本：v1.1-draft  
 日期：2026-04-24  
@@ -509,12 +509,82 @@ class SkillResult:
     "start_time": "2026-05-02T09:00:00Z",
     "end_time": "2026-05-02T11:00:00Z",
     "location": "六教6A001",    # 可选
-    "description": "闭卷考试"   # 可选
+    "description": "闭卷考试",   # 可选
+    "conflict_decision": "prompt_user"  # 可选: prompt_user|skip_write|coexist|delete_conflicts
 }
 ```
 
-**返回**：`{ "event_id": "...", "status": "created" }`  
-**实现**：发送 `android.intent.action.INSERT` Intent 到系统日历
+**返回**：`{ "event_id": "...", "status": "created|skipped_conflict|conflict_detected" }`  
+**实现**：通过 Android `CalendarContract` + `ContentResolver` 直接写入系统日历（Provider 模式）
+
+冲突策略说明：
+- Android 日历支持时间重叠事件共存
+- 当存在冲突时，可由用户选择：
+  - `skip_write`：不写入
+  - `coexist`：与原事项共存并写入
+  - `delete_conflicts`：删除冲突事项后写入（高风险）
+
+## 5.4.1 `detect_calendar_conflicts`
+
+**风险等级**：low  
+**用途**：检测待写入事项是否与已有日历事件冲突，并返回用户可选决策。
+
+**入参**：
+
+```python
+{
+    "request_id": "req_xxx",
+    "start_time": "2026-05-02T09:00:00Z",
+    "end_time": "2026-05-02T11:00:00Z"
+}
+```
+
+**返回**：
+
+```python
+{
+    "status": "detected",
+    "supports_overlap": True,
+    "conflict_count": 1,
+    "conflicts": [
+        {
+            "event_id": "evt_xxx",
+            "title": "已有事项",
+            "start_time": "2026-05-02T08:30:00Z",
+            "end_time": "2026-05-02T10:00:00Z"
+        }
+    ],
+    "decision_options": ["skip_write", "coexist", "delete_conflicts"]
+}
+```
+
+## 5.4.2 `delete_calendar_event`
+
+**风险等级**：high（需用户确认）  
+**用途**：删除一个或多个已存在的日历事项（破坏性操作）。
+
+**入参**：
+
+```python
+{
+    "request_id": "req_xxx",
+    "event_id": "evt_xxx",      # 与 event_ids 二选一
+    "event_ids": ["evt_a"],     # 可选
+    "confirm_delete": True      # 必选，未确认时返回 APPROVAL_REQUIRED
+}
+```
+
+**返回**：
+
+```python
+{
+    "status": "deleted",
+    "deleted_count": 1,
+    "deleted": [{ "event_id": "evt_xxx", "title": "..." }],
+    "missing_event_ids": [],
+    "high_risk": True
+}
+```
 
 ## 5.5 `set_alarm`
 
@@ -686,7 +756,9 @@ Skill 调用状态：
 | `get_assignments` | learn.tsinghua.edu.cn | `/b/wlxt/kczy/zy/student/zyListWj` 等三个状态接口 | POST |
 | `get_academic_calendar` | zhjw.cic.tsinghua.edu.cn | `/b/wlxt/common/auth/gnt` → `j_acegi_login.do` → `jxmh_out.do` | POST/GET |
 | `create_reminder` | Android System | `android.provider.CalendarContract.Reminders` | Intent |
-| `create_calendar_event` | Android System | `android.intent.action.INSERT` → `content://com.android.calendar/events` | Intent |
+| `create_calendar_event` | Android System | `content://com.android.calendar/events`（默认 Provider 写入，必要时回退 Intent） | Provider Write (+ Intent Fallback) |
+| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（本地查询） | Provider Query |
+| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（本地删除） | Provider Delete |
 | `set_alarm` | Android System | `android.intent.action.SET_ALARM` | Intent |
 
 ---

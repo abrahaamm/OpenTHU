@@ -162,6 +162,10 @@ class RequirementLLM:
             entities.append("reminder")
         if any(token in lower for token in ["日历", "calendar"]):
             entities.append("calendar")
+        if any(token in lower for token in ["冲突", "conflict", "重叠", "overlap"]):
+            entities.append("calendar_conflict")
+        if any(token in lower for token in ["删除日历", "删除日程", "删除事项", "delete calendar", "delete event", "remove event"]):
+            entities.append("calendar_delete")
         if any(token in lower for token in ["闹钟", "alarm"]):
             entities.append("alarm")
         if any(token in lower for token in ["通知我", "推送", "notification"]):
@@ -840,8 +844,31 @@ class OpenTHULangGraphAgent:
                     "title": objective[:40] or "OpenTHU 日历事件",
                     "start_time": start_time,
                     "end_time": end_time,
+                    "conflict_decision": "prompt_user",
                 },
                 "将解析结果写入系统日历",
+            )
+
+        if "calendar_conflict" in entities:
+            start_time = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
+            end_time = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(microsecond=0).isoformat()
+            append_skill(
+                "detect_calendar_conflicts",
+                {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                },
+                "检测候选日程是否与现有日历事件冲突",
+            )
+
+        if "calendar_delete" in entities:
+            append_skill(
+                "delete_calendar_event",
+                {
+                    "event_id": "",
+                    "confirm_delete": False,
+                },
+                "删除已有日历事件（高风险，需用户确认）",
             )
 
         if "reminder" in entities:
@@ -912,7 +939,12 @@ class OpenTHULangGraphAgent:
         if any(token in args_text for token in ["password", "token", "ticket", "otp", "验证码"]):
             return "high", "credential-like parameters detected"
 
+        if skill_name == "delete_calendar_event":
+            return "high", "calendar deletion is destructive"
+
         if skill_name in {"create_reminder", "create_calendar_event"}:
+            if any(token in args_text for token in ["delete_conflicts", "allow_high_risk_delete", "replace", "remove existing"]):
+                return "high", "calendar write may delete existing conflicts"
             return "medium", "system writing action requires approval"
 
         if skill_name in {"login", "refresh_session", "logout"} and risk_rank(base_risk) < risk_rank("medium"):
@@ -938,6 +970,7 @@ class OpenTHULangGraphAgent:
                 "Classify the risk of one planned skill invocation as low, medium, or high. "
                 "If the skill touches credentials, authentication, or account state, "
                 "treat it as high. If it writes into system apps like reminders or calendar, treat it as at least medium. "
+                "If the skill deletes calendar events or removes existing data, treat it as high. "
                 "Return strict JSON only: {\"risk\":\"low|medium|high\",\"reason\":\"short reason\"}."
             )
             payload = {

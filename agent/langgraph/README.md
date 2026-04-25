@@ -96,11 +96,36 @@ python3 agent/langgraph/openthu_agent.py \
 
 This module is only the orchestration core.
 
-It intentionally does not implement:
+It still does not implement most data/auth skills:
 
 - login adapters
 - course / assignment / notice fetchers
-- Android calendar / reminder / alarm writers
 - notification concrete handlers
 
-Those implementations should be registered later behind `SkillRegistry`.
+Calendar actions are now wired with concrete handlers:
+
+- `create_calendar_event`
+- `detect_calendar_conflicts`
+- `delete_calendar_event`
+
+These handlers run through `adb shell content` against the connected Android device calendar provider.
+
+Environment variables:
+
+- `OPENTHU_ADB_BIN` (optional, default `adb`)
+- `OPENTHU_ADB_SERIAL` (optional, choose one specific device)
+- `OPENTHU_CALENDAR_TIMEZONE` (optional, default `UTC`)
+
+## Calendar Skill Tests
+
+Run logic validation without adb/device:
+
+```bash
+python agent/langgraph/run_calendar_skill_tests.py --mode mock
+```
+
+Run real-device smoke test (requires adb + connected device):
+
+```bash
+python agent/langgraph/run_calendar_skill_tests.py --mode adb --adb-serial <device_serial>
+```
