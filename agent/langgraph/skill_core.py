@@ -188,11 +188,19 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec("create_reminder", "Create a reminder item", "action", "medium", True),
         SkillSpec("create_calendar_event", "Create a system calendar event", "action", "medium", True),
-        SkillSpec("set_alarm", "Set a system alarm", "action", "low", False),
+        SkillSpec("set_alarm", "Set a system alarm", "action", "low", False,
+                  args_schema={"time": "string", "label": "string", "repeat": "string", "vibrate": "bool"}),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
     ]:
         registry.register_spec(spec)
+
+    # Register handlers
+    try:
+        from .skills.alarm_skills import SetAlarmSkill
+        registry.register_handler("set_alarm", SetAlarmSkill())
+    except ImportError:
+        pass
 
     return registry
