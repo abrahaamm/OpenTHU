@@ -1,5 +1,7 @@
 package ai.opencray.app
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -9,6 +11,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -17,7 +21,12 @@ import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.SystemAction
 
 class MainActivity : AppCompatActivity() {
+  companion object {
+    private const val CALENDAR_PERMISSION_REQUEST = 1201
+  }
+
   private lateinit var viewModel: MainViewModel
+  private var pendingCalendarActionId: String? = null
 
   private lateinit var statusView: TextView
   private lateinit var transportView: TextView
@@ -268,7 +277,51 @@ class MainActivity : AppCompatActivity() {
       return
     }
 
+    if (requiresCalendarPermission(action) && !hasCalendarPermissions()) {
+      pendingCalendarActionId = action.id
+      ActivityCompat.requestPermissions(
+        this,
+        arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+        CALENDAR_PERMISSION_REQUEST,
+      )
+      Toast.makeText(this, "请授予日历权限后重试。", Toast.LENGTH_SHORT).show()
+      return
+    }
+
     viewModel.executeAction(action.id)
+    render()
+  }
+
+  private fun requiresCalendarPermission(action: SystemAction): Boolean =
+    action.id == "create_calendar_event" ||
+      action.id == "detect_calendar_conflicts" ||
+      action.id == "delete_calendar_event"
+
+  private fun hasCalendarPermissions(): Boolean {
+    val readGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+    val writeGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
+    return readGranted && writeGranted
+  }
+
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<out String>,
+    grantResults: IntArray,
+  ) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode != CALENDAR_PERMISSION_REQUEST) return
+
+    if (hasCalendarPermissions()) {
+      pendingCalendarActionId?.let { actionId ->
+        viewModel.executeAction(actionId)
+      }
+      Toast.makeText(this, "日历权限已授予。", Toast.LENGTH_SHORT).show()
+    } else {
+      Toast.makeText(this, "未授予日历权限，无法执行日历操作。", Toast.LENGTH_SHORT).show()
+    }
+    pendingCalendarActionId = null
     render()
   }
 }
