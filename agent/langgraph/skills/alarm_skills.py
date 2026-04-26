@@ -27,7 +27,8 @@ class SetAlarmSkill(SkillHandler):
             code="OK",
             data={
                 "alarm_id": f"alm_{uuid4().hex[:10]}",
-                "status": "set"
+                "status": "set",
+                "payload": args
             },
             from_cache=False,
             fetched_at=datetime.now(timezone.utc).isoformat(),
