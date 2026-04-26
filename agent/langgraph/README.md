@@ -124,6 +124,8 @@ Calendar actions are now wired with concrete handlers:
 - `create_calendar_event`
 - `detect_calendar_conflicts`
 - `delete_calendar_event`
+- `get_current_time` (device/server local time context tool)
+- `set_alarm` (local-time semantics: `HH:mm` or local ISO datetime)
 
 These handlers run through `adb shell content` against the connected Android device calendar provider.
 

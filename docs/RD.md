@@ -36,6 +36,7 @@ OpenTHU 当前已有 Android 端原型（Context / Actions / Safety 三层）和
    - 全局搜索（`search`）
 
 2. **动作类 Skills**：Agent 通过 Skill 执行本地系统动作：
+   - 查询当前时间（`get_current_time`）
    - 创建提醒事项（`create_reminder`）
    - 创建日历事件（`create_calendar_event`）
    - 设置闹钟（`set_alarm`）
@@ -226,7 +227,7 @@ Workflow 按需调用对应 Skill，无需独立后端服务：
 
 ## SK-13 set_alarm（设置闹钟）
 
-输入：`time`、`label`（可选）、`repeat`（可选）  
+输入：`time`（本地时区语义，推荐 `HH:mm`）、`label`（可选）、`repeat`（可选）  
 输出：`alarm_id`、`status`  
 风险等级：low  
 规则：调用 Android AlarmManager API。
@@ -289,7 +290,7 @@ Agent 使用 LangGraph 构建以下节点（与现有实现对齐）：
 
 关键字段要求：
 - 所有实体必须有 `id`
-- 所有时间字段使用 ISO8601（UTC）
+- 所有时间字段使用 ISO8601（UTC），`set_alarm.time` 例外（本地时区语义）
 - 所有缓存数据带 `fetched_at` 与 `source`
 - 所有写操作支持 `request_id` 幂等
 

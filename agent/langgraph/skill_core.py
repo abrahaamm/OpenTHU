@@ -193,6 +193,20 @@ def build_default_registry() -> SkillRegistry:
             session_required=True,
             args_schema={"query": "string"},
         ),
+        SkillSpec(
+            "get_current_time",
+            "Get current local time and timezone context for planning",
+            "data",
+            "low",
+            False,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
         SkillSpec("create_reminder", "Create a reminder item", "action", "medium", True),
         SkillSpec(
             "create_calendar_event",
@@ -248,7 +262,7 @@ def build_default_registry() -> SkillRegistry:
                 "properties": {
                     "time": {
                         "type": "string",
-                        "description": "ISO8601 datetime string (UTC) for the alarm (e.g. 2026-04-26T14:30:00Z)"
+                        "description": "Alarm time in local-time semantics. Accepts `HH:mm` (preferred) or local ISO8601 datetime, e.g. `07:30` / `2026-04-28T07:30:00`."
                     },
                     "label": {
                         "type": "string",
@@ -274,7 +288,11 @@ def build_default_registry() -> SkillRegistry:
         registry.register_spec(spec)
 
     try:
-        from .skills.alarm_skills import SetAlarmSkill
+        try:
+            from .skills.alarm_skills import GetCurrentTimeSkill, SetAlarmSkill
+        except ImportError:
+            from skills.alarm_skills import GetCurrentTimeSkill, SetAlarmSkill
+        registry.register_handler("get_current_time", GetCurrentTimeSkill())
         registry.register_handler("set_alarm", SetAlarmSkill())
     except ImportError:
         pass

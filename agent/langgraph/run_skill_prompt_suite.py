@@ -27,6 +27,7 @@ def build_suite_cases() -> list[dict[str, str]]:
         {"name": "search", "prompt": "帮我搜索机器学习相关作业和通知"},
         {"name": "create_reminder", "prompt": "帮我创建一个提醒事项，提醒我明天交作业"},
         {"name": "create_calendar_event", "prompt": "把这周的作业DDL加到日历"},
+        {"name": "get_current_time", "prompt": "现在几点了，帮我查一下本地时间"},
         {"name": "set_alarm", "prompt": "请帮我设置一个明早8点的闹钟"},
         {"name": "show_summary", "prompt": "帮我展示当前学习任务摘要"},
         {"name": "send_notification", "prompt": "请给我推送一个学习提醒notification"},

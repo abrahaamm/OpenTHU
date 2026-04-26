@@ -170,6 +170,8 @@ class RequirementLLM:
             entities.append("calendar_delete")
         if any(token in lower for token in ["闹钟", "alarm"]):
             entities.append("alarm")
+        if any(token in lower for token in ["当前时间", "现在几点", "几点了", "time now", "current time"]):
+            entities.append("current_time")
         if any(token in lower for token in ["通知我", "推送", "notification"]):
             entities.append("notification")
         if any(token in lower for token in ["刷新会话", "刷新登录", "refresh session"]):
@@ -688,7 +690,9 @@ class OpenTHULangGraphAgent:
             "Return a strict JSON array. Each item must have skill_name, args, description. "
             "Use only skill_name values from available_skills. "
             "Prefer data skills before action skills. "
-            "Do not invent backend calls. Keep the plan between 1 and 8 skills."
+            "Do not invent backend calls. Keep the plan between 1 and 8 skills. "
+            "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
+            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`."
         )
 
         try:
@@ -878,11 +882,24 @@ class OpenTHULangGraphAgent:
                 "创建系统提醒事项",
             )
 
+        if "current_time" in entities:
+            append_skill(
+                "get_current_time",
+                {},
+                "获取当前本地时间与时区信息",
+            )
+
         if "alarm" in entities:
+            inferred_alarm_time = self._infer_alarm_local_time(objective)
+            append_skill(
+                "get_current_time",
+                {},
+                "获取当前本地时间与时区上下文，供闹钟规划校验",
+            )
             append_skill(
                 "set_alarm",
                 {
-                    "time": "08:00",
+                    "time": inferred_alarm_time,
                     "label": objective[:40] or "OpenTHU 闹钟",
                 },
                 "设置系统闹钟提醒",
@@ -1048,6 +1065,36 @@ class OpenTHULangGraphAgent:
             seen.add(key)
             deduped.append(item)
         return deduped
+
+    def _infer_alarm_local_time(self, objective: str) -> str:
+        text = (objective or "").strip()
+        if not text:
+            return "08:00"
+
+        colon_match = re.search(r"(?<!\d)([01]?\d|2[0-3])\s*[：:]\s*([0-5]?\d)(?!\d)", text)
+        if colon_match:
+            hour = int(colon_match.group(1))
+            minute = int(colon_match.group(2))
+            return f"{hour:02d}:{minute:02d}"
+
+        cn_match = re.search(r"(?<!\d)(\d{1,2})\s*点\s*(半|([0-5]?\d)\s*分?)?", text)
+        if cn_match:
+            hour = int(cn_match.group(1))
+            minute = 30 if cn_match.group(2) == "半" else int(cn_match.group(3) or 0)
+
+            lowered = text.lower()
+            if any(token in lowered for token in ["下午", "晚上", "傍晚", "pm"]) and hour < 12:
+                hour += 12
+            elif "中午" in lowered and hour < 11:
+                hour += 12
+            elif "凌晨" in lowered and hour == 12:
+                hour = 0
+
+            hour = max(0, min(hour, 23))
+            minute = max(0, min(minute, 59))
+            return f"{hour:02d}:{minute:02d}"
+
+        return "08:00"
 
     def _merge_plan_statuses(
         self,
