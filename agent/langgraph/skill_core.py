@@ -4,6 +4,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+try:
+    from .calendar_handlers import register_calendar_handlers
+except ImportError:
+    from calendar_handlers import register_calendar_handlers
+
 
 @dataclass
 class SkillSpec:
@@ -15,6 +20,7 @@ class SkillSpec:
     skill_version: str = "v1"
     session_required: bool = False
     args_schema: dict[str, str] = field(default_factory=dict)
+    args_json_schema: dict[str, Any] = field(default_factory=dict)
 
     def to_planner_dict(self) -> dict[str, Any]:
         return {
@@ -26,6 +32,7 @@ class SkillSpec:
             "session_required": self.session_required,
             "skill_version": self.skill_version,
             "args_schema": self.args_schema,
+            "args_json_schema": self.args_json_schema,
         }
 
 
@@ -187,20 +194,66 @@ def build_default_registry() -> SkillRegistry:
             args_schema={"query": "string"},
         ),
         SkillSpec("create_reminder", "Create a reminder item", "action", "medium", True),
-        SkillSpec("create_calendar_event", "Create a system calendar event", "action", "medium", True),
-        SkillSpec("set_alarm", "Set a system alarm", "action", "low", False,
-                  args_schema={"time": "string", "label": "string", "repeat": "string", "vibrate": "bool"}),
+        SkillSpec(
+            "create_calendar_event",
+            "Create a system calendar event",
+            "action",
+            "medium",
+            True,
+            args_schema={
+                "title": "string (required)",
+                "start_time": "ISO8601 datetime (required)",
+                "end_time": "ISO8601 datetime (required)",
+                "description": "string (optional)",
+                "conflict_decision": "prompt_user|skip_write|coexist|delete_conflicts",
+            },
+        ),
+        SkillSpec(
+            "detect_calendar_conflicts",
+            "Detect conflicts between a candidate event and existing calendar events",
+            "action",
+            "low",
+            False,
+            args_schema={
+                "start_time": "ISO8601 datetime (required)",
+                "end_time": "ISO8601 datetime (required)",
+            },
+        ),
+        SkillSpec(
+            "delete_calendar_event",
+            "Delete calendar events by id (destructive)",
+            "action",
+            "high",
+            True,
+            args_schema={
+                "event_id": "string (optional)",
+                "event_ids": "list[string] (optional)",
+                "confirm_delete": "bool (required)",
+            },
+        ),
+        SkillSpec(
+            "set_alarm",
+            "Set a system alarm",
+            "action",
+            "low",
+            False,
+            args_schema={
+                "time": "string",
+                "label": "string",
+                "repeat": "string",
+                "vibrate": "bool",
+            },
+        ),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
     ]:
         registry.register_spec(spec)
 
-    # Register handlers
     try:
         from .skills.alarm_skills import SetAlarmSkill
         registry.register_handler("set_alarm", SetAlarmSkill())
     except ImportError:
         pass
-
+    register_calendar_handlers(registry)
     return registry

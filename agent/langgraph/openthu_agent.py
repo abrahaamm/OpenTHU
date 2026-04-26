@@ -13,8 +13,10 @@ from langgraph.graph import END, START, StateGraph
 
 try:
     from .skill_core import SkillInvocation, SkillRegistry, build_default_registry
+    from .skill_manager import SkillManager
 except ImportError:
     from skill_core import SkillInvocation, SkillRegistry, build_default_registry
+    from skill_manager import SkillManager
 
 
 class AgentState(TypedDict, total=False):
@@ -162,6 +164,10 @@ class RequirementLLM:
             entities.append("reminder")
         if any(token in lower for token in ["日历", "calendar"]):
             entities.append("calendar")
+        if any(token in lower for token in ["冲突", "conflict", "重叠", "overlap"]):
+            entities.append("calendar_conflict")
+        if any(token in lower for token in ["删除日历", "删除日程", "删除事项", "delete calendar", "delete event", "remove event"]):
+            entities.append("calendar_delete")
         if any(token in lower for token in ["闹钟", "alarm"]):
             entities.append("alarm")
         if any(token in lower for token in ["通知我", "推送", "notification"]):
@@ -198,12 +204,19 @@ class OpenTHULangGraphAgent:
         self,
         memory_file: Path,
         skill_registry: SkillRegistry | None = None,
+        skill_manager: SkillManager | None = None,
         llm_model: str = "gpt-4.1-mini",
         llm_base_url: str = "",
     ) -> None:
         self.memory_file = memory_file
         self.llm = RequirementLLM(model=llm_model, base_url=llm_base_url)
-        self.skill_registry = skill_registry or build_default_registry()
+        if skill_manager is not None:
+            self.skill_manager = skill_manager
+        elif skill_registry is not None:
+            self.skill_manager = SkillManager(registry=skill_registry)
+        else:
+            self.skill_manager = SkillManager(registry=build_default_registry())
+        self.skill_registry = self.skill_manager.registry
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -418,23 +431,7 @@ class OpenTHULangGraphAgent:
 
         for invocation_dict in approved_skills:
             invocation = self._skill_invocation_from_dict(invocation_dict)
-            handler = self.skill_registry.get_handler(invocation.skill_name)
-
-            try:
-                result = handler.invoke(invocation, current_session, state).to_dict()
-            except Exception as exc:
-                result = {
-                    "skill_name": invocation.skill_name,
-                    "request_id": invocation.request_id,
-                    "code": "SKILL_EXECUTION_FAILED",
-                    "data": {
-                        "status": "handler_error",
-                        "message": f"Skill handler raised an exception: {exc}",
-                    },
-                    "from_cache": False,
-                    "fetched_at": utc_now(),
-                    "source": "skill_handler",
-                }
+            result = self.skill_manager.execute(invocation, current_session, state)
 
             success = result.get("code") == "OK"
             result["task_id"] = state["task_id"]
@@ -657,7 +654,7 @@ class OpenTHULangGraphAgent:
                 "replanned_skills": state.get("replanned_skills", []),
                 "audit_log": state.get("audit_log", []),
                 "memory_update": state.get("memory_update", {}),
-                "available_skills": self.skill_registry.describe_for_planner(),
+                "available_skills": self.skill_manager.list_for_planner(),
                 "trace_log": state.get("trace_log", []),
                 "normalizer_source": state.get("normalizer_source", "fallback"),
                 "planner_source": state.get("planner_source", "fallback"),
@@ -684,7 +681,7 @@ class OpenTHULangGraphAgent:
         payload = {
             "structured_prompt": structured_prompt,
             "semester_id": state.get("semester_id", ""),
-            "available_skills": self.skill_registry.describe_for_planner(),
+            "available_skills": self.skill_manager.list_for_planner(),
         }
         system_prompt = (
             "You are the planner for a mobile agent. "
@@ -740,13 +737,16 @@ class OpenTHULangGraphAgent:
             description = str(item.get("description", "")).strip()
             if not skill_name or not isinstance(args, dict):
                 continue
-            if self.skill_registry.get_spec(skill_name) is None:
+            if self.skill_manager.get_spec(skill_name) is None:
+                continue
+            normalized_args, arg_errors, _ = self.skill_manager.validate_and_normalize_args(skill_name, args)
+            if arg_errors:
                 continue
             normalized.append(
                 self._build_skill_invocation(
                     skill_name=skill_name,
                     task_id=task_id,
-                    args=args,
+                    args=normalized_args,
                     description=description or f"Invoke {skill_name}",
                 )
             )
@@ -840,8 +840,31 @@ class OpenTHULangGraphAgent:
                     "title": objective[:40] or "OpenTHU 日历事件",
                     "start_time": start_time,
                     "end_time": end_time,
+                    "conflict_decision": "prompt_user",
                 },
                 "将解析结果写入系统日历",
+            )
+
+        if "calendar_conflict" in entities:
+            start_time = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
+            end_time = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(microsecond=0).isoformat()
+            append_skill(
+                "detect_calendar_conflicts",
+                {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                },
+                "检测候选日程是否与现有日历事件冲突",
+            )
+
+        if "calendar_delete" in entities:
+            append_skill(
+                "delete_calendar_event",
+                {
+                    "event_id": "",
+                    "confirm_delete": False,
+                },
+                "删除已有日历事件（高风险，需用户确认）",
             )
 
         if "reminder" in entities:
@@ -906,13 +929,18 @@ class OpenTHULangGraphAgent:
     def _assess_skill_risk_by_rule(self, planned_skill: dict[str, Any]) -> tuple[str, str]:
         skill_name = str(planned_skill.get("skill_name", "")).strip()
         args_text = json.dumps(planned_skill.get("args", {}), ensure_ascii=False).lower()
-        spec = self.skill_registry.get_spec(skill_name)
+        spec = self.skill_manager.get_spec(skill_name)
         base_risk = normalize_risk(spec.risk_level if spec else planned_skill.get("risk_level", "medium"))
 
         if any(token in args_text for token in ["password", "token", "ticket", "otp", "验证码"]):
             return "high", "credential-like parameters detected"
 
+        if skill_name == "delete_calendar_event":
+            return "high", "calendar deletion is destructive"
+
         if skill_name in {"create_reminder", "create_calendar_event"}:
+            if any(token in args_text for token in ["delete_conflicts", "allow_high_risk_delete", "replace", "remove existing"]):
+                return "high", "calendar write may delete existing conflicts"
             return "medium", "system writing action requires approval"
 
         if skill_name in {"login", "refresh_session", "logout"} and risk_rank(base_risk) < risk_rank("medium"):
@@ -938,6 +966,7 @@ class OpenTHULangGraphAgent:
                 "Classify the risk of one planned skill invocation as low, medium, or high. "
                 "If the skill touches credentials, authentication, or account state, "
                 "treat it as high. If it writes into system apps like reminders or calendar, treat it as at least medium. "
+                "If the skill deletes calendar events or removes existing data, treat it as high. "
                 "Return strict JSON only: {\"risk\":\"low|medium|high\",\"reason\":\"short reason\"}."
             )
             payload = {
@@ -982,7 +1011,7 @@ class OpenTHULangGraphAgent:
         args: dict[str, Any],
         description: str,
     ) -> dict[str, Any]:
-        spec = self.skill_registry.get_spec(skill_name)
+        spec = self.skill_manager.get_spec(skill_name)
         if spec is None:
             raise ValueError(f"Unknown skill: {skill_name}")
 
