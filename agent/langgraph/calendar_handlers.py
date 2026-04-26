@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
-import re
-import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Any
-
-
-CALENDAR_EVENTS_URI = "content://com.android.calendar/events"
-CALENDAR_CALENDARS_URI = "content://com.android.calendar/calendars"
+from pathlib import Path
+from typing import Any, Protocol
 
 
 class CalendarBridgeError(RuntimeError):
     pass
+
+
+class KotlinSkillBridge(Protocol):
+    def execute(self, invocation: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        ...
 
 
 def _utc_now_iso() -> str:
@@ -44,10 +45,6 @@ def _parse_iso_to_epoch_ms(raw: str) -> int:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return int(parsed.timestamp() * 1000)
-
-
-def _epoch_ms_to_iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
 
 def _coerce_event_ids(raw_ids: Any, raw_id: Any) -> list[int]:
@@ -82,340 +79,88 @@ def _coerce_event_ids(raw_ids: Any, raw_id: Any) -> list[int]:
     return [item for item in deduped if item > 0]
 
 
-class AdbCalendarBridge:
+class UnconfiguredKotlinBridge:
+    def execute(self, invocation: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        raise CalendarBridgeError(
+            "Kotlin bridge not configured. "
+            "Set OPENTHU_CALENDAR_BRIDGE_MODE=json_file with request/response files, "
+            "or inject a KotlinSkillBridge implementation when registering handlers."
+        )
+
+
+class JsonFileKotlinBridge:
+    """Simple file bridge for Python<->Kotlin handoff in local/on-device integration.
+
+    Python writes one invocation JSON to request file and waits for Kotlin runtime
+    to write the corresponding SkillResult-compatible payload to response file.
+    """
+
     def __init__(
         self,
-        adb_bin: str | None = None,
-        device_serial: str | None = None,
-    ) -> None:
-        self.adb_bin = adb_bin or os.getenv("OPENTHU_ADB_BIN", "adb")
-        self.device_serial = device_serial or os.getenv("OPENTHU_ADB_SERIAL", "").strip()
-
-    def _adb_prefix(self) -> list[str]:
-        prefix = [self.adb_bin]
-        if self.device_serial:
-            prefix.extend(["-s", self.device_serial])
-        return prefix
-
-    def _run_content(self, *args: str) -> str:
-        cmd = self._adb_prefix() + ["shell", "content", *args]
-        try:
-            completed = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise CalendarBridgeError(
-                f"adb not found (configured binary: {self.adb_bin})"
-            ) from exc
-
-        stdout = completed.stdout.strip()
-        stderr = completed.stderr.strip()
-        if completed.returncode != 0:
-            detail = stderr or stdout or f"exit={completed.returncode}"
-            raise CalendarBridgeError(f"adb content command failed: {detail}")
-
-        # Some Android builds print command failures while still returning code 0.
-        lowered_stdout = stdout.lower()
-        lowered_stderr = stderr.lower()
-        if (
-            "[error]" in lowered_stdout
-            or "usage: adb shell content" in lowered_stdout
-            or "error while accessing provider" in lowered_stdout
-            or "error while accessing provider" in lowered_stderr
-        ):
-            detail = stderr or stdout
-            raise CalendarBridgeError(f"adb content command failed: {detail}")
-
-        if stderr:
-            raise CalendarBridgeError(f"adb content command stderr: {stderr}")
-        return stdout
-
-    def _quote_shell_arg(self, value: str) -> str:
-        # content runs through /system/bin/sh on device side, so quote SQL snippets.
-        escaped = value.replace("'", "'\\''")
-        return f"'{escaped}'"
-
-    def _escape_sql_string(self, value: str) -> str:
-        return value.replace("'", "''")
-
-    def resolve_writable_calendar_id(self) -> int:
-        output = self._run_content(
-            "query",
-            "--uri",
-            CALENDAR_CALENDARS_URI,
-            "--projection",
-            "_id:calendar_access_level:visible:isPrimary",
-            "--where",
-            self._quote_shell_arg("visible=1"),
-            "--sort",
-            "_id",
-        )
-        rows = self._parse_rows(output)
-        for row in rows:
-            row_id = self._parse_int(row.get("_id"))
-            access = self._parse_int(row.get("calendar_access_level"))
-            if row_id is None or access is None:
-                continue
-            if access >= 500:
-                return row_id
-        # Fallback: some devices may have writable calendars marked not-visible.
-        output_all = self._run_content(
-            "query",
-            "--uri",
-            CALENDAR_CALENDARS_URI,
-            "--projection",
-            "_id:calendar_access_level:visible:isPrimary",
-            "--sort",
-            "_id",
-        )
-        for row in self._parse_rows(output_all):
-            row_id = self._parse_int(row.get("_id"))
-            access = self._parse_int(row.get("calendar_access_level"))
-            if row_id is None or access is None:
-                continue
-            if access >= 500:
-                return row_id
-        raise CalendarBridgeError("No writable calendar found on connected device")
-
-    def query_conflicts(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
-        where = (
-            f"dtstart < {end_ms} AND "
-            f"(dtend IS NULL OR dtend = 0 OR dtend > {start_ms}) AND "
-            "(deleted IS NULL OR deleted=0)"
-        )
-        output = self._run_content(
-            "query",
-            "--uri",
-            CALENDAR_EVENTS_URI,
-            "--projection",
-            "_id:title:dtstart:dtend",
-            "--where",
-            self._quote_shell_arg(where),
-            "--sort",
-            "dtstart",
-        )
-        parsed: list[dict[str, Any]] = []
-        for row in self._parse_rows(output):
-            event_id = self._parse_int(row.get("_id"))
-            start = self._parse_int(row.get("dtstart"))
-            if event_id is None or start is None:
-                continue
-            end_raw = self._parse_int(row.get("dtend"))
-            end = end_raw if end_raw and end_raw > start else start + 60_000
-            if start < end_ms and start_ms < end:
-                parsed.append(
-                    {
-                        "event_id": str(event_id),
-                        "title": row.get("title", ""),
-                        "start_time": _epoch_ms_to_iso(start),
-                        "end_time": _epoch_ms_to_iso(end),
-                        "start_ms": start,
-                        "end_ms": end,
-                    }
-                )
-        return parsed
-
-    def query_events_by_ids(self, event_ids: list[int]) -> list[dict[str, Any]]:
-        if not event_ids:
-            return []
-        where = "_id IN (" + ",".join(str(item) for item in event_ids) + ")"
-        output = self._run_content(
-            "query",
-            "--uri",
-            CALENDAR_EVENTS_URI,
-            "--projection",
-            "_id:title:dtstart:dtend",
-            "--where",
-            self._quote_shell_arg(where),
-        )
-        parsed: list[dict[str, Any]] = []
-        for row in self._parse_rows(output):
-            event_id = self._parse_int(row.get("_id"))
-            if event_id is None:
-                continue
-            parsed.append(
-                {
-                    "event_id": str(event_id),
-                    "title": row.get("title", ""),
-                    "start_time": _epoch_ms_to_iso(self._parse_int(row.get("dtstart")) or 0),
-                    "end_time": _epoch_ms_to_iso(self._parse_int(row.get("dtend")) or 0),
-                }
-            )
-        return parsed
-
-    def insert_event(
-        self,
         *,
-        calendar_id: int,
-        title: str,
-        description: str,
-        start_ms: int,
-        end_ms: int,
-    ) -> str:
-        normalized_title = title.replace("\n", " ").strip()
-        normalized_description = description.replace("\n", " ").strip()
-        timezone_id = os.getenv("OPENTHU_CALENDAR_TIMEZONE", "UTC").strip() or "UTC"
-        before_ids = set(self._query_event_ids_by_signature(normalized_title, start_ms, end_ms))
-        output = self._run_content(
-            "insert",
-            "--uri",
-            CALENDAR_EVENTS_URI,
-            "--bind",
-            self._quote_shell_arg(f"calendar_id:i:{calendar_id}"),
-            "--bind",
-            self._quote_shell_arg(f"title:s:{normalized_title}"),
-            "--bind",
-            self._quote_shell_arg(f"description:s:{normalized_description}"),
-            "--bind",
-            self._quote_shell_arg(f"dtstart:l:{start_ms}"),
-            "--bind",
-            self._quote_shell_arg(f"dtend:l:{end_ms}"),
-            "--bind",
-            self._quote_shell_arg(f"eventTimezone:s:{timezone_id}"),
+        request_file: str | None = None,
+        response_file: str | None = None,
+        timeout_sec: float | None = None,
+        poll_interval_sec: float | None = None,
+    ) -> None:
+        self.request_file = Path(
+            request_file
+            or os.getenv("OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE", "").strip()
         )
-        matched = re.search(r"/events/(\d+)", output)
-        if not matched:
-            # Some Android builds return empty stdout for successful insert.
-            for _ in range(3):
-                after_ids = set(self._query_event_ids_by_signature(normalized_title, start_ms, end_ms))
-                new_ids = sorted(after_ids - before_ids)
-                if new_ids:
-                    return str(new_ids[-1])
-                if len(after_ids) == 1:
-                    return str(next(iter(after_ids)))
-                time.sleep(0.2)
-            raise CalendarBridgeError(f"Unable to parse inserted event id: {output}")
-        return matched.group(1)
+        self.response_file = Path(
+            response_file
+            or os.getenv("OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE", "").strip()
+        )
+        self.timeout_sec = timeout_sec or float(os.getenv("OPENTHU_KOTLIN_BRIDGE_TIMEOUT_SEC", "12"))
+        self.poll_interval_sec = poll_interval_sec or 0.2
 
-    def _query_event_ids_by_signature(
-        self,
-        title: str,
-        start_ms: int,
-        end_ms: int,
-    ) -> list[int]:
-        escaped_title = self._escape_sql_string(title)
-        where = (
-            f"title='{escaped_title}' AND "
-            f"dtstart={start_ms} AND "
-            f"dtend={end_ms} AND "
-            "(deleted IS NULL OR deleted=0)"
-        )
-        output = self._run_content(
-            "query",
-            "--uri",
-            CALENDAR_EVENTS_URI,
-            "--projection",
-            "_id",
-            "--where",
-            self._quote_shell_arg(where),
-            "--sort",
-            "_id",
-        )
-        ids: list[int] = []
-        for row in self._parse_rows(output):
-            event_id = self._parse_int(row.get("_id"))
-            if event_id is not None:
-                ids.append(event_id)
-        return ids
+        if not str(self.request_file):
+            raise CalendarBridgeError("Missing OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE")
+        if not str(self.response_file):
+            raise CalendarBridgeError("Missing OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE")
 
-    def delete_events(self, event_ids: list[int]) -> int:
-        if not event_ids:
-            return 0
-        existing_before = {
-            int(item["event_id"])
-            for item in self.query_events_by_ids(event_ids)
-            if item.get("event_id")
+    def execute(self, invocation: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        self.request_file.parent.mkdir(parents=True, exist_ok=True)
+        self.response_file.parent.mkdir(parents=True, exist_ok=True)
+        envelope = {
+            "type": "skill_invocation",
+            "sent_at": _utc_now_iso(),
+            "invocation": invocation,
         }
-        where = "_id IN (" + ",".join(str(item) for item in event_ids) + ")"
-        output = self._run_content(
-            "delete",
-            "--uri",
-            CALENDAR_EVENTS_URI,
-            "--where",
-            self._quote_shell_arg(where),
+        self.request_file.write_text(
+            json.dumps(envelope, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
-        matched = re.search(r"(\d+)\s+(?:rows?|records?)", output, flags=re.IGNORECASE)
-        if matched:
-            return int(matched.group(1))
-        # Some builds return empty output even when deletion succeeds.
-        for _ in range(3):
-            existing_after = {
-                int(item["event_id"])
-                for item in self.query_events_by_ids(event_ids)
-                if item.get("event_id")
-            }
-            deleted = len(existing_before - existing_after)
-            if deleted > 0:
-                return deleted
-            if not existing_after and existing_before:
-                return len(existing_before)
-            time.sleep(0.2)
-        return 0
 
-    def _parse_rows(self, output: str) -> list[dict[str, str]]:
-        rows: list[dict[str, str]] = []
-        for line in output.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("Row:"):
-                continue
-            payload = re.sub(r"^Row:\s*\d+\s*", "", stripped)
-            rows.append(self._parse_payload(payload))
-        return rows
+        start = time.time()
+        while time.time() - start <= self.timeout_sec:
+            if self.response_file.exists():
+                raw = self.response_file.read_text(encoding="utf-8").strip()
+                if raw:
+                    try:
+                        parsed = json.loads(raw)
+                    except json.JSONDecodeError:
+                        time.sleep(self.poll_interval_sec)
+                        continue
+                    if parsed.get("request_id") == invocation.get("request_id"):
+                        return parsed
+            time.sleep(self.poll_interval_sec)
+        raise CalendarBridgeError(
+            f"Kotlin bridge timed out after {self.timeout_sec:.1f}s "
+            f"(request_id={invocation.get('request_id', '')})"
+        )
 
-    def _parse_payload(self, payload: str) -> dict[str, str]:
-        result: dict[str, str] = {}
-        key = ""
-        value_chars: list[str] = []
-        reading_key = True
-        i = 0
-        while i < len(payload):
-            ch = payload[i]
-            if reading_key:
-                if ch == "=":
-                    reading_key = False
-                else:
-                    key += ch
-                i += 1
-                continue
-            if ch == "," and i + 1 < len(payload) and payload[i + 1] == " ":
-                next_idx = i + 2
-                key_buf: list[str] = []
-                while next_idx < len(payload) and payload[next_idx] not in {"=", ","}:
-                    key_buf.append(payload[next_idx])
-                    next_idx += 1
-                if next_idx < len(payload) and payload[next_idx] == "=":
-                    result[key.strip()] = "".join(value_chars).strip()
-                    key = "".join(key_buf)
-                    value_chars = []
-                    reading_key = False
-                    i = next_idx + 1
-                    continue
-            value_chars.append(ch)
-            i += 1
-        if key:
-            result[key.strip()] = "".join(value_chars).strip()
-        return result
 
-    def _parse_int(self, raw: str | None) -> int | None:
-        if raw is None:
-            return None
-        text = raw.strip()
-        if not text:
-            return None
-        try:
-            return int(text)
-        except ValueError:
-            return None
+def _resolve_default_bridge() -> KotlinSkillBridge:
+    mode = os.getenv("OPENTHU_CALENDAR_BRIDGE_MODE", "").strip().lower()
+    if mode == "json_file":
+        return JsonFileKotlinBridge()
+    return UnconfiguredKotlinBridge()
 
 
 class _BaseCalendarHandler:
-    def __init__(self, bridge: AdbCalendarBridge | None = None) -> None:
-        self.bridge = bridge or AdbCalendarBridge()
+    def __init__(self, bridge: KotlinSkillBridge | None = None) -> None:
+        self.bridge = bridge or _resolve_default_bridge()
 
     def _result(
         self,
@@ -424,7 +169,7 @@ class _BaseCalendarHandler:
         request_id: str,
         code: str,
         data: dict[str, Any],
-        source: str = "android_calendar_adb",
+        source: str = "android_kotlin_bridge",
     ) -> Any:
         try:
             from .skill_core import SkillResult
@@ -438,6 +183,48 @@ class _BaseCalendarHandler:
             data=data,
             from_cache=False,
             fetched_at=_utc_now_iso(),
+            source=source,
+        )
+
+    def _dispatch_to_kotlin(self, invocation: Any, state: dict[str, Any]) -> Any:
+        payload = {
+            "skill_name": invocation.skill_name,
+            "request_id": invocation.request_id,
+            "task_id": invocation.task_id,
+            "args": invocation.args,
+            "risk_level": invocation.risk_level,
+            "requires_approval": invocation.requires_approval,
+            "description": invocation.description,
+        }
+        try:
+            response = self.bridge.execute(payload, state)
+        except CalendarBridgeError as exc:
+            return self._result(
+                skill_name=invocation.skill_name,
+                request_id=invocation.request_id,
+                code="SKILL_EXECUTION_FAILED",
+                data={"status": "bridge_error", "message": str(exc)},
+            )
+        except Exception as exc:
+            return self._result(
+                skill_name=invocation.skill_name,
+                request_id=invocation.request_id,
+                code="SKILL_EXECUTION_FAILED",
+                data={"status": "bridge_error", "message": f"{type(exc).__name__}: {exc}"},
+            )
+
+        code = str(response.get("code", "")).strip().upper() or "SKILL_EXECUTION_FAILED"
+        data = response.get("data")
+        if not isinstance(data, dict):
+            message = str(response.get("message", "")).strip() or "kotlin bridge returned invalid payload"
+            data = {"status": "invalid_bridge_payload", "message": message}
+            code = "SKILL_EXECUTION_FAILED"
+        source = str(response.get("source", "android_kotlin_bridge")).strip() or "android_kotlin_bridge"
+        return self._result(
+            skill_name=invocation.skill_name,
+            request_id=invocation.request_id,
+            code=code,
+            data=data,
             source=source,
         )
 
@@ -456,7 +243,6 @@ class CreateCalendarEventHandler(_BaseCalendarHandler):
                     code="INVALID_PARAM",
                     data={"status": "invalid_param", "message": "title/start_time/end_time are required"},
                 )
-
             start_ms = _parse_iso_to_epoch_ms(start_raw)
             end_ms = _parse_iso_to_epoch_ms(end_raw)
             if end_ms <= start_ms:
@@ -466,79 +252,20 @@ class CreateCalendarEventHandler(_BaseCalendarHandler):
                     code="INVALID_PARAM",
                     data={"status": "invalid_param", "message": "end_time must be later than start_time"},
                 )
-
-            description = str(args.get("description", "")).strip()
             conflict_decision = str(args.get("conflict_decision", "prompt_user")).strip().lower() or "prompt_user"
-            conflicts = self.bridge.query_conflicts(start_ms, end_ms)
-
-            if conflicts:
-                if conflict_decision == "prompt_user":
-                    return self._result(
-                        skill_name=invocation.skill_name,
-                        request_id=invocation.request_id,
-                        code="APPROVAL_REQUIRED",
-                        data={
-                            "status": "conflict_detected",
-                            "supports_overlap": True,
-                            "conflict_count": len(conflicts),
-                            "conflicts": conflicts,
-                            "decision_options": ["skip_write", "coexist", "delete_conflicts"],
-                        },
-                    )
-                if conflict_decision == "skip_write":
-                    return self._result(
-                        skill_name=invocation.skill_name,
-                        request_id=invocation.request_id,
-                        code="OK",
-                        data={
-                            "status": "skipped_conflict",
-                            "conflict_count": len(conflicts),
-                            "conflicts": conflicts,
-                        },
-                    )
-                if conflict_decision == "delete_conflicts":
-                    allow_delete = _coerce_bool(args.get("allow_conflict_delete"), default=False)
-                    if not allow_delete:
-                        return self._result(
-                            skill_name=invocation.skill_name,
-                            request_id=invocation.request_id,
-                            code="ACTION_NOT_ALLOWED",
-                            data={
-                                "status": "delete_blocked",
-                                "message": "allow_conflict_delete=true is required for delete_conflicts",
-                            },
-                        )
-                    to_delete = [int(item["event_id"]) for item in conflicts]
-                    self.bridge.delete_events(to_delete)
-                elif conflict_decision != "coexist":
-                    return self._result(
-                        skill_name=invocation.skill_name,
-                        request_id=invocation.request_id,
-                        code="INVALID_PARAM",
-                        data={
-                            "status": "invalid_param",
-                            "message": "conflict_decision must be prompt_user|skip_write|coexist|delete_conflicts",
-                        },
-                    )
-
-            calendar_id = self.bridge.resolve_writable_calendar_id()
-            event_id = self.bridge.insert_event(
-                calendar_id=calendar_id,
-                title=title,
-                description=description,
-                start_ms=start_ms,
-                end_ms=end_ms,
-            )
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="OK",
-                data={
-                    "status": "created",
-                    "event_id": event_id,
-                    "conflict_count": len(conflicts),
-                },
-            )
+            if conflict_decision not in {"prompt_user", "skip_write", "coexist", "delete_conflicts"}:
+                return self._result(
+                    skill_name=invocation.skill_name,
+                    request_id=invocation.request_id,
+                    code="INVALID_PARAM",
+                    data={
+                        "status": "invalid_param",
+                        "message": "conflict_decision must be prompt_user|skip_write|coexist|delete_conflicts",
+                    },
+                )
+            if conflict_decision == "delete_conflicts":
+                allow_delete = _coerce_bool(args.get("allow_conflict_delete"), default=False)
+                invocation.args["allow_conflict_delete"] = allow_delete
         except ValueError as exc:
             return self._result(
                 skill_name=invocation.skill_name,
@@ -546,20 +273,7 @@ class CreateCalendarEventHandler(_BaseCalendarHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": str(exc)},
             )
-        except CalendarBridgeError as exc:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="SKILL_EXECUTION_FAILED",
-                data={"status": "bridge_error", "message": str(exc)},
-            )
-        except Exception as exc:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="SKILL_EXECUTION_FAILED",
-                data={"status": "handler_error", "message": f"{type(exc).__name__}: {exc}"},
-            )
+        return self._dispatch_to_kotlin(invocation, state)
 
 
 class DetectCalendarConflictsHandler(_BaseCalendarHandler):
@@ -584,19 +298,6 @@ class DetectCalendarConflictsHandler(_BaseCalendarHandler):
                     code="INVALID_PARAM",
                     data={"status": "invalid_param", "message": "end_time must be later than start_time"},
                 )
-            conflicts = self.bridge.query_conflicts(start_ms, end_ms)
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="OK",
-                data={
-                    "status": "detected",
-                    "supports_overlap": True,
-                    "conflict_count": len(conflicts),
-                    "conflicts": conflicts,
-                    "decision_options": ["skip_write", "coexist", "delete_conflicts"],
-                },
-            )
         except ValueError as exc:
             return self._result(
                 skill_name=invocation.skill_name,
@@ -604,20 +305,7 @@ class DetectCalendarConflictsHandler(_BaseCalendarHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": str(exc)},
             )
-        except CalendarBridgeError as exc:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="SKILL_EXECUTION_FAILED",
-                data={"status": "bridge_error", "message": str(exc)},
-            )
-        except Exception as exc:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="SKILL_EXECUTION_FAILED",
-                data={"status": "handler_error", "message": f"{type(exc).__name__}: {exc}"},
-            )
+        return self._dispatch_to_kotlin(invocation, state)
 
 
 class DeleteCalendarEventHandler(_BaseCalendarHandler):
@@ -644,23 +332,9 @@ class DeleteCalendarEventHandler(_BaseCalendarHandler):
                     code="INVALID_PARAM",
                     data={"status": "invalid_param", "message": "event_id/event_ids are required"},
                 )
-
-            existing = self.bridge.query_events_by_ids(requested)
-            existing_ids = sorted({int(item["event_id"]) for item in existing})
-            deleted_count = self.bridge.delete_events(existing_ids)
-            missing = [str(item) for item in requested if item not in existing_ids]
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="OK",
-                data={
-                    "status": "deleted",
-                    "deleted_count": deleted_count,
-                    "deleted": existing,
-                    "missing_event_ids": missing,
-                    "high_risk": True,
-                },
-            )
+            invocation.args["event_ids"] = [str(item) for item in requested]
+            invocation.args["event_id"] = str(requested[0])
+            invocation.args["confirm_delete"] = True
         except ValueError as exc:
             return self._result(
                 skill_name=invocation.skill_name,
@@ -668,24 +342,11 @@ class DeleteCalendarEventHandler(_BaseCalendarHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": str(exc)},
             )
-        except CalendarBridgeError as exc:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="SKILL_EXECUTION_FAILED",
-                data={"status": "bridge_error", "message": str(exc)},
-            )
-        except Exception as exc:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="SKILL_EXECUTION_FAILED",
-                data={"status": "handler_error", "message": f"{type(exc).__name__}: {exc}"},
-            )
+        return self._dispatch_to_kotlin(invocation, state)
 
 
-def register_calendar_handlers(registry: Any) -> None:
-    bridge = AdbCalendarBridge()
-    registry.register_handler("create_calendar_event", CreateCalendarEventHandler(bridge))
-    registry.register_handler("detect_calendar_conflicts", DetectCalendarConflictsHandler(bridge))
-    registry.register_handler("delete_calendar_event", DeleteCalendarEventHandler(bridge))
+def register_calendar_handlers(registry: Any, bridge: KotlinSkillBridge | None = None) -> None:
+    resolved_bridge = bridge or _resolve_default_bridge()
+    registry.register_handler("create_calendar_event", CreateCalendarEventHandler(resolved_bridge))
+    registry.register_handler("detect_calendar_conflicts", DetectCalendarConflictsHandler(resolved_bridge))
+    registry.register_handler("delete_calendar_event", DeleteCalendarEventHandler(resolved_bridge))

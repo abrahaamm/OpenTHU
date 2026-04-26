@@ -85,9 +85,9 @@ The LangGraph core now provides:
 
 What is not implemented here:
 
-- the actual skill bodies
+- most data/auth skill bodies
 - upstream Tsinghua HTTP adapters
-- Android reminder/calendar/alarm concrete executors inside the Python runtime
+- in-process Android executors inside Python runtime (action skills are expected to run in Kotlin via bridge)
 
 Those are meant to be added later by separate skill implementers behind the same registry interface.
 

@@ -3,6 +3,7 @@ package ai.opencray.app.runtime
 import android.content.Context
 import ai.opencray.app.agent.ActionPlanner
 import ai.opencray.app.agent.TaskReplanner
+import ai.opencray.app.bridge.PythonSkillBridgeExecutor
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.data.repository.ChatRepository
 import ai.opencray.app.data.repository.RuntimeRepository
@@ -15,6 +16,8 @@ import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
 import ai.opencray.app.memory.MemoryManager
 import ai.opencray.app.safety.SafetyAuditor
+import org.json.JSONObject
+import java.io.File
 import java.util.UUID
 
 class OpenCrayRuntime(
@@ -27,6 +30,7 @@ class OpenCrayRuntime(
   private val memoryManager = MemoryManager()
   private val taskReplanner = TaskReplanner()
   private val actionExecutor = ActionExecutor(appContext.applicationContext)
+  private val pythonSkillBridgeExecutor = PythonSkillBridgeExecutor(actionExecutor)
 
   fun snapshot(): RuntimeSnapshot = runtimeRepository.getSnapshot()
 
@@ -328,5 +332,29 @@ class OpenCrayRuntime(
   fun clearChat() {
     chatRepository.clearMessages()
     runtimeRepository.appendEvent("Chat history cleared from prototype UI.")
+  }
+
+  fun executeSkillInvocationFromPython(invocationJson: String): String {
+    return pythonSkillBridgeExecutor.executeSkillInvocationJson(invocationJson)
+  }
+
+  fun processPythonBridgeFiles(
+    requestFilePath: String,
+    responseFilePath: String,
+  ): Boolean {
+    val requestFile = File(requestFilePath)
+    if (!requestFile.exists() || !requestFile.isFile) return false
+
+    val rawRequest = requestFile.readText(Charsets.UTF_8).trim()
+    if (rawRequest.isEmpty()) return false
+
+    val envelope = JSONObject(rawRequest)
+    val invocation = envelope.optJSONObject("invocation") ?: return false
+    val response = pythonSkillBridgeExecutor.executeSkillInvocation(invocation)
+
+    val responseFile = File(responseFilePath)
+    responseFile.parentFile?.mkdirs()
+    responseFile.writeText(response.toString(), Charsets.UTF_8)
+    return true
   }
 }
