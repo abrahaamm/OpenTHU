@@ -20,6 +20,7 @@ class SkillSpec:
     skill_version: str = "v1"
     session_required: bool = False
     args_schema: dict[str, str] = field(default_factory=dict)
+    args_json_schema: dict[str, Any] = field(default_factory=dict)
 
     def to_planner_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class SkillSpec:
             "session_required": self.session_required,
             "skill_version": self.skill_version,
             "args_schema": self.args_schema,
+            "args_json_schema": self.args_json_schema,
         }
 
 
@@ -229,12 +231,29 @@ def build_default_registry() -> SkillRegistry:
                 "confirm_delete": "bool (required)",
             },
         ),
-        SkillSpec("set_alarm", "Set a system alarm", "action", "low", False),
+        SkillSpec(
+            "set_alarm",
+            "Set a system alarm",
+            "action",
+            "low",
+            False,
+            args_schema={
+                "time": "string",
+                "label": "string",
+                "repeat": "string",
+                "vibrate": "bool",
+            },
+        ),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
     ]:
         registry.register_spec(spec)
 
+    try:
+        from .skills.alarm_skills import SetAlarmSkill
+        registry.register_handler("set_alarm", SetAlarmSkill())
+    except ImportError:
+        pass
     register_calendar_handlers(registry)
     return registry

@@ -13,8 +13,10 @@ from langgraph.graph import END, START, StateGraph
 
 try:
     from .skill_core import SkillInvocation, SkillRegistry, build_default_registry
+    from .skill_manager import SkillManager
 except ImportError:
     from skill_core import SkillInvocation, SkillRegistry, build_default_registry
+    from skill_manager import SkillManager
 
 
 class AgentState(TypedDict, total=False):
@@ -202,12 +204,19 @@ class OpenTHULangGraphAgent:
         self,
         memory_file: Path,
         skill_registry: SkillRegistry | None = None,
+        skill_manager: SkillManager | None = None,
         llm_model: str = "gpt-4.1-mini",
         llm_base_url: str = "",
     ) -> None:
         self.memory_file = memory_file
         self.llm = RequirementLLM(model=llm_model, base_url=llm_base_url)
-        self.skill_registry = skill_registry or build_default_registry()
+        if skill_manager is not None:
+            self.skill_manager = skill_manager
+        elif skill_registry is not None:
+            self.skill_manager = SkillManager(registry=skill_registry)
+        else:
+            self.skill_manager = SkillManager(registry=build_default_registry())
+        self.skill_registry = self.skill_manager.registry
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -422,23 +431,7 @@ class OpenTHULangGraphAgent:
 
         for invocation_dict in approved_skills:
             invocation = self._skill_invocation_from_dict(invocation_dict)
-            handler = self.skill_registry.get_handler(invocation.skill_name)
-
-            try:
-                result = handler.invoke(invocation, current_session, state).to_dict()
-            except Exception as exc:
-                result = {
-                    "skill_name": invocation.skill_name,
-                    "request_id": invocation.request_id,
-                    "code": "SKILL_EXECUTION_FAILED",
-                    "data": {
-                        "status": "handler_error",
-                        "message": f"Skill handler raised an exception: {exc}",
-                    },
-                    "from_cache": False,
-                    "fetched_at": utc_now(),
-                    "source": "skill_handler",
-                }
+            result = self.skill_manager.execute(invocation, current_session, state)
 
             success = result.get("code") == "OK"
             result["task_id"] = state["task_id"]
@@ -661,7 +654,7 @@ class OpenTHULangGraphAgent:
                 "replanned_skills": state.get("replanned_skills", []),
                 "audit_log": state.get("audit_log", []),
                 "memory_update": state.get("memory_update", {}),
-                "available_skills": self.skill_registry.describe_for_planner(),
+                "available_skills": self.skill_manager.list_for_planner(),
                 "trace_log": state.get("trace_log", []),
                 "normalizer_source": state.get("normalizer_source", "fallback"),
                 "planner_source": state.get("planner_source", "fallback"),
@@ -688,7 +681,7 @@ class OpenTHULangGraphAgent:
         payload = {
             "structured_prompt": structured_prompt,
             "semester_id": state.get("semester_id", ""),
-            "available_skills": self.skill_registry.describe_for_planner(),
+            "available_skills": self.skill_manager.list_for_planner(),
         }
         system_prompt = (
             "You are the planner for a mobile agent. "
@@ -744,13 +737,16 @@ class OpenTHULangGraphAgent:
             description = str(item.get("description", "")).strip()
             if not skill_name or not isinstance(args, dict):
                 continue
-            if self.skill_registry.get_spec(skill_name) is None:
+            if self.skill_manager.get_spec(skill_name) is None:
+                continue
+            normalized_args, arg_errors, _ = self.skill_manager.validate_and_normalize_args(skill_name, args)
+            if arg_errors:
                 continue
             normalized.append(
                 self._build_skill_invocation(
                     skill_name=skill_name,
                     task_id=task_id,
-                    args=args,
+                    args=normalized_args,
                     description=description or f"Invoke {skill_name}",
                 )
             )
@@ -933,7 +929,7 @@ class OpenTHULangGraphAgent:
     def _assess_skill_risk_by_rule(self, planned_skill: dict[str, Any]) -> tuple[str, str]:
         skill_name = str(planned_skill.get("skill_name", "")).strip()
         args_text = json.dumps(planned_skill.get("args", {}), ensure_ascii=False).lower()
-        spec = self.skill_registry.get_spec(skill_name)
+        spec = self.skill_manager.get_spec(skill_name)
         base_risk = normalize_risk(spec.risk_level if spec else planned_skill.get("risk_level", "medium"))
 
         if any(token in args_text for token in ["password", "token", "ticket", "otp", "验证码"]):
@@ -1015,7 +1011,7 @@ class OpenTHULangGraphAgent:
         args: dict[str, Any],
         description: str,
     ) -> dict[str, Any]:
-        spec = self.skill_registry.get_spec(skill_name)
+        spec = self.skill_manager.get_spec(skill_name)
         if spec is None:
             raise ValueError(f"Unknown skill: {skill_name}")
 

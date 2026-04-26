@@ -13,6 +13,7 @@ try:
         KotlinSkillBridge,
     )
     from .skill_core import SkillInvocation, build_default_registry
+    from .skill_manager import SkillManager
 except ImportError:
     from calendar_handlers import (
         CreateCalendarEventHandler,
@@ -21,6 +22,7 @@ except ImportError:
         KotlinSkillBridge,
     )
     from skill_core import SkillInvocation, build_default_registry
+    from skill_manager import SkillManager
 
 
 UTC = timezone.utc
@@ -234,6 +236,7 @@ class MockKotlinBridge(KotlinSkillBridge):
 class CalendarSkillHarness:
     def __init__(self, *, bridge: KotlinSkillBridge) -> None:
         self.registry = build_default_registry()
+        self.manager = SkillManager(registry=self.registry)
         self.bridge = bridge
         self.registry.register_handler("create_calendar_event", CreateCalendarEventHandler(bridge))
         self.registry.register_handler("detect_calendar_conflicts", DetectCalendarConflictsHandler(bridge))
@@ -254,9 +257,7 @@ class CalendarSkillHarness:
             requires_approval=spec.requires_approval,
             description=f"test-{skill_name}",
         )
-        handler = self.registry.get_handler(skill_name)
-        result = handler.invoke(invocation, {}, {})
-        return result.to_dict()
+        return self.manager.execute(invocation, {}, {})
 
 
 def _expect(condition: bool, detail: str) -> None:

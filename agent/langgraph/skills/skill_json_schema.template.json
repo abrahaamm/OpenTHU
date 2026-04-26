@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "example_skill args schema",
+  "description": "Template for args_json_schema in SkillSpec",
+  "type": "object",
+  "properties": {
+    "required_text": {
+      "type": "string",
+      "description": "Required plain text input"
+    },
+    "optional_mode": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "balanced",
+        "accurate"
+      ],
+      "description": "Optional mode selector"
+    },
+    "count": {
+      "type": "integer",
+      "description": "Optional positive integer"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Optional feature switch"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional tag list"
+    }
+  },
+  "required": [
+    "required_text"
+  ],
+  "additionalProperties": false
+}
