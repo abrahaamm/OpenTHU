@@ -243,6 +243,29 @@ def build_default_registry() -> SkillRegistry:
                 "repeat": "string",
                 "vibrate": "bool",
             },
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "time": {
+                        "type": "string",
+                        "description": "ISO8601 datetime string (UTC) for the alarm (e.g. 2026-04-26T14:30:00Z)"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Optional label or message for the alarm"
+                    },
+                    "repeat": {
+                        "type": "string",
+                        "description": "Optional repeat rule"
+                    },
+                    "vibrate": {
+                        "type": "boolean",
+                        "description": "Optional flag to enable vibration"
+                    }
+                },
+                "required": ["time"],
+                "additionalProperties": False,
+            },
         ),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
