@@ -440,8 +440,4 @@ LangGraph Workflow 触发
 
 ---
 
-<<<<<<< HEAD
-*文档生成于 2026-04-22，基于 learnX v16.4.4 代码分析*
-=======
 *上游接口参考来源：learnX v16.4.4 代码分析（2026-04-22）；OpenTHU Skill 架构适配更新于 2026-04-24*
->>>>>>> origin/feature/agent-core

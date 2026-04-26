@@ -19,6 +19,9 @@
 - 模式 A（推荐生产）：`PC Agent-Core Server + Android Device Executor`
 - 模式 B（本地调试）：单进程 Skill-first workflow（不经过任务分发接口）
 
+如果你要做本机联调（Server + App 跑通），优先看：
+- `docs/AGENT_CORE_SERVER.md`（包含启动、连接、验证、排障完整步骤）
+
 ## 2. Skill 分类与调用约定
 
 ### 2.1 Skill 分类
