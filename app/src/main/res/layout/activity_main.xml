@@ -240,12 +240,6 @@
                     android:text="@string/capability_notification" />
 
                 <CheckBox
-                    android:id="@+id/capability_cross_app_toggle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/capability_cross_app" />
-
-                <CheckBox
                     android:id="@+id/capability_safety_toggle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -263,25 +257,6 @@
 
             <TextView
                 android:id="@+id/action_feed_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/common_apps_label"
-                android:textColor="@color/opencray_ink"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/common_apps_text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
@@ -312,54 +287,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:text="@string/action_tertiary" />
-
-            <Button
-                android:id="@+id/launch_wechat_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/launch_wechat" />
-
-            <Button
-                android:id="@+id/launch_alipay_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/launch_alipay" />
-
-            <Button
-                android:id="@+id/launch_amap_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/launch_amap" />
-
-            <Button
-                android:id="@+id/launch_taobao_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/launch_taobao" />
-
-            <Button
-                android:id="@+id/launch_meituan_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/launch_meituan" />
-
-            <Button
-                android:id="@+id/launch_qq_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/launch_qq" />
         </LinearLayout>
 
         <LinearLayout
