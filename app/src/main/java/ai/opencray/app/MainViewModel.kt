@@ -69,7 +69,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   fun connectToGateway() {
-    val host = hostText.trim().ifEmpty { "127.0.0.1" }
+    val host = hostText.trim().ifEmpty { "10.0.2.2" }
     val port = portText.toIntOrNull() ?: 18789
     runtime.connectToGateway(host = host, port = port, tlsEnabled = tlsEnabled)
     selectedDestination = AppDestination.Actions

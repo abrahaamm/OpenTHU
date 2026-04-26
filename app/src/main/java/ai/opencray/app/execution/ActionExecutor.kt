@@ -12,7 +12,11 @@ import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import kotlin.math.max
 
 data class ActionExecutionReport(
   val success: Boolean,
@@ -36,10 +40,20 @@ class ActionExecutor(
   private val appContext: Context,
 ) {
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
-    return when (action.id) {
-      "create_calendar_event" -> executeCalendarIntent(goal)
+    val actionId = action.id.substringBefore("#")
+    return when (actionId) {
+      "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
+      "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
+      "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
+      "open_url" -> {
+        val url =
+          (action.payload?.get("url") as? String)
+            ?: action.params["url"]
+            ?: "https://www.tsinghua.edu.cn"
+        openWebPage(url)
+      }
       "open_context_review" ->
         ActionExecutionReport(
           success = true,
