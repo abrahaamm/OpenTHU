@@ -20,6 +20,7 @@ class SkillSpec:
     skill_version: str = "v1"
     session_required: bool = False
     args_schema: dict[str, str] = field(default_factory=dict)
+    args_json_schema: dict[str, Any] = field(default_factory=dict)
 
     def to_planner_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class SkillSpec:
             "session_required": self.session_required,
             "skill_version": self.skill_version,
             "args_schema": self.args_schema,
+            "args_json_schema": self.args_json_schema,
         }
 
 

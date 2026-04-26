@@ -36,6 +36,14 @@ flowchart TD
   - `SkillResult`
   - `SkillRegistry`
   - default skill catalog
+- [skill_manager.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skill_manager.py)
+  - unified execution entry between agent core and skill handlers
+  - schema-driven skill argument parsing and runtime validation
+  - result normalization and handler exception boundary
+  - planner-facing skill list access
+- [SKILL_MANAGER_SCHEMA_GUIDE.md](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/SKILL_MANAGER_SCHEMA_GUIDE.md)
+  - skill developer guide for `SkillManager` + `args_json_schema`
+  - validation behavior, contracts, and best practices
 
 ## Core Design
 
@@ -51,7 +59,9 @@ flowchart TD
    - medium/high risk skills are blocked unless approval is granted for this run
 
 3. `execute_skills`
-   - dispatches each approved `SkillInvocation` to the registered handler
+   - dispatches each approved `SkillInvocation` through `SkillManager`
+   - `SkillManager` validates/coerces args using skill schema before calling handler
+   - `SkillManager` routes to registered handlers and normalizes result schema
    - the workflow does not know concrete skill internals
 
 4. `replan_failed`
@@ -62,6 +72,13 @@ flowchart TD
 
 6. `memory_update`
    - persists a small execution memory snapshot to JSON
+
+## Skill Templates
+
+- Skill JSON Schema template:
+  - [skill_json_schema.template.json](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skills/skill_json_schema.template.json)
+- Minimal skill test template:
+  - [skill_test_template.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skills/skill_test_template.py)
 
 ## Running Locally
 
