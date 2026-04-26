@@ -251,11 +251,11 @@ class ActionExecutor(
     val timeStr = action.payload?.get("time") as? String
       ?: return ActionExecutionReport(false, "Missing 'time' in payload", false)
 
-    val zdt = runCatching { Instant.parse(timeStr).atZone(ZoneId.systemDefault()) }.getOrNull()
-      ?: return ActionExecutionReport(false, "Invalid 'time' format (must be ISO8601 UTC)", false)
+    val parsed = parseAlarmTime(timeStr)
+      ?: return ActionExecutionReport(false, "Invalid 'time' format (expected ISO8601 UTC or HH:mm)", false)
 
-    val hourArg = zdt.hour
-    val minArg = zdt.minute
+    val hourArg = parsed.first
+    val minArg = parsed.second
 
     val labelArg = action.payload["label"] as? String ?: ""
     val vibrateArg = action.payload["vibrate"] as? Boolean ?: false
@@ -275,6 +275,18 @@ class ActionExecutor(
       }
 
     return launchIntent(intent, "Alarm setup intent launched for ${hourArg}:${minArg.toString().padStart(2, '0')}")
+  }
+
+  private fun parseAlarmTime(timeRaw: String): Pair<Int, Int>? {
+    runCatching {
+      val zdt = Instant.parse(timeRaw).atZone(ZoneId.systemDefault())
+      return Pair(zdt.hour, zdt.minute)
+    }
+
+    val match = Regex("""^([01]?\d|2[0-3]):([0-5]\d)$""").matchEntire(timeRaw.trim()) ?: return null
+    val hour = match.groupValues[1].toIntOrNull() ?: return null
+    val minute = match.groupValues[2].toIntOrNull() ?: return null
+    return Pair(hour, minute)
   }
 
   private fun openWebPage(url: String): ActionExecutionReport {
