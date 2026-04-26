@@ -10,4 +10,5 @@ data class SystemAction(
   val explain: String = "",
   val status: String = "planned",
   val lastResult: String? = null,
+  val payload: Map<String, Any?>? = null, // Used for JSON-driven args from Agent
 )
