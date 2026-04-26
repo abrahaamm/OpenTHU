@@ -518,6 +518,8 @@ class SkillResult:
 **返回**：`{ "event_id": "...", "status": "created|skipped_conflict|conflict_detected" }`  
 **实现**：Python 侧仅输出 `SkillInvocation`，由 Kotlin `ActionExecutor` 通过 Android `CalendarContract` + `ContentResolver` 执行写入（桥接执行模式）
 
+`SkillManager` 会先按 `SkillSpec.args_json_schema` 对入参做校验与归一化（当前 calendar skills 为 strict schema，`additionalProperties=false`）。
+
 冲突策略说明：
 - Android 日历支持时间重叠事件共存
 - 当存在冲突时，可由用户选择：

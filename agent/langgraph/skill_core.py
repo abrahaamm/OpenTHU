@@ -200,12 +200,22 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "medium",
             True,
-            args_schema={
-                "title": "string (required)",
-                "start_time": "ISO8601 datetime (required)",
-                "end_time": "ISO8601 datetime (required)",
-                "description": "string (optional)",
-                "conflict_decision": "prompt_user|skip_write|coexist|delete_conflicts",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "location": {"type": "string"},
+                    "description": {"type": "string"},
+                    "conflict_decision": {
+                        "type": "string",
+                        "enum": ["prompt_user", "skip_write", "coexist", "delete_conflicts"],
+                    },
+                    "allow_conflict_delete": {"type": "boolean"},
+                },
+                "required": ["title", "start_time", "end_time"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -214,9 +224,14 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "low",
             False,
-            args_schema={
-                "start_time": "ISO8601 datetime (required)",
-                "end_time": "ISO8601 datetime (required)",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                },
+                "required": ["start_time", "end_time"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -225,10 +240,18 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "high",
             True,
-            args_schema={
-                "event_id": "string (optional)",
-                "event_ids": "list[string] (optional)",
-                "confirm_delete": "bool (required)",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string"},
+                    "event_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "confirm_delete": {"type": "boolean"},
+                },
+                "required": ["confirm_delete"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(

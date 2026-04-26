@@ -125,7 +125,10 @@ Calendar actions are now wired with concrete handlers:
 - `detect_calendar_conflicts`
 - `delete_calendar_event`
 
-These handlers validate arguments and then dispatch invocation payloads through a Kotlin bridge.
+These skills are registered with strict `args_json_schema` in `skill_core.py`.
+`SkillManager` validates/coerces args before handlers run.
+
+Calendar handlers perform semantic validation and then dispatch invocation payloads through a Kotlin bridge.
 Android-side execution is handled by Kotlin runtime (`ActionExecutor`) under app permissions.
 
 Environment variables:
@@ -142,3 +145,5 @@ Run logic validation with a mock Kotlin bridge:
 ```bash
 python agent/langgraph/run_calendar_skill_tests.py --mode mock
 ```
+
+ADB-based calendar test mode is removed from the current runtime path.

@@ -12,7 +12,12 @@ import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import kotlin.math.max
+import org.json.JSONArray
 
 data class ActionExecutionReport(
   val success: Boolean,
@@ -37,7 +42,9 @@ class ActionExecutor(
 ) {
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     return when (action.id) {
-      "create_calendar_event" -> executeCalendarIntent(goal)
+      "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
+      "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
+      "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
       "open_context_review" ->
@@ -237,7 +244,7 @@ class ActionExecutor(
     // Parse time argument from LangGraph payload if available (e.g. ISO8601 UTC or HH:mm format)
     var hourArg = 8
     var minArg = 0
-    val timeStr = action.payload?.get("time") as? String
+    val timeStr = action.params["time"] ?: (action.payload?.get("time") as? String)
     if (!timeStr.isNullOrBlank()) {
       runCatching {
         // Try parsing ISO8601 UTC to local device time (per API.md: "2026-04-28T07:30:00Z")
@@ -254,8 +261,9 @@ class ActionExecutor(
       }
     }
     
-    val labelArg = (action.payload?.get("label") as? String) ?: "OpenTHU task: ${goal.take(20)}"
-    val vibrateArg = (action.payload?.get("vibrate") as? Boolean) ?: false
+    val labelArg = action.params["label"] ?: (action.payload?.get("label") as? String) ?: "OpenTHU task: ${goal.take(20)}"
+    val vibrateArg =
+      action.params["vibrate"]?.toBooleanStrictOrNull() ?: (action.payload?.get("vibrate") as? Boolean) ?: false
 
     // Note: The 'repeat' parameter is safely ignored here.
     // RD.md (v1.1-draft) mentions it as an optional parameter, but lacks a strict format definition (e.g. List of days vs Boolean). 
@@ -334,8 +342,9 @@ class ActionExecutor(
     params: Map<String, String>,
     goal: String,
   ): CalendarWindow? {
-    val startRaw = params["start_time"] ?: extractIsoDateTime(goal).firstOrNull()
-    val endRaw = params["end_time"] ?: extractIsoDateTime(goal).getOrNull(1)
+    val extracted = extractIsoDateTime(goal)
+    val startRaw = params["start_time"]?.trim().orEmpty().ifEmpty { extracted.firstOrNull().orEmpty() }
+    val endRaw = params["end_time"]?.trim().orEmpty().ifEmpty { extracted.getOrNull(1).orEmpty() }
 
     val formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
     val now = OffsetDateTime.now(ZoneOffset.UTC).withSecond(0).withNano(0)
@@ -448,7 +457,14 @@ class ActionExecutor(
 
   private fun parseIdList(raw: String?): List<Long> {
     if (raw.isNullOrBlank()) return emptyList()
-    return raw.split(",").mapNotNull { it.trim().toLongOrNull() }
+    val text = raw.trim()
+    if (text.startsWith("[")) {
+      return runCatching {
+        val arr = JSONArray(text)
+        (0 until arr.length()).mapNotNull { index -> arr.opt(index)?.toString()?.trim()?.toLongOrNull() }
+      }.getOrElse { emptyList() }
+    }
+    return text.split(",").mapNotNull { it.trim().toLongOrNull() }
   }
 
   private fun parseSingleId(raw: String?): List<Long> {

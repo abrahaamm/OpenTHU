@@ -286,6 +286,22 @@ def _test_create_missing_required(harness: CalendarSkillHarness) -> None:
     _expect(result["code"] == "INVALID_PARAM", f"unexpected code: {result['code']}")
 
 
+def _test_schema_rejects_unknown_field(harness: CalendarSkillHarness) -> None:
+    start_time, end_time = iso_at(0)
+    result = harness.invoke(
+        "create_calendar_event",
+        {
+            "title": "CAL_TEST_SCHEMA_UNKNOWN",
+            "start_time": start_time,
+            "end_time": end_time,
+            "unexpected_field": "should fail by schema",
+        },
+    )
+    _expect(result["code"] == "INVALID_PARAM", f"unknown args should fail schema validation: {result}")
+    errors = result.get("data", {}).get("errors", [])
+    _expect(any("unknown field `unexpected_field`" in str(item) for item in errors), f"unexpected errors: {errors}")
+
+
 def _test_bridge_receives_invocation(harness: CalendarSkillHarness, bridge: MockKotlinBridge) -> None:
     start_time, end_time = iso_at(0)
     result = harness.invoke(
@@ -420,6 +436,29 @@ def _test_delete_success(harness: CalendarSkillHarness) -> None:
     _expect("999999" in result["data"]["missing_event_ids"], "missing ids should include non-existing id")
 
 
+def _test_delete_schema_coercion(harness: CalendarSkillHarness) -> None:
+    created = harness.invoke(
+        "create_calendar_event",
+        {
+            "title": "CAL_TEST_DELETE_COERCE",
+            "start_time": iso_at(7)[0],
+            "end_time": iso_at(7)[1],
+            "conflict_decision": "coexist",
+        },
+    )
+    _expect(created["code"] == "OK", f"create target failed: {created}")
+    event_id = str(created["data"].get("event_id"))
+    result = harness.invoke(
+        "delete_calendar_event",
+        {
+            "event_ids": event_id,
+            "confirm_delete": "true",
+        },
+    )
+    _expect(result["code"] == "OK", f"schema coercion delete failed: {result}")
+    _expect(result["data"]["deleted_count"] >= 1, f"deleted_count mismatch after coercion: {result['data']}")
+
+
 def run_mock_suite() -> list[TestResult]:
     results: list[TestResult] = []
     bridge = MockKotlinBridge()
@@ -427,12 +466,14 @@ def run_mock_suite() -> list[TestResult]:
     tests: list[tuple[str, Callable[[], None]]] = [
         ("registry_binding", _test_registry_binding),
         ("create_missing_required", lambda: _test_create_missing_required(harness)),
+        ("schema_rejects_unknown_field", lambda: _test_schema_rejects_unknown_field(harness)),
         ("bridge_receives_invocation", lambda: _test_bridge_receives_invocation(harness, bridge)),
         ("create_and_detect", lambda: _test_create_and_detect(harness)),
         ("conflict_prompt_skip_delete", lambda: _test_conflict_prompt_skip_delete(harness)),
         ("conflict_delete_then_create", lambda: _test_conflict_delete_then_create(harness)),
         ("delete_requires_confirm", lambda: _test_delete_requires_confirm(harness)),
         ("delete_success", lambda: _test_delete_success(harness)),
+        ("delete_schema_coercion", lambda: _test_delete_schema_coercion(harness)),
     ]
     for name, fn in tests:
         try:

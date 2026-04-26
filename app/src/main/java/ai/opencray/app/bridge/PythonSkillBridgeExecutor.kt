@@ -6,9 +6,17 @@ import ai.opencray.app.execution.ActionExecutor
 import org.json.JSONArray
 import org.json.JSONObject
 
+fun interface ActionExecutionGateway {
+  fun execute(action: SystemAction, goal: String): ActionExecutionReport
+}
+
 class PythonSkillBridgeExecutor(
-  private val actionExecutor: ActionExecutor,
+  private val executionGateway: ActionExecutionGateway,
 ) {
+  constructor(actionExecutor: ActionExecutor) : this(
+    ActionExecutionGateway { action, goal -> actionExecutor.execute(action, goal) },
+  )
+
   fun executeSkillInvocationJson(invocationJson: String): String {
     val invocation = JSONObject(invocationJson)
     return executeSkillInvocation(invocation).toString()
@@ -41,7 +49,7 @@ class PythonSkillBridgeExecutor(
         explain = "dispatched by PythonSkillBridgeExecutor",
       )
 
-    val report = actionExecutor.execute(action, goal)
+    val report = executionGateway.execute(action, goal)
     val code = mapCode(skillName, report)
     val data = buildData(skillName, code, report)
     return JSONObject()
