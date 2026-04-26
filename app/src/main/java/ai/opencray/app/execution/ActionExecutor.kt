@@ -248,37 +248,25 @@ class ActionExecutor(
   }
 
   private fun executeAlarmIntent(action: SystemAction, goal: String): ActionExecutionReport {
-    // Parse time argument from LangGraph payload if available (e.g. ISO8601 UTC or HH:mm format)
-    var hourArg = 8
-    var minArg = 0
     val timeStr = action.payload?.get("time") as? String
-    if (!timeStr.isNullOrBlank()) {
-      runCatching {
-        // Try parsing ISO8601 UTC to local device time (per API.md: "2026-04-28T07:30:00Z")
-        val zdt = Instant.parse(timeStr).atZone(ZoneId.systemDefault())
-        hourArg = zdt.hour
-        minArg = zdt.minute
-      }.onFailure {
-        // Fallback for simple "HH:mm"
-        val parts = timeStr.split(":")
-        if (parts.size >= 2) {
-          hourArg = parts[0].toIntOrNull() ?: 8
-          minArg = parts[1].toIntOrNull() ?: 0
-        }
-      }
-    }
-    
-    val labelArg = (action.payload?.get("label") as? String) ?: "OpenTHU task: ${goal.take(20)}"
-    val vibrateArg = (action.payload?.get("vibrate") as? Boolean) ?: false
+      ?: return ActionExecutionReport(false, "Missing 'time' in payload", false)
+
+    val zdt = runCatching { Instant.parse(timeStr).atZone(ZoneId.systemDefault()) }.getOrNull()
+      ?: return ActionExecutionReport(false, "Invalid 'time' format (must be ISO8601 UTC)", false)
+
+    val hourArg = zdt.hour
+    val minArg = zdt.minute
+
+    val labelArg = action.payload["label"] as? String ?: ""
+    val vibrateArg = action.payload["vibrate"] as? Boolean ?: false
 
     // Note: The 'repeat' parameter is safely ignored here.
-    // RD.md (v1.1-draft) mentions it as an optional parameter, but lacks a strict format definition (e.g. List of days vs Boolean). 
-    // API.md entirely omits it. Setting AlarmClock.EXTRA_DAYS in Android requires an ArrayList<Integer> of 
-    // Calendar.DAY_OF_WEEK constants, which we can implement once the Agent contract is standardized.
+    // Setting AlarmClock.EXTRA_DAYS in Android requires an ArrayList<Integer> of Calendar.DAY_OF_WEEK.
+    // It can be implemented strictly once the Agent contract is standardized without fuzzy inference.
 
     val intent =
       Intent(AlarmClock.ACTION_SET_ALARM).apply {
-        putExtra(AlarmClock.EXTRA_MESSAGE, labelArg)
+        if (labelArg.isNotEmpty()) putExtra(AlarmClock.EXTRA_MESSAGE, labelArg)
         putExtra(AlarmClock.EXTRA_HOUR, hourArg)
         putExtra(AlarmClock.EXTRA_MINUTES, minArg)
         if (vibrateArg) putExtra(AlarmClock.EXTRA_VIBRATE, true)
