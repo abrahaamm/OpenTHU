@@ -1,3 +1,6 @@
 langgraph>=0.2.0
 langchain-core>=0.3.0
 openai>=1.0.0
+fastapi>=0.116.0
+uvicorn>=0.35.0
+pydantic>=2.0.0

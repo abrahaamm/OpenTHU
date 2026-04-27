@@ -2,6 +2,7 @@ package ai.opencray.app.domain.model
 
 data class SystemAction(
   val id: String,
+  val requestId: String? = null,
   val title: String,
   val summary: String,
   val riskLevel: String,
