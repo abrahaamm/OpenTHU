@@ -15,7 +15,7 @@ class FakeRuntimeRepository : RuntimeRepository {
       nodeName = "Cray Node Alpha",
       connectionStatus = "Bootstrapping",
       transportLabel = "Android system agent prototype",
-      host = "192.168.0.88",
+      host = "10.0.2.2",
       port = 18789,
       tlsEnabled = false,
       featureFlags = listOf("context-aware", "system-intents", "safety-audit", "action-loop", "memory"),

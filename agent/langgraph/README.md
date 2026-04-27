@@ -9,6 +9,11 @@ It is now designed around a skill-first architecture:
 - the workflow only depends on skill metadata and skill handlers
 - concrete skill implementations can be injected later without rewriting the core graph
 
+Deployment modes:
+
+- Local mode: run workflow end-to-end in one Python process
+- Server dispatch mode: run planning/safety on PC server, let Android app pull and execute actions
+
 ## Workflow
 
 ```mermaid
@@ -44,6 +49,10 @@ flowchart TD
 - [SKILL_MANAGER_SCHEMA_GUIDE.md](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/SKILL_MANAGER_SCHEMA_GUIDE.md)
   - skill developer guide for `SkillManager` + `args_json_schema`
   - validation behavior, contracts, and best practices
+- [agent_core_server.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/agent_core_server.py)
+  - PC-hosted Agent-Core server
+  - plan-only workflow for device task dispatch
+  - HTTPS APIs for device registration, task pull, and result callback
 
 ## Core Design
 
@@ -90,6 +99,16 @@ pip install -r agent/langgraph/requirements.txt
 python3 agent/langgraph/openthu_agent.py \
   --input "帮我整理本周作业并加到提醒和日历" \
   --user-id "thu_demo"
+```
+
+Run as Agent-Core server (PC host):
+
+```bash
+python3 -m agent.langgraph.agent_core_server \
+  --host 0.0.0.0 \
+  --port 18789 \
+  --store-file agent/langgraph/agent_core_store.json \
+  --memory-file agent/langgraph/memory_store.json
 ```
 
 Grant approval-required skills for one run:

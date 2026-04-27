@@ -1,221 +1,240 @@
-# OpenTHU Agent-Core Server (PC Host)
+# OpenTHU Server-App 架构使用指南
 
-Version: v0.1-draft  
-Date: 2026-04-26  
-Status: Draft
+版本：v0.2-draft  
+日期：2026-04-27  
+状态：Draft
 
-## 1. Goal
+## 1. 这份文档解决什么问题
 
-This document defines the architecture where:
+本文面向“本机运行 Agent-Core 服务 + Android App 执行系统动作”的联调场景，重点回答：
 
-- a personal computer runs Python Agent Core as the planning server
-- Android app (physical device or emulator) performs system-level actions locally
-- device and server communicate through HTTPS pull APIs
-- FCM is used only as wake-up signal (optional in v0.1)
+1. 服务端怎么启动
+2. App 怎么配置连接
+3. 一条目标请求如何走完整链路
+4. 怎么定位常见故障
 
-## 2. Architecture
+## 2. 架构总览
 
 ```mermaid
 flowchart LR
-  U["User Goal"] --> S["PC Agent-Core Server"]
-  S --> P["Plan + Safety Review (Python)"]
-  P --> Q["Approved Skill Queue"]
-  Q --> A["Android App Pulls /tasks/next"]
-  A --> E["ActionExecutor (Calendar/Alarm/etc)"]
-  E --> R["POST /tasks/{id}/result"]
+  U["用户输入目标"] --> S["PC: Agent-Core Server (Python/LangGraph)"]
+  S --> P["规划与审查: normalize/plan/safety/audit/memory"]
+  P --> Q["已审批技能队列"]
+  Q --> A["Android App 轮询 /tasks/next"]
+  A --> E["设备执行: ActionExecutor"]
+  E --> R["回传结果: POST /tasks/{id}/result"]
   R --> S
 ```
 
-### 2.1 Responsibility Split
+职责分工：
 
-- Server:
-  - normalize requirement
-  - plan skills
-  - safety review and approval gating
-  - enqueue approved skills for devices
-  - aggregate device execution results
-- Android app:
-  - execute system-affecting skills locally (alarm, calendar, reminder, notification)
-  - return structured execution result
+- Server（Python）：
+  - 目标标准化、任务规划、安全审查、审计、记忆
+  - 维护任务状态与待分发 Skill 队列
+- App（Android）：
+  - 拉取待执行 Skill
+  - 调用系统能力执行（闹钟/日历/通知等）
+  - 回传结构化执行结果
 
-## 3. Workflow
+## 3. 前置条件
 
-1. App registers device metadata.
-2. Client posts goal to server planning endpoint.
-3. Server runs `plan_only` pipeline:
-   - `normalize_requirement`
-   - `plan_skills`
-   - `safety_check`
-   - `audit_record`
-   - `memory_update`
-4. App calls `/tasks/next` to fetch one approved skill invocation.
-5. App executes invocation locally and submits result.
-6. Server updates task status (`in_progress` / `completed` / `failed`).
+1. 本机已安装 Python 3.10+，并能创建虚拟环境
+2. Android Studio 可启动 Emulator（或连接真机）
+3. 项目目录：`/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray`
 
-## 4. HTTP API (v0.1)
+可选：
 
-Base path: `/api/v1`
+- `OPENAI_API_KEY`（使用 LLM 分支时）
+- `--llm-base-url`、`--llm-model`（接兼容 OpenAI 的第三方模型）
 
-### 4.1 Register Device
+## 4. 启动 Agent-Core 服务（PC）
 
-- `POST /devices/register`
-
-Request:
-
-```json
-{
-  "device_id": "emulator-5554",
-  "user_id": "debug_user",
-  "platform": "android",
-  "fcm_token": "optional",
-  "app_version": "0.1.0",
-  "capabilities": ["get_current_time", "set_alarm", "create_calendar_event"]
-}
-```
-
-### 4.2 Plan Task on Server
-
-- `POST /agent/tasks/plan`
-
-Request:
-
-```json
-{
-  "device_id": "emulator-5554",
-  "user_id": "debug_user",
-  "goal": "请帮我设置明天早上7点闹钟",
-  "approve_sensitive": false,
-  "semester_id": "",
-  "session": {}
-}
-```
-
-Response includes:
-
-- `task_id`
-- `task_status`
-- `approved_skill_count`
-- `blocked_skill_count`
-- `plan_only_response` (full planning payload)
-
-### 4.3 Pull Next Approved Skill
-
-- `GET /agent/tasks/next?device_id=<device_id>`
-
-Success response:
-
-```json
-{
-  "code": "OK",
-  "data": {
-    "task_id": "task_xxx",
-    "request_id": "req_xxx",
-    "device_id": "emulator-5554",
-    "dispatched_at": "2026-04-26T12:00:00Z",
-    "skill_invocation": {
-      "skill_name": "set_alarm",
-      "args": {
-        "time": "07:00",
-        "label": "作业提醒"
-      }
-    }
-  }
-}
-```
-
-No task response:
-
-```json
-{
-  "code": "NO_TASK",
-  "message": "No pending approved skills for this device"
-}
-```
-
-### 4.4 Submit Device Execution Result
-
-- `POST /agent/tasks/{task_id}/result`
-
-Request:
-
-```json
-{
-  "device_id": "emulator-5554",
-  "request_id": "req_xxx",
-  "skill_name": "set_alarm",
-  "code": "OK",
-  "message": "Alarm created",
-  "data": {
-    "alarm_id": "sys_123"
-  },
-  "source": "android_app",
-  "from_cache": false
-}
-```
-
-### 4.5 Query Task
-
-- `GET /agent/tasks/{task_id}`
-
-Returns full task document including:
-
-- plan-only output
-- approved skills
-- blocked skills
-- device results
-- dispatch state (`in_flight_request_ids`, `completed_request_ids`)
-
-## 5. FCM Integration Notes
-
-In v0.1, FCM is not required to run the core flow.  
-Recommended production pattern:
-
-1. Server creates a planned task.
-2. Server sends lightweight FCM wake-up (`task_hint` only).
-3. App receives push and triggers immediate pull from `/tasks/next`.
-
-Task payload itself should still come from HTTPS pull for reliability and security.
-
-## 6. Run on PC
-
-Install dependencies:
+### 4.1 安装依赖
 
 ```bash
-pip install -r agent/langgraph/requirements.txt
+cd /Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray
+python3 -m venv .venv
+.venv/bin/pip install -r agent/langgraph/requirements.txt
 ```
 
-Run server:
+### 4.2 启动服务
+
+默认端口 `18789`：
 
 ```bash
-python -m agent.langgraph.agent_core_server \
+.venv/bin/python -m agent.langgraph.agent_core_server \
   --host 0.0.0.0 \
   --port 18789 \
-  --store-file agent/langgraph/agent_core_store.json \
-  --memory-file agent/langgraph/memory_store.json
+  --store-file /tmp/openthu_agent_core_store.json \
+  --memory-file /tmp/openthu_agent_memory.json
 ```
 
-Health check:
+如果你本地习惯用 `28789`，保持前后端一致即可：
 
 ```bash
-curl http://127.0.0.1:18789/healthz
+.venv/bin/python -m agent.langgraph.agent_core_server \
+  --host 0.0.0.0 \
+  --port 28789 \
+  --store-file /tmp/openthu_agent_core_store.json \
+  --memory-file /tmp/openthu_agent_memory.json
 ```
 
-## 7. Android App Integration (Current)
+LLM 兼容模式示例：
 
-Current app runtime now supports this path:
+```bash
+OPENAI_API_KEY="<YOUR_KEY>" \
+.venv/bin/python -m agent.langgraph.agent_core_server \
+  --host 0.0.0.0 \
+  --port 28789 \
+  --llm-base-url "https://api.moonshot.cn/v1" \
+  --llm-model "moonshot-v1-8k" \
+  --store-file /tmp/openthu_agent_core_store.json \
+  --memory-file /tmp/openthu_agent_memory.json
+```
 
-1. `Connect`:
-   - app sends `POST /api/v1/devices/register`
-2. `Plan Goal`:
-   - app sends `POST /api/v1/agent/tasks/plan`
-   - app stores planned skills into Action panel
-3. `Run Agent`:
-   - app polls `GET /api/v1/agent/tasks/next`
-   - app executes each dispatched skill locally
-   - app reports result with `POST /api/v1/agent/tasks/{task_id}/result`
+### 4.3 健康检查
 
-For Android emulator connecting to server on the same host machine:
+```bash
+curl -s http://127.0.0.1:28789/healthz
+```
 
-- host: `10.0.2.2`
-- port: `18789`
-- TLS: disabled (HTTP) in local development
+期望：
+
+```json
+{"status":"ok","ts":"..."}
+```
+
+## 5. App 端连接配置（Android Studio/Emulator）
+
+1. 运行 App 到模拟器
+2. 在 App 界面配置连接参数：
+   - Host：`10.0.2.2`（模拟器访问宿主机固定地址）
+   - Port：与你服务端一致（如 `28789`）
+   - TLS：关闭（本地联调用 HTTP）
+3. 点击 `Connect`
+4. 观察状态区：
+   - 成功时应出现类似 `Connected to ...`
+   - 事件区应看到 `Gateway registered device_id=...`
+
+说明：`Connect` 会触发 `POST /api/v1/devices/register`，注册当前设备能力。
+
+## 6. 端到端测试流程（推荐手工联调）
+
+以“帮我设置一个明天早上7点的闹钟”为例：
+
+1. 在 App 输入目标，点击 `Plan Goal`
+2. App 调用 `POST /api/v1/agent/tasks/plan`，Server 返回 `task_id` 和 `approved_skills`
+3. 点击 `Run Agent`
+4. App 循环调用 `GET /api/v1/agent/tasks/next?device_id=...` 拉取待执行 Skill
+5. App 本地执行后，调用 `POST /api/v1/agent/tasks/{task_id}/result` 回传
+6. 全部 request_id 回传后，任务状态转为 `completed` 或 `failed`
+
+## 7. API 调试清单（脱离 App 也可复现）
+
+Base Path：`/api/v1`
+
+### 7.1 注册设备
+
+```bash
+curl -s -X POST "http://127.0.0.1:28789/api/v1/devices/register" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id":"emulator-5554",
+    "user_id":"debug_user",
+    "platform":"android",
+    "app_version":"0.1.0",
+    "capabilities":["get_current_time","set_alarm","create_calendar_event","detect_calendar_conflicts","delete_calendar_event","open_url"]
+  }' | jq .
+```
+
+### 7.2 创建规划任务
+
+```bash
+curl -s -X POST "http://127.0.0.1:28789/api/v1/agent/tasks/plan" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id":"emulator-5554",
+    "user_id":"debug_user",
+    "goal":"帮我设置一个明天早上7点的闹钟",
+    "approve_sensitive":true,
+    "session":{}
+  }' | jq .
+```
+
+### 7.3 拉取待执行 Skill
+
+```bash
+curl -s "http://127.0.0.1:28789/api/v1/agent/tasks/next?device_id=emulator-5554" | jq .
+```
+
+### 7.4 查询任务总状态
+
+```bash
+TASK_ID="<task_id>"
+curl -s "http://127.0.0.1:28789/api/v1/agent/tasks/${TASK_ID}" | jq .
+```
+
+重点字段：
+
+- `data.status`
+- `data.approved_skills`
+- `data.device_results`
+- `data.in_flight_request_ids`
+- `data.completed_request_ids`
+
+## 8. 常见问题排障
+
+### 8.1 端口占用：`address already in use`
+
+```bash
+lsof -nP -iTCP:28789 -sTCP:LISTEN
+kill <PID>
+```
+
+### 8.2 `device_not_registered`
+
+原因：未先调用 `/devices/register`。  
+处理：先点击 App `Connect`，或手工调用注册接口。
+
+### 8.3 `task_not_found`
+
+原因：`task_id` 过期、拼写错误，或不是当前服务实例里的任务。  
+处理：用同一服务进程返回的 `task_id` 查询；避免重启后换了 store 文件。
+
+### 8.4 `/tasks/next` 返回 `NO_TASK`
+
+常见原因：
+
+1. 规划结果没有 `approved_skills`
+2. 任务已执行完（全部 request_id 已进入 `completed_request_ids`）
+3. 使用了错误的 `device_id`
+
+### 8.5 App 显示连接成功，但动作未落地
+
+先查 `GET /api/v1/agent/tasks/{task_id}` 的 `device_results`：
+
+- 如果 `code=SKILL_EXECUTION_FAILED`，查看 `message`
+- 常见为系统权限、参数格式或端上能力缺失问题，优先在 App 事件日志和系统日志定位
+
+## 9. 本地与生产建议
+
+本地联调：
+
+- HTTP + 轮询即可跑通主链路
+- FCM 可不接入
+
+生产建议：
+
+1. 使用 HTTPS（反向代理或网关层 TLS）
+2. 引入鉴权（设备 token / 用户 token）
+3. FCM 只做唤醒，任务详情仍通过 `/tasks/next` 拉取
+4. 持久化 `store-file` 与 `memory-file`，并做备份策略
+
+## 10. 对应实现位置
+
+- Server 入口：
+  - `/agent/langgraph/agent_core_server.py`
+- App HTTP 客户端：
+  - `/app/src/main/java/ai/opencray/app/gateway/AgentCoreHttpClient.kt`
+- App Runtime 调度：
+  - `/app/src/main/java/ai/opencray/app/runtime/OpenCrayRuntime.kt`
