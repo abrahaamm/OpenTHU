@@ -12,3 +12,4 @@ agent/langgraph/memory_store.json
 *.xlsx
 test_output/
 __pycache__/
+.kotlin/

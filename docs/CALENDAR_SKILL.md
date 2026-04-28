@@ -1,225 +1,103 @@
-# Calendar Skill 实现
+# Calendar Skill 实现说明（Server Dispatch 模式）
 
-日期：2026-04-26
-
+日期：2026-04-27  
 状态：Active
 
-## 1. 范围
+## 1. 当前架构结论
 
-本文档描述了日历技能在当前 OpenTHU 架构中的实现方式：
+Calendar skill 当前主链路是：
 
-- Python (LangGraph) 是决策/编排层。
+1. Python Agent-Core Server 只做 `normalize/plan/safety/audit/memory`
+2. Android 端通过 HTTP 轮询 `/api/v1/agent/tasks/next`
+3. Kotlin `OpenCrayRuntime` 将 skill invocation 映射为 `SystemAction`
+4. Kotlin `ActionExecutor` 执行 Calendar Provider 写入/检测/删除
+5. Android 回传执行结果到 `/api/v1/agent/tasks/{task_id}/result`
 
-- Kotlin (Android 运行时) 是执行层。
+说明：
 
-- 技能调用在执行处理程序之前，会先经过 `SkillManager` 的模式验证。
+- 这是生产推荐路径（Server + Device Executor）
+- Python 本地 `calendar_handlers.py` 仍可用于单进程调试，但不是当前主执行链路
 
-日历相关技能：
+## 2. Calendar 相关能力
+
+Calendar 对应三类 skill：
 
 1. `create_calendar_event`
-
 2. `detect_calendar_conflicts`
-
 3. `delete_calendar_event`
 
-## 2. 逻辑所在
+对应 Kotlin 执行入口：
 
-Python 端：
+- [ActionExecutor.kt](/d:/Shared/2026%20Spring/Android/project/OpenTHU/app/src/main/java/ai/opencray/app/execution/ActionExecutor.kt)
 
-- `agent/langgraph/skill_core.py`
+执行映射：
 
-- 注册日历 `SkillSpec`（现在使用严格的 `args_json_schema`）
+1. `create_calendar_event` -> `CalendarContract.Events` 插入
+2. `detect_calendar_conflicts` -> `CalendarContract.Events` 重叠查询
+3. `delete_calendar_event` -> 按 `event_id/event_ids/title_keyword` 删除
 
-- `agent/langgraph/skill_manager.py`
+## 3. 与 Agent-Core 协议对齐点
 
-- 验证/强制转换技能参数并分发处理程序
+### 3.1 计划分发
 
-- `agent/langgraph/openthu_agent.py`
+Android 从 `plan_only_response.data.approved_skills` 解析 skill：
 
-- 规划技能、运行安全检查、通过 `SkillManager` 执行已批准的技能
+- [AgentCoreHttpClient.kt](/d:/Shared/2026%20Spring/Android/project/OpenTHU/app/src/main/java/ai/opencray/app/gateway/AgentCoreHttpClient.kt)
+- [OpenCrayRuntime.kt](/d:/Shared/2026%20Spring/Android/project/OpenTHU/app/src/main/java/ai/opencray/app/runtime/OpenCrayRuntime.kt)
 
-- `agent/langgraph/calendar_handlers.py`
+### 3.2 结果回传 code
 
-- 日历业务验证 + 桥接分发
+`OpenCrayRuntime` 回传结果时，已按 calendar 语义映射错误码：
 
-Kotlin 端：
+- `OK`
+- `APPROVAL_REQUIRED`
+- `INVALID_PARAM`
+- `ACTION_NOT_ALLOWED`
+- `SKILL_EXECUTION_FAILED`
 
-- `app/src/main/java/ai/opencray/app/bridge/PythonSkillBridgeExecutor.kt`
+映射逻辑位置：
 
-- 将 Python 调用 JSON 转换为 `SystemAction`
+- [OpenCrayRuntime.kt](/d:/Shared/2026%20Spring/Android/project/OpenTHU/app/src/main/java/ai/opencray/app/runtime/OpenCrayRuntime.kt)
 
-- 通过 `ActionExecutor` 执行
+## 4. 本地无 Agent 的预设 Plan 测试
 
-- 将 Android 执行报告映射回 `SkillResult` 风格的 JSON
+在不启动真实 `agent_core_server.py` 的情况下，用预设脚本模拟服务端分发：
 
-- `app/src/main/java/ai/opencray/app/execution/ActionExecutor.kt`
+- 脚本： [run_calendar_preset_gateway_server.py](../scripts/run_calendar_preset_gateway_server.py)
+- 预设流程：`create_calendar_event -> delete_calendar_event(title_keyword)`
 
-- 实际的 Android 日历提供程序读/写/删除逻辑
-
-## 3. 端到端调用链
-
-1. `build_default_registry()` 注册日历规范和处理程序。
-
-2. Planner 从 `SkillManager.list_for_planner()` 获取技能元数据。
-
-3. `plan_skills` 输出 `SkillInvocation` 候选技能。
-
-4. `_sanitize_skill_plan` 调用 `SkillManager.validate_and_normalize_args(...)`。
-
-5. `safety_check` 会阻止中/高风险调用，除非获得批准。
-
-6. `execute_skills` 会将已批准的调用发送到 `SkillManager.execute(...)`。
-
-7. `SkillManager` 会再次验证参数，然后调用日历处理程序。
-
-8. 处理程序执行语义检查（时间范围、删除确认等）。
-
-9. 处理程序将调用发送到 Kotlin 桥接器，并将返回的有效负载规范化为 `SkillResult`。
-
-结论：
-
-- 哪些日历工具被调用以及调用顺序由代理规划+安全管道决定。
-
-- 处理程序不决定全局顺序；它只执行一个具体的调用。
-
-## 4. 日历技能模式（SkillManager 协议）
-
-日历规范现在使用 `args_json_schema`，并设置 `additionalProperties=false`。
-
-- `create_calendar_event`
-
-  - 必填：`title`、`start_time`、`end_time`
-
-  - 可选：`location`、`description`、`conflict_decision`、`allow_conflict_delete`
-
-- `detect_calendar_conflicts`
-
-  - 必填：`start_time`、`end_time`
-
-- `delete_calendar_event`
-
-  - 必填：`confirm_delete`
-
-  - 可选：`event_id`、`event_ids`
-
-这意味着：
-
-- 未知字段在 SkillManager 验证边界处被拒绝
-
-- 常见类型转换（字符串/布尔值/数组）在处理程序调用之前进行
-
-## 5. 处理程序职责
-
-`calendar_handlers.py` 仅保留模式无法很好地表达的业务检查：
-
-- ISO 日期时间解析
-
-- `end_time > start_time`
-
-- 冲突决策合法性
-
-- 删除确认和事件 ID规范化
-
-检查完成后，处理程序会将调用有效负载转发给 `KotlinSkillBridge` 实现。
-
-## 6. Python-Kotlin 桥接协议
-
-桥接请求负载（简化版）：
-
-```json
-{
-
-"skill_name": "create_calendar_event",
-
-"request_id": "req_xxx",
-
-"task_id": "task_xxx",
-
-"args": { "...": "..." },
-
-"risk_level": "medium",
-
-"requires_approval": true,
-
-"description": "..."
-
-}
-```
-
-预期桥接响应格式：
-
-```json
-{
-
-"request_id": "req_xxx",
-
-"code": "OK|INVALID_PARAM|APPROVAL_REQUIRED|ACTION_NOT_ALLOWED|SKILL_EXECUTION_FAILED",
-
-"source": "android_kotlin_bridge",
-
-"data": {}
-
-}
-```
-
-Python 运行时支持的桥接模式：
-
-- `json_file` （`JsonFileKotlinBridge`）
-
-文件桥接所需的环境变量：
-
-1. `OPENTHU_CALENDAR_BRIDGE_MODE=json_file`
-
-2. `OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE`
-
-3. `OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE`
-
-4. `OPENTHU_KOTLIN_BRIDGE_TIMEOUT_SEC`（可选）
-
-## 7. Kotlin 执行映射
-
-`ActionExecutor.execute(...)` 现在处理所有三个日历操作：
-
-1. `create_calendar_event` -> 插入到 `CalendarContract.Events`
-
-2. `detect_calendar_conflicts` -> 查询重叠事件
-
-3. `delete_calendar_event` -> 按 `event_id/event_ids` 删除（显式指定）确认
-
-`PythonSkillBridgeExecutor` 将 Android 执行报告转换为 LangGraph 的技能层结果代码和有效负载。
-
-## 8. 测试
-
-测试入口：
+### 4.1 启动预设网关
 
 ```bash
-python agent/langgraph/run_calendar_skill_tests.py --mode mock
+python scripts/run_calendar_preset_gateway_server.py --host 0.0.0.0 --port 28791
 ```
 
-该测试套件验证以下内容：
+### 4.2 运行安卓模拟器端到端测试
 
-1. 所有三个日历技能的注册表绑定
+测试文件：
 
-2. 模式验证行为（必填字段、未知字段拒绝、强制转换）
+- [CalendarPresetPlanGatewayFlowTest.kt](../app/src/androidTest/java/ai/opencray/app/runtime/CalendarPresetPlanGatewayFlowTest.kt)
 
-3. 处理程序业务检查
+执行命令：
 
-4. Python 到 Kotlin 的桥接调用契约（模拟桥接）
-
-5. 创建/检测/删除行为和冲突分支
-
-Kotlin 测试脚本位于：
-```
-app\src\test\java\ai\opencray\app\bridge\PythonSkillBridgeExecutorTest.kt
+```bash
+gradlew.bat :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=ai.opencray.app.runtime.CalendarPresetPlanGatewayFlowTest
 ```
 
-执行测试：
-```
-.\gradlew.bat :app:testDebugUnitTest --no-daemon
-```
+该测试会验证：
 
-## 9. 已弃用/已移除的路径
+1. App 能连上预设网关并拿到 plan
+2. `create_calendar_event` 与 `delete_calendar_event` 都被执行并回传结果
+3. 删除后按 `title_keyword` 查询不到残留测试事件
 
-- 旧的基于 ADB 的直接执行/测试路径已从日历技能运行时流程中移除。
+### 4.3 手动联调
 
-- 日历技能运行时执行是桥接驱动的（`Python 决策 -> Kotlin 执行`）。
+如果你不跑 instrumentation，也可以手工在 App 中：
+
+1. Connect 到 `10.0.2.2:<port>`（TLS 关闭）
+2. `Plan Goal`
+3. `Run Agent`
+
+然后在服务端看 `/api/v1/agent/tasks/{task_id}` 的 `device_results` 与 `status`。
+
+具体见文件 [AGENT_CORE_SERVER.md](AGENT_CORE_SERVER.md)

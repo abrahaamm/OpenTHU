@@ -41,6 +41,7 @@ flowchart LR
   - `API_http.md`: upstream Tsinghua interface references for future skill implementers
 - `/scripts`
   - prototype Android testing helpers
+  - `run_calendar_preset_gateway_server.py`: preset-plan gateway stub for calendar emulator e2e tests
 
 ## What Changed
 

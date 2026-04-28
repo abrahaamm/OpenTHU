@@ -575,7 +575,7 @@ class OpenCrayRuntime(
   ) {
     val requestId = action.requestId ?: return
     thread(name = "opencray-gateway-submit", isDaemon = true) {
-      val code = if (report.success) "OK" else "SKILL_EXECUTION_FAILED"
+      val code = mapGatewayResultCode(action, report)
       val result =
         gatewayClient.submitResult(
           config = currentGatewayConfig(),
@@ -621,6 +621,31 @@ class OpenCrayRuntime(
         )
       }
     }
+  }
+
+  private fun mapGatewayResultCode(
+    action: SystemAction,
+    report: ActionExecutionReport,
+  ): String {
+    if (report.success) return "OK"
+
+    val actionId = action.id.substringBefore("#")
+    val message = report.message
+    if (message.contains("confirm_delete=true", ignoreCase = true)) return "APPROVAL_REQUIRED"
+    if (actionId == "create_calendar_event" &&
+      message.contains("Choose skip_write / coexist / delete_conflicts", ignoreCase = true)
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
+    if (message.contains("Invalid", ignoreCase = true) ||
+      message.contains("Missing", ignoreCase = true) ||
+      message.contains("requires event_id/event_ids", ignoreCase = true) ||
+      message.contains("requires explicit confirmation", ignoreCase = true)
+    ) {
+      return "INVALID_PARAM"
+    }
+    if (message.contains("permission", ignoreCase = true)) return "ACTION_NOT_ALLOWED"
+    return "SKILL_EXECUTION_FAILED"
   }
 
   private fun upsertAction(
