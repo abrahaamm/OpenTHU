@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.CalendarContract
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
 import java.time.Instant
@@ -39,6 +40,7 @@ class ActionExecutor(
     return when (action.id) {
       "create_calendar_event" -> executeCalendarIntent(goal)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
+      "read_notifications" -> executeReadNotifications()
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
       "open_context_review" ->
         ActionExecutionReport(
@@ -53,6 +55,55 @@ class ActionExecutor(
           recoverable = false,
         )
     }
+  }
+
+  private fun executeReadNotifications(): ActionExecutionReport {
+    val enabledListeners = Settings.Secure.getString(appContext.contentResolver, "enabled_notification_listeners")
+    val isEnabled = enabledListeners != null && enabledListeners.contains(appContext.packageName)
+
+    if (!isEnabled) {
+      val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+      }
+      appContext.startActivity(intent)
+      return ActionExecutionReport(
+        success = false,
+        message = "Missing notification access permission. Prompted user to enable it in Settings.",
+        recoverable = false,
+      )
+    }
+
+    val service = OpenTHUNotificationListenerService.instance
+    if (service == null) {
+      return ActionExecutionReport(
+        success = false,
+        message = "NotificationListenerService is active but not bound yet. Please wait or restart the app.",
+        recoverable = true,
+      )
+    }
+
+    val notifications = service.getUnreadNotifications()
+    val notesList = notifications.mapNotNull { sbn ->
+        val extras = sbn.notification.extras
+        val title = extras.getString(android.app.Notification.EXTRA_TITLE) ?: return@mapNotNull null
+        val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
+        val pkg = sbn.packageName
+        "[$pkg] $title: $text"
+    }
+
+    if (notesList.isEmpty()) {
+      return ActionExecutionReport(
+        success = true,
+        message = "No unread notifications found.",
+        recoverable = false,
+      )
+    }
+
+    return ActionExecutionReport(
+      success = true,
+      message = "Found ${notesList.size} unread notifications:\n" + notesList.joinToString("\n"),
+      recoverable = false,
+    )
   }
 
   private fun executeCreateCalendarEvent(
