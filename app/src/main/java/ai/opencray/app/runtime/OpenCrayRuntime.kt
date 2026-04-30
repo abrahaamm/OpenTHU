@@ -671,6 +671,13 @@ class OpenCrayRuntime(
     val requestId = action.requestId ?: return
     thread(name = "opencray-gateway-submit", isDaemon = true) {
       val code = mapGatewayResultCode(action, report)
+      val submitData: Map<String, Any> = buildMap {
+        put("status", if (report.success) "executed" else "failed")
+        put("recoverable", report.recoverable)
+        put("action_id", action.id)
+        // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
+        putAll(report.data)
+      }
       val result =
         gatewayClient.submitResult(
           config = currentGatewayConfig(),
@@ -680,12 +687,7 @@ class OpenCrayRuntime(
           skillName = action.id,
           code = code,
           message = report.message,
-          data =
-            mapOf(
-              "status" to if (report.success) "executed" else "failed",
-              "recoverable" to report.recoverable,
-              "action_id" to action.id,
-            ),
+          data = submitData,
         )
       val current = snapshot()
       if (result.success) {
@@ -726,20 +728,32 @@ class OpenCrayRuntime(
 
     val actionId = action.id.substringBefore("#")
     val message = report.message
+    // Check structured data first for a precise reason code
+    val reason = report.data["reason"] as? String
+    if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
+    if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
+
     if (message.contains("confirm_delete=true", ignoreCase = true)) return "APPROVAL_REQUIRED"
     if (actionId == "create_calendar_event" &&
-      message.contains("Choose skip_write / coexist / delete_conflicts", ignoreCase = true)
+      (message.contains("skip_write / coexist / delete_conflicts", ignoreCase = true) ||
+        message.contains("请选择策略", ignoreCase = true))
     ) {
       return "APPROVAL_REQUIRED"
     }
     if (message.contains("Invalid", ignoreCase = true) ||
       message.contains("Missing", ignoreCase = true) ||
       message.contains("requires event_id/event_ids", ignoreCase = true) ||
-      message.contains("requires explicit confirmation", ignoreCase = true)
+      message.contains("requires explicit confirmation", ignoreCase = true) ||
+      message.contains("需要明确授权", ignoreCase = true) ||
+      message.contains("缺少", ignoreCase = true)
     ) {
       return "INVALID_PARAM"
     }
-    if (message.contains("permission", ignoreCase = true)) return "ACTION_NOT_ALLOWED"
+    if (message.contains("permission", ignoreCase = true) ||
+      message.contains("权限", ignoreCase = true)
+    ) {
+      return "ACTION_NOT_ALLOWED"
+    }
     return "SKILL_EXECUTION_FAILED"
   }
 

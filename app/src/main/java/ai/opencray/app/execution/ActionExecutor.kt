@@ -23,6 +23,8 @@ data class ActionExecutionReport(
   val success: Boolean,
   val message: String,
   val recoverable: Boolean,
+  /** Structured key-value data submitted to server (e.g. conflict details, created event id). */
+  val data: Map<String, Any> = emptyMap(),
 )
 
 private data class CalendarWindow(
@@ -97,20 +99,30 @@ class ActionExecutor(
         "skip_write" -> {
           return ActionExecutionReport(
             success = true,
-            message = "Conflict detected (${conflicts.size}), skipped writing by decision.",
+            message = "已跳过写入（skip_write）。${conflictSummaryMessage(conflicts)}",
             recoverable = false,
+            data = mapOf(
+              "skipped" to true,
+              "conflict_count" to conflicts.size,
+              "conflicts" to conflictsToDataList(conflicts),
+            ),
           )
         }
         "coexist" -> {
-          // Android calendar supports overlapping events.
+          // Android calendar supports overlapping events; proceed with insert below.
         }
         "delete_conflicts" -> {
           val allowDelete = action.params["allow_conflict_delete"]?.toBooleanStrictOrNull() ?: false
           if (!allowDelete) {
             return ActionExecutionReport(
               success = false,
-              message = "Conflict delete requires explicit confirmation (allow_conflict_delete=true).",
+              message = "冲突删除需要明确授权（allow_conflict_delete=true）。${conflictSummaryMessage(conflicts)}",
               recoverable = false,
+              data = mapOf(
+                "reason" to "allow_conflict_delete_not_set",
+                "conflict_count" to conflicts.size,
+                "conflicts" to conflictsToDataList(conflicts),
+              ),
             )
           }
           deleteEventsByIds(conflicts.map { it.id })
@@ -118,8 +130,13 @@ class ActionExecutor(
         else -> {
           return ActionExecutionReport(
             success = false,
-            message = "Conflict detected (${conflicts.size}). Choose skip_write / coexist / delete_conflicts.",
+            message = "检测到冲突，请选择策略 skip_write / coexist / delete_conflicts。${conflictSummaryMessage(conflicts)}",
             recoverable = false,
+            data = mapOf(
+              "reason" to "conflict_strategy_required",
+              "conflict_count" to conflicts.size,
+              "conflicts" to conflictsToDataList(conflicts),
+            ),
           )
         }
       }
@@ -148,14 +165,23 @@ class ActionExecutor(
       val eventId = uri?.lastPathSegment ?: "unknown"
       ActionExecutionReport(
         success = true,
-        message = "Calendar event created (event_id=$eventId, conflicts=${conflicts.size}).",
+        message = "日历事项已创建：「$title」${formatEpochMs(window.startMs)}-${formatEpochMs(window.endMs)}（event_id=$eventId）",
         recoverable = false,
+        data = mapOf(
+          "event_id" to eventId,
+          "title" to title,
+          "start" to formatEpochMs(window.startMs),
+          "end" to formatEpochMs(window.endMs),
+          "calendar_id" to calendarId,
+          "deleted_conflicts" to if (conflicts.isNotEmpty()) conflictsToDataList(conflicts) else emptyList<Any>(),
+        ),
       )
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
-        message = throwable.message ?: "Calendar insert failed",
+        message = "日历写入失败：${throwable.message ?: "未知错误"}",
         recoverable = true,
+        data = mapOf("exception" to (throwable.message ?: "unknown")),
       )
     }
   }
@@ -177,16 +203,21 @@ class ActionExecutor(
       recoverable = false,
     )
     val conflicts = queryConflicts(window.startMs, window.endMs)
-    val overlapSupported = true
     return ActionExecutionReport(
       success = true,
-      message =
-        buildString {
-          append("Conflict check completed: ${conflicts.size} overlap(s). ")
-          append("Android calendar overlap supported=$overlapSupported. ")
-          append("Options: skip_write | coexist | delete_conflicts.")
-        },
+      message = if (conflicts.isEmpty()) {
+        "未检测到时间冲突（已排除全天事件）。"
+      } else {
+        conflictSummaryMessage(conflicts)
+      },
       recoverable = false,
+      data = mapOf(
+        "conflict_count" to conflicts.size,
+        "conflicts" to conflictsToDataList(conflicts),
+        "check_window_start" to formatEpochMs(window.startMs),
+        "check_window_end" to formatEpochMs(window.endMs),
+        "all_day_excluded" to true,
+      ),
     )
   }
 
@@ -236,14 +267,22 @@ class ActionExecutor(
       val deleted = deleteEventsByIds(idsToDelete)
       ActionExecutionReport(
         success = true,
-        message = "Deleted $deleted calendar event(s).",
+        message = "已删除 $deleted 个日历事项（目标 ${idsToDelete.size} 个）。",
         recoverable = false,
+        data = mapOf(
+          "deleted_count" to deleted,
+          "requested_ids" to idsToDelete,
+        ),
       )
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
-        message = throwable.message ?: "Calendar delete failed",
+        message = "日历删除失败：${throwable.message ?: "未知错误"}",
         recoverable = true,
+        data = mapOf(
+          "exception" to (throwable.message ?: "unknown"),
+          "requested_ids" to idsToDelete,
+        ),
       )
     }
   }
@@ -296,6 +335,34 @@ class ActionExecutor(
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
     return launchIntent(intent, "Campus website opened")
+  }
+
+  /** Format a timestamp (epochMs) to local ISO datetime string for display. */
+  private fun formatEpochMs(epochMs: Long): String {
+    return runCatching {
+      val instant = java.time.Instant.ofEpochMilli(epochMs)
+      val zdt = instant.atZone(ZoneId.systemDefault())
+      zdt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    }.getOrElse { epochMs.toString() }
+  }
+
+  /** Convert conflict list to structured map list suitable for JSON submission. */
+  private fun conflictsToDataList(conflicts: List<CalendarEventBrief>): List<Map<String, Any>> =
+    conflicts.map { event ->
+      mapOf(
+        "id" to event.id,
+        "title" to event.title,
+        "start" to formatEpochMs(event.startMs),
+        "end" to formatEpochMs(event.endMs),
+      )
+    }
+
+  /** Build a human-readable conflict summary for the message field. */
+  private fun conflictSummaryMessage(conflicts: List<CalendarEventBrief>): String {
+    val items = conflicts.joinToString("; ") { event ->
+      "「${event.title}」${formatEpochMs(event.startMs)}-${formatEpochMs(event.endMs)}"
+    }
+    return "冲突事项(${conflicts.size}): $items"
   }
 
   private fun launchIntent(intent: Intent, successMessage: String): ActionExecutionReport {
@@ -375,6 +442,8 @@ class ActionExecutor(
         CalendarContract.Events.DTSTART,
         CalendarContract.Events.DTEND,
       )
+    // Exclude all-day events (ALL_DAY=1) — their midnight UTC times cause false positives
+    // against regular timed events.
     val selection =
       buildString {
         append("(")
@@ -384,6 +453,8 @@ class ActionExecutor(
         append(")")
         append(" AND ")
         append("(${CalendarContract.Events.DELETED} = 0 OR ${CalendarContract.Events.DELETED} IS NULL)")
+        append(" AND ")
+        append("(${CalendarContract.Events.ALL_DAY} = 0 OR ${CalendarContract.Events.ALL_DAY} IS NULL)")
       }
     val args = arrayOf(endMs.toString(), startMs.toString())
     val sort = "${CalendarContract.Events.DTSTART} ASC"
