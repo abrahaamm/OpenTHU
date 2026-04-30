@@ -8,6 +8,7 @@ import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
+import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
@@ -40,6 +41,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       memoryRecords = snapshot.memoryRecords,
       auditTrail = snapshot.auditTrail,
       chatMessages = runtime.chatMessages(),
+      pendingConflict = snapshot.pendingConflict,
     )
   }
 
@@ -117,6 +119,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun notifyCalendarPermissionGranted() {
     runtime.notifyCalendarPermissionGranted()
   }
+
+  fun resolveConflict(strategy: String) {
+    runtime.resolveConflict(strategy)
+  }
 }
 
 data class MainUiState(
@@ -133,4 +139,5 @@ data class MainUiState(
   val memoryRecords: List<MemoryRecord>,
   val auditTrail: List<AuditEntry>,
   val chatMessages: List<ChatMessage>,
+  val pendingConflict: PendingConflictResolution? = null,
 )

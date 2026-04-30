@@ -486,11 +486,16 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
 
         logger.info(
-            "[api] result accepted task_id=%s task_status=%s received=%d",
+            "[api] result accepted task_id=%s skill_name=%s code=%s task_status=%s received=%d | message=%s",
             task_doc.get("task_id", ""),
+            payload.skill_name,
+            payload.code,
             task_doc.get("status", ""),
             len(task_doc.get("device_results", [])),
+            payload.message or "",
         )
+        if payload.data:
+            logger.info("[api] result data task_id=%s %s", task_doc.get("task_id", ""), payload.data)
         return {
             "code": "OK",
             "message": "Result accepted",

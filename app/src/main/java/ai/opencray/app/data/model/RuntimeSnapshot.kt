@@ -5,6 +5,7 @@ import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
+import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 
@@ -25,4 +26,5 @@ data class RuntimeSnapshot(
   val memoryRecords: List<MemoryRecord>,
   val auditTrail: List<AuditEntry>,
   val recentEvents: List<String>,
+  val pendingConflict: PendingConflictResolution? = null,
 )

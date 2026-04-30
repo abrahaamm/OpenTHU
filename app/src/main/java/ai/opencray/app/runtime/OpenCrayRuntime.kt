@@ -13,6 +13,7 @@ import ai.opencray.app.data.repository.ChatRepository
 import ai.opencray.app.data.repository.RuntimeRepository
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
+import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.execution.ActionExecutor
@@ -630,7 +631,14 @@ class OpenCrayRuntime(
     submitGatewayResult: Boolean,
   ) {
     val now = System.currentTimeMillis()
-    val nextStatus = if (report.success) "executed" else "failed"
+    // When the executor requires a conflict strategy choice, keep the action in a special
+    // intermediate state so the user can pick a strategy without the server being notified yet.
+    val needsConflictResolution = report.data["reason"] == "conflict_strategy_required"
+    val nextStatus = when {
+      report.success -> "executed"
+      needsConflictResolution -> "conflict_pending"
+      else -> "failed"
+    }
     val current = snapshot()
     val updatedActions =
       current.systemActions.map { candidate ->
@@ -649,18 +657,68 @@ class OpenCrayRuntime(
         message = report.message,
         timestampEpochMs = now,
       )
+    val pendingConflict = if (needsConflictResolution) {
+      PendingConflictResolution(
+        action = action,
+        taskId = task.id,
+        conflictMessage = report.message,
+      )
+    } else {
+      null
+    }
 
     runtimeRepository.replaceSnapshot(
       current.copy(
         systemActions = updatedActions,
+        pendingConflict = pendingConflict,
         auditTrail = listOf(audit) + current.auditTrail.take(149),
-        recentEvents = listOf("Action ${action.id}: ${if (report.success) "success" else "failed"}") + current.recentEvents,
+        recentEvents = listOf("Action ${action.id}: ${if (report.success) "success" else if (needsConflictResolution) "conflict_pending" else "failed"}") + current.recentEvents,
       ),
     )
 
-    if (submitGatewayResult && !action.requestId.isNullOrBlank()) {
+    // For conflict resolution, we wait for the user to pick a strategy before submitting.
+    if (submitGatewayResult && !action.requestId.isNullOrBlank() && !needsConflictResolution) {
       submitGatewayResultAsync(taskId = task.id, action = action, report = report)
     }
+  }
+
+  /**
+   * Called from the UI when the user selects a conflict resolution strategy.
+   * Re-executes the pending calendar action with the chosen [strategy]
+   * (one of: skip_write, coexist, delete_conflicts).
+   */
+  fun resolveConflict(strategy: String) {
+    val current = snapshot()
+    val pending = current.pendingConflict ?: return
+
+    // Clear the pending conflict immediately so the UI reverts.
+    runtimeRepository.replaceSnapshot(current.copy(pendingConflict = null))
+
+    // Re-execute with the chosen strategy injected into params.
+    val resolvedAction = pending.action.copy(
+      params = pending.action.params + mapOf("conflict_decision" to strategy),
+      status = "approved",
+      lastResult = null,
+    )
+    val task = snapshot().tasks.firstOrNull { it.id == pending.taskId }
+      ?: AgentTask(
+        id = pending.taskId,
+        goal = "Conflict resolution",
+        status = "in_progress",
+        attempt = 1,
+        createdAtEpochMs = System.currentTimeMillis(),
+        updatedAtEpochMs = System.currentTimeMillis(),
+        summary = "User resolved calendar conflict: $strategy",
+      )
+    runtimeRepository.appendEvent("Conflict resolved by user: strategy=$strategy for action=${resolvedAction.id}")
+
+    val report = actionExecutor.execute(resolvedAction, task.goal)
+    applyExecutionReport(
+      task = task,
+      action = resolvedAction,
+      report = report,
+      submitGatewayResult = !resolvedAction.requestId.isNullOrBlank(),
+    )
   }
 
   private fun submitGatewayResultAsync(

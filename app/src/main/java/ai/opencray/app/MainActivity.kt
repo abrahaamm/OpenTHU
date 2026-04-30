@@ -18,6 +18,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
+import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SystemAction
 
 class MainActivity : AppCompatActivity() {
@@ -143,9 +144,30 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
-    actionPrimaryButton.setOnClickListener { executeActionByIndex(0) }
-    actionSecondaryButton.setOnClickListener { executeActionByIndex(1) }
-    actionTertiaryButton.setOnClickListener { executeActionByIndex(2) }
+    actionPrimaryButton.setOnClickListener {
+      if (viewModel.getUiState().pendingConflict != null) {
+        viewModel.resolveConflict("skip_write")
+        render()
+      } else {
+        executeActionByIndex(0)
+      }
+    }
+    actionSecondaryButton.setOnClickListener {
+      if (viewModel.getUiState().pendingConflict != null) {
+        viewModel.resolveConflict("coexist")
+        render()
+      } else {
+        executeActionByIndex(1)
+      }
+    }
+    actionTertiaryButton.setOnClickListener {
+      if (viewModel.getUiState().pendingConflict != null) {
+        viewModel.resolveConflict("delete_conflicts")
+        render()
+      } else {
+        executeActionByIndex(2)
+      }
+    }
 
     approveButton.setOnClickListener {
       viewModel.approvePendingActions()
@@ -210,6 +232,26 @@ class MainActivity : AppCompatActivity() {
           )
         }
       }
+
+    // --- Conflict resolution UI (overrides normal action feed + buttons) ---
+    val conflict = state.pendingConflict
+    if (conflict != null) {
+      actionFeedView.text = buildString {
+        append("===== 日历冲突，请选择处理策略 =====\n\n")
+        append(conflict.conflictMessage)
+        append("\n\n操作：\n")
+        append("  [跳过创建]     — 不写入日历，保留现有事项\n")
+        append("  [共存]         — 忽略冲突，直接写入\n")
+        append("  [删除冲突事项] — 删除冲突事项后再写入")
+      }
+      actionPrimaryButton.text = "跳过创建"
+      actionPrimaryButton.isEnabled = true
+      actionSecondaryButton.text = "共存"
+      actionSecondaryButton.isEnabled = true
+      actionTertiaryButton.text = "删除冲突事项"
+      actionTertiaryButton.isEnabled = true
+      return
+    }
 
     actionFeedView.text =
       state.systemActions.joinToString(separator = "\n\n") { action ->
