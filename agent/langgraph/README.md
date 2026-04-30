@@ -9,6 +9,11 @@ It is now designed around a skill-first architecture:
 - the workflow only depends on skill metadata and skill handlers
 - concrete skill implementations can be injected later without rewriting the core graph
 
+Deployment modes:
+
+- Local mode: run workflow end-to-end in one Python process
+- Server dispatch mode: run planning/safety on PC server, let Android app pull and execute actions
+
 ## Workflow
 
 ```mermaid
@@ -36,6 +41,18 @@ flowchart TD
   - `SkillResult`
   - `SkillRegistry`
   - default skill catalog
+- [skill_manager.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skill_manager.py)
+  - unified execution entry between agent core and skill handlers
+  - schema-driven skill argument parsing and runtime validation
+  - result normalization and handler exception boundary
+  - planner-facing skill list access
+- [SKILL_MANAGER_SCHEMA_GUIDE.md](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/SKILL_MANAGER_SCHEMA_GUIDE.md)
+  - skill developer guide for `SkillManager` + `args_json_schema`
+  - validation behavior, contracts, and best practices
+- [agent_core_server.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/agent_core_server.py)
+  - PC-hosted Agent-Core server
+  - plan-only workflow for device task dispatch
+  - HTTPS APIs for device registration, task pull, and result callback
 
 ## Core Design
 
@@ -51,7 +68,9 @@ flowchart TD
    - medium/high risk skills are blocked unless approval is granted for this run
 
 3. `execute_skills`
-   - dispatches each approved `SkillInvocation` to the registered handler
+   - dispatches each approved `SkillInvocation` through `SkillManager`
+   - `SkillManager` validates/coerces args using skill schema before calling handler
+   - `SkillManager` routes to registered handlers and normalizes result schema
    - the workflow does not know concrete skill internals
 
 4. `replan_failed`
@@ -63,6 +82,13 @@ flowchart TD
 6. `memory_update`
    - persists a small execution memory snapshot to JSON
 
+## Skill Templates
+
+- Skill JSON Schema template:
+  - [skill_json_schema.template.json](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skills/skill_json_schema.template.json)
+- Minimal skill test template:
+  - [skill_test_template.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skills/skill_test_template.py)
+
 ## Running Locally
 
 ```bash
@@ -73,6 +99,16 @@ pip install -r agent/langgraph/requirements.txt
 python3 agent/langgraph/openthu_agent.py \
   --input "帮我整理本周作业并加到提醒和日历" \
   --user-id "thu_demo"
+```
+
+Run as Agent-Core server (PC host):
+
+```bash
+python3 -m agent.langgraph.agent_core_server \
+  --host 0.0.0.0 \
+  --port 18789 \
+  --store-file agent/langgraph/agent_core_store.json \
+  --memory-file agent/langgraph/memory_store.json
 ```
 
 Grant approval-required skills for one run:
@@ -108,24 +144,25 @@ Calendar actions are now wired with concrete handlers:
 - `detect_calendar_conflicts`
 - `delete_calendar_event`
 
-These handlers run through `adb shell content` against the connected Android device calendar provider.
+These skills are registered with strict `args_json_schema` in `skill_core.py`.
+`SkillManager` validates/coerces args before handlers run.
+
+Calendar handlers perform semantic validation and then dispatch invocation payloads through a Kotlin bridge.
+Android-side execution is handled by Kotlin runtime (`ActionExecutor`) under app permissions.
 
 Environment variables:
 
-- `OPENTHU_ADB_BIN` (optional, default `adb`)
-- `OPENTHU_ADB_SERIAL` (optional, choose one specific device)
-- `OPENTHU_CALENDAR_TIMEZONE` (optional, default `UTC`)
+- `OPENTHU_CALENDAR_BRIDGE_MODE` (`json_file` to enable file bridge)
+- `OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE` (required for `json_file` mode)
+- `OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE` (required for `json_file` mode)
+- `OPENTHU_KOTLIN_BRIDGE_TIMEOUT_SEC` (optional, default 12s)
 
 ## Calendar Skill Tests
 
-Run logic validation without adb/device:
+Run logic validation with a mock Kotlin bridge:
 
 ```bash
 python agent/langgraph/run_calendar_skill_tests.py --mode mock
 ```
 
-Run real-device smoke test (requires adb + connected device):
-
-```bash
-python agent/langgraph/run_calendar_skill_tests.py --mode adb --adb-serial <device_serial>
-```
+ADB-based calendar test mode is removed from the current runtime path.

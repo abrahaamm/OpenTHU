@@ -20,6 +20,7 @@ class SkillSpec:
     skill_version: str = "v1"
     session_required: bool = False
     args_schema: dict[str, str] = field(default_factory=dict)
+    args_json_schema: dict[str, Any] = field(default_factory=dict)
 
     def to_planner_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class SkillSpec:
             "session_required": self.session_required,
             "skill_version": self.skill_version,
             "args_schema": self.args_schema,
+            "args_json_schema": self.args_json_schema,
         }
 
 
@@ -198,12 +200,22 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "medium",
             True,
-            args_schema={
-                "title": "string (required)",
-                "start_time": "ISO8601 datetime (required)",
-                "end_time": "ISO8601 datetime (required)",
-                "description": "string (optional)",
-                "conflict_decision": "prompt_user|skip_write|coexist|delete_conflicts",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "location": {"type": "string"},
+                    "description": {"type": "string"},
+                    "conflict_decision": {
+                        "type": "string",
+                        "enum": ["prompt_user", "skip_write", "coexist", "delete_conflicts"],
+                    },
+                    "allow_conflict_delete": {"type": "boolean"},
+                },
+                "required": ["title", "start_time", "end_time"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -212,9 +224,14 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "low",
             False,
-            args_schema={
-                "start_time": "ISO8601 datetime (required)",
-                "end_time": "ISO8601 datetime (required)",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                },
+                "required": ["start_time", "end_time"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -223,18 +240,66 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "high",
             True,
-            args_schema={
-                "event_id": "string (optional)",
-                "event_ids": "list[string] (optional)",
-                "confirm_delete": "bool (required)",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string"},
+                    "event_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "confirm_delete": {"type": "boolean"},
+                },
+                "required": ["confirm_delete"],
+                "additionalProperties": False,
             },
         ),
-        SkillSpec("set_alarm", "Set a system alarm", "action", "low", False),
+        SkillSpec(
+            "set_alarm",
+            "Set a system alarm",
+            "action",
+            "low",
+            False,
+            args_schema={
+                "time": "string",
+                "label": "string",
+                "repeat": "string",
+                "vibrate": "bool",
+            },
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "time": {
+                        "type": "string",
+                        "description": "ISO8601 datetime string (UTC) for the alarm (e.g. 2026-04-26T14:30:00Z)"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Optional label or message for the alarm"
+                    },
+                    "repeat": {
+                        "type": "string",
+                        "description": "Optional repeat rule"
+                    },
+                    "vibrate": {
+                        "type": "boolean",
+                        "description": "Optional flag to enable vibration"
+                    }
+                },
+                "required": ["time"],
+                "additionalProperties": False,
+            },
+        ),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
     ]:
         registry.register_spec(spec)
 
+    try:
+        from .skills.alarm_skills import SetAlarmSkill
+        registry.register_handler("set_alarm", SetAlarmSkill())
+    except ImportError:
+        pass
     register_calendar_handlers(registry)
     return registry

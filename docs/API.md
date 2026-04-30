@@ -1,18 +1,26 @@
 ﻿﻿# OpenTHU Skill 接口文档（API）
 
-版本：v1.1-draft  
-日期：2026-04-24  
+版本：v1.2-draft  
+日期：2026-04-26  
 状态：Draft
 
 ## 1. 文档范围
 
 本文档定义 OpenTHU 中 **Agent Skills 的接口契约**，以及 LangGraph Workflow 内部的任务/执行协议。
 
-架构说明：
-- OpenTHU **不再依赖独立的 Backend HTTP 服务**
-- 学习数据获取、本地动作执行均通过 **Skill**（Agent 内置工具）完成
-- Skill 直接调用上游清华系统（URL 与关键字段参考 `docs/API_http.md`）
-- LangGraph Workflow 负责 plan → safety_check → approve → execute → audit 闭环
+架构说明（当前推荐）：
+- OpenTHU 使用 **Agent-Core Server + Device Executor** 双端架构
+- 服务器（Python LangGraph）负责 `plan / safety_check / audit / memory`
+- 设备（Android App）负责系统动作执行（闹钟、日历、提醒、通知）
+- 设备通过 HTTPS 拉取任务并回传执行结果，FCM 仅用于唤醒（可选）
+- Skill 直接调用上游清华系统或端上系统能力（URL 与关键字段参考 `docs/API_http.md`）
+
+部署模式：
+- 模式 A（推荐生产）：`PC Agent-Core Server + Android Device Executor`
+- 模式 B（本地调试）：单进程 Skill-first workflow（不经过任务分发接口）
+
+如果你要做本机联调（Server + App 跑通），优先看：
+- `docs/AGENT_CORE_SERVER.md`（包含启动、连接、验证、排障完整步骤）
 
 ## 2. Skill 分类与调用约定
 
@@ -26,13 +34,17 @@
 
 ### 2.2 调用约定
 
-- **调用方**：LangGraph Workflow 节点（`plan` / `execute` 节点）
-- **执行方**：Android Agent 内置 Skill 实现层
+- **调用方**：LangGraph Workflow 节点（`plan` / `safety_check`）以及 Agent-Core Server 分发器
+- **执行方**：Android Agent 内置 Skill 实现层（Device Executor）
 - **绑定方式**：Workflow 仅依赖 `SkillRegistry` 提供的 `SkillSpec` / `SkillHandler`，不直接耦合具体 Skill 实现
+- **跨语言执行**：动作类 Skill 可由 Python Handler 通过桥接协议转发至 Kotlin Runtime 执行，返回 `SkillResult` 风格结果
 - **会话传递**：数据类 Skill 共享 Agent 持有的 `Session` 对象（含 `JSESSIONID` / `CSRF token`）
 - **幂等**：所有写操作 Skill（动作类）支持 `request_id` 幂等
 - **时间**：统一 ISO8601（UTC）
 - **错误码**：见 2.3
+
+任务分发接口（模式 A）详见：
+- `docs/AGENT_CORE_SERVER.md`
 
 ### 2.3 通用错误码
 
@@ -515,7 +527,9 @@ class SkillResult:
 ```
 
 **返回**：`{ "event_id": "...", "status": "created|skipped_conflict|conflict_detected" }`  
-**实现**：通过 Android `CalendarContract` + `ContentResolver` 直接写入系统日历（Provider 模式）
+**实现**：Python 侧仅输出 `SkillInvocation`，由 Kotlin `ActionExecutor` 通过 Android `CalendarContract` + `ContentResolver` 执行写入（桥接执行模式）
+
+`SkillManager` 会先按 `SkillSpec.args_json_schema` 对入参做校验与归一化（当前 calendar skills 为 strict schema，`additionalProperties=false`）。
 
 冲突策略说明：
 - Android 日历支持时间重叠事件共存
@@ -756,9 +770,9 @@ Skill 调用状态：
 | `get_assignments` | learn.tsinghua.edu.cn | `/b/wlxt/kczy/zy/student/zyListWj` 等三个状态接口 | POST |
 | `get_academic_calendar` | zhjw.cic.tsinghua.edu.cn | `/b/wlxt/common/auth/gnt` → `j_acegi_login.do` → `jxmh_out.do` | POST/GET |
 | `create_reminder` | Android System | `android.provider.CalendarContract.Reminders` | Intent |
-| `create_calendar_event` | Android System | `content://com.android.calendar/events`（默认 Provider 写入，必要时回退 Intent） | Provider Write (+ Intent Fallback) |
-| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（本地查询） | Provider Query |
-| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（本地删除） | Provider Delete |
+| `create_calendar_event` | Android System | `content://com.android.calendar/events`（由 Kotlin `ActionExecutor` 执行） | Provider Write (Kotlin Executor) |
+| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（由 Kotlin `ActionExecutor` 查询） | Provider Query (Kotlin Executor) |
+| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（由 Kotlin `ActionExecutor` 删除） | Provider Delete (Kotlin Executor) |
 | `set_alarm` | Android System | `android.intent.action.SET_ALARM` | Intent |
 
 ---
