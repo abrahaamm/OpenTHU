@@ -97,33 +97,35 @@ class RequirementLLM:
                 "objective, entities, constraints, success_criteria, sensitivity. "
                 "Use concise, execution-oriented values. Return JSON only."
             )
-            try:
-                response = client.responses.create(
-                    model=self.model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_input},
-                    ],
-                    max_output_tokens=500,
-                    temperature=0.1,
-                )
-                self.last_mode = "llm_responses"
-                self.last_error = ""
-                return json.loads(self._extract_json_text(response.output_text.strip()))
-            except Exception:
-                completion = client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_input},
-                    ],
-                    max_tokens=500,
-                    temperature=0.1,
-                )
-                content = completion.choices[0].message.content or ""
-                self.last_mode = "llm_chat_completions"
-                self.last_error = ""
-                return json.loads(self._extract_json_text(content.strip()))
+            if not self.base_url:
+                try:
+                    response = client.responses.create(
+                        model=self.model,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_input},
+                        ],
+                        max_output_tokens=500,
+                        temperature=0.1,
+                    )
+                    self.last_mode = "llm_responses"
+                    self.last_error = ""
+                    return json.loads(self._extract_json_text(response.output_text.strip()))
+                except Exception:
+                    pass
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_input},
+                ],
+                max_tokens=500,
+                temperature=0.1,
+            )
+            content = completion.choices[0].message.content or ""
+            self.last_mode = "llm_chat_completions"
+            self.last_error = ""
+            return json.loads(self._extract_json_text(content.strip()))
         except Exception as exc:
             self.last_mode = "fallback"
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -929,20 +931,33 @@ class OpenTHULangGraphAgent:
                 self.llm.model,
                 structured_prompt.get("entities", []),
             )
-            try:
-                response = client.responses.create(
-                    model=self.llm.model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    max_output_tokens=1000,
-                    temperature=0.2,
-                )
-                raw_text = response.output_text.strip()
-                logger.debug("[llm.planner] responses API succeeded task_id=%s", state.get("task_id", ""))
-            except Exception as e:
-                logger.debug("[llm.planner] responses API failed (%s), falling back to chat.completions", e)
+            if not self.llm.base_url:
+                try:
+                    response = client.responses.create(
+                        model=self.llm.model,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_output_tokens=1000,
+                        temperature=0.2,
+                    )
+                    raw_text = response.output_text.strip()
+                    logger.debug("[llm.planner] responses API succeeded task_id=%s", state.get("task_id", ""))
+                except Exception as e:
+                    logger.debug("[llm.planner] responses API failed (%s), falling back to chat.completions", e)
+                    completion = client.chat.completions.create(
+                        model=self.llm.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_tokens=1000,
+                        temperature=0.2,
+                    )
+                    raw_text = (completion.choices[0].message.content or "").strip()
+                    logger.debug("[llm.planner] chat.completions succeeded task_id=%s", state.get("task_id", ""))
+            else:
                 completion = client.chat.completions.create(
                     model=self.llm.model,
                     messages=[
@@ -953,7 +968,7 @@ class OpenTHULangGraphAgent:
                     temperature=0.2,
                 )
                 raw_text = (completion.choices[0].message.content or "").strip()
-                logger.debug("[llm.planner] chat.completions succeeded task_id=%s", state.get("task_id", ""))
+                logger.debug("[llm.planner] chat.completions (base_url mode) succeeded task_id=%s", state.get("task_id", ""))
 
             parsed = json.loads(self._extract_json_text(raw_text))
             if not isinstance(parsed, list):
@@ -1220,18 +1235,30 @@ class OpenTHULangGraphAgent:
                 "planned_skill": planned_skill,
             }
             user_content = json.dumps(payload, ensure_ascii=False)
-            try:
-                response = client.responses.create(
-                    model=self.llm.model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    max_output_tokens=250,
-                    temperature=0.0,
-                )
-                raw_text = response.output_text.strip()
-            except Exception:
+            if not self.llm.base_url:
+                try:
+                    response = client.responses.create(
+                        model=self.llm.model,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_output_tokens=250,
+                        temperature=0.0,
+                    )
+                    raw_text = response.output_text.strip()
+                except Exception:
+                    completion = client.chat.completions.create(
+                        model=self.llm.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_tokens=250,
+                        temperature=0.0,
+                    )
+                    raw_text = (completion.choices[0].message.content or "").strip()
+            else:
                 completion = client.chat.completions.create(
                     model=self.llm.model,
                     messages=[
