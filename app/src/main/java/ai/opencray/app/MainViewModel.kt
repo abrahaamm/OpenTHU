@@ -11,6 +11,7 @@ import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
+import ai.opencray.app.runtime.CalendarPermissionDelegate
 import ai.opencray.app.runtime.OpenCrayRuntime
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -107,6 +108,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun approvePendingActions() {
     runtime.approvePendingActions()
     selectedDestination = AppDestination.Safety
+  }
+
+  fun setCalendarPermissionDelegate(delegate: CalendarPermissionDelegate?) {
+    runtime.setCalendarPermissionDelegate(delegate)
+  }
+
+  fun notifyCalendarPermissionGranted() {
+    runtime.notifyCalendarPermissionGranted()
   }
 }
 

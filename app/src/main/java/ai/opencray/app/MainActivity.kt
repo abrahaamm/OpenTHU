@@ -61,6 +61,15 @@ class MainActivity : AppCompatActivity() {
     setContentView(R.layout.activity_main)
     viewModel = ViewModelProvider(this)[MainViewModel::class.java]
 
+    // Allow the runtime (background threads) to request calendar permissions via the Activity.
+    viewModel.setCalendarPermissionDelegate {
+      ActivityCompat.requestPermissions(
+        this,
+        arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+        CALENDAR_PERMISSION_REQUEST,
+      )
+    }
+
     ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { view, insets ->
       val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
       view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
@@ -317,6 +326,7 @@ class MainActivity : AppCompatActivity() {
       pendingCalendarActionId?.let { actionId ->
         viewModel.executeAction(actionId)
       }
+      viewModel.notifyCalendarPermissionGranted()
       Toast.makeText(this, "日历权限已授予。", Toast.LENGTH_SHORT).show()
     } else {
       Toast.makeText(this, "未授予日历权限，无法执行日历操作。", Toast.LENGTH_SHORT).show()

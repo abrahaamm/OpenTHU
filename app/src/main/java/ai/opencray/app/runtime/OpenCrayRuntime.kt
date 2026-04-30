@@ -1,7 +1,10 @@
 package ai.opencray.app.runtime
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import ai.opencray.app.agent.ActionPlanner
 import ai.opencray.app.agent.TaskReplanner
 import ai.opencray.app.bridge.PythonSkillBridgeExecutor
@@ -28,16 +31,25 @@ import java.io.File
 import kotlin.concurrent.thread
 import java.util.UUID
 
+/**
+ * Delegate that allows the runtime to request Android runtime permissions from an Activity.
+ * Set this from MainActivity via [OpenCrayRuntime.setCalendarPermissionDelegate].
+ */
+fun interface CalendarPermissionDelegate {
+  fun requestCalendarPermissions()
+}
+
 class OpenCrayRuntime(
   appContext: Context,
   private val runtimeRepository: RuntimeRepository,
   private val chatRepository: ChatRepository,
 ) {
+  private val appContext: Context = appContext.applicationContext
   private val actionPlanner = ActionPlanner()
   private val safetyAuditor = SafetyAuditor()
   private val memoryManager = MemoryManager()
   private val taskReplanner = TaskReplanner()
-  private val actionExecutor = ActionExecutor(appContext.applicationContext)
+  private val actionExecutor = ActionExecutor(this.appContext)
   private val pythonSkillBridgeExecutor = PythonSkillBridgeExecutor(actionExecutor)
   private val gatewayClient = AgentCoreHttpClient()
   private val deviceId =
@@ -48,10 +60,33 @@ class OpenCrayRuntime(
 
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
+  @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
+  /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
+  @Volatile private var pendingPermissionCallback: (() -> Unit)? = null
 
   fun snapshot(): RuntimeSnapshot = runtimeRepository.getSnapshot()
 
   fun chatMessages(): List<ChatMessage> = chatRepository.getMessages()
+
+  /**
+   * Set a delegate so the runtime can request calendar permissions from the Activity context.
+   * Call this from MainActivity.onCreate / onStart.
+   */
+  fun setCalendarPermissionDelegate(delegate: CalendarPermissionDelegate?) {
+    calendarPermissionDelegate = delegate
+  }
+
+  /**
+   * Call this from MainActivity.onRequestPermissionsResult when READ/WRITE_CALENDAR is granted.
+   * Resumes any action that was deferred pending the permission grant.
+   */
+  fun notifyCalendarPermissionGranted() {
+    val callback = pendingPermissionCallback
+    pendingPermissionCallback = null
+    if (callback != null) {
+      thread(name = "opencray-permission-retry", isDaemon = true) { callback() }
+    }
+  }
 
   fun boot() {
     runtimeRepository.markRuntimeBooted()
@@ -428,6 +463,31 @@ class OpenCrayRuntime(
     )
 
     val goal = snapshot().tasks.firstOrNull { it.id == task.id }?.goal ?: "Server dispatched task"
+
+    // If this skill needs calendar permission, request it and defer execution.
+    if (requiresCalendarPermission(action) && !hasCalendarPermissions()) {
+      val delegate = calendarPermissionDelegate
+      if (delegate != null) {
+        pendingPermissionCallback = { executeDispatchedSkill(dispatch) }
+        runtimeRepository.appendEvent(
+          "Calendar permission required for ${action.id}. Requesting from user."
+        )
+        delegate.requestCalendarPermissions()
+      } else {
+        applyExecutionReport(
+          task = task,
+          action = action,
+          report = ActionExecutionReport(
+            success = false,
+            message = "Missing calendar permission. Please grant READ_CALENDAR and WRITE_CALENDAR.",
+            recoverable = false,
+          ),
+          submitGatewayResult = true,
+        )
+      }
+      return
+    }
+
     val report = actionExecutor.execute(action, goal)
     applyExecutionReport(task = task, action = action, report = report, submitGatewayResult = true)
   }
@@ -455,7 +515,42 @@ class OpenCrayRuntime(
       return
     }
 
-    targetActions.forEach { action ->
+    // Partition: defer calendar actions that still need runtime permission.
+    val calendarDeferred = if (!hasCalendarPermissions()) {
+      targetActions.filter { requiresCalendarPermission(it) }
+    } else emptyList()
+
+    if (calendarDeferred.isNotEmpty()) {
+      val deferredIds = calendarDeferred.map { it.id }.toSet()
+      val delegate = calendarPermissionDelegate
+      if (delegate != null) {
+        pendingPermissionCallback = {
+          runActionsLocally(actionIds = deferredIds, submitGatewayResult = submitGatewayResult)
+        }
+        runtimeRepository.appendEvent(
+          "Calendar permission required for $deferredIds. Requesting from user."
+        )
+        delegate.requestCalendarPermissions()
+      } else {
+        calendarDeferred.forEach { action ->
+          applyExecutionReport(
+            task = latestTask,
+            action = action,
+            report = ActionExecutionReport(
+              success = false,
+              message = "Missing calendar permission. Please grant READ_CALENDAR and WRITE_CALENDAR.",
+              recoverable = false,
+            ),
+            submitGatewayResult = submitGatewayResult,
+          )
+        }
+      }
+    }
+
+    val executableActions = targetActions - calendarDeferred.toSet()
+    if (executableActions.isEmpty()) return
+
+    executableActions.forEach { action ->
       val report = actionExecutor.execute(action, latestTask.goal)
       applyExecutionReport(task = latestTask, action = action, report = report, submitGatewayResult = submitGatewayResult)
 
@@ -674,6 +769,21 @@ class OpenCrayRuntime(
     } else {
       left.id == right.id
     }
+  }
+
+  private fun requiresCalendarPermission(action: SystemAction): Boolean =
+    action.id.substringBefore("#") in setOf(
+      "create_calendar_event",
+      "detect_calendar_conflicts",
+      "delete_calendar_event",
+    )
+
+  private fun hasCalendarPermissions(): Boolean {
+    val read = ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALENDAR) ==
+      PackageManager.PERMISSION_GRANTED
+    val write = ContextCompat.checkSelfPermission(appContext, Manifest.permission.WRITE_CALENDAR) ==
+      PackageManager.PERMISSION_GRANTED
+    return read && write
   }
 
   fun executeSkillInvocationFromPython(invocationJson: String): String {
