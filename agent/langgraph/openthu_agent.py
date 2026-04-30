@@ -151,6 +151,9 @@ class RequirementLLM:
             entities.append("assignments")
         if any(token in lower for token in ["课程", "课表", "上课", "course", "schedule"]):
             entities.append("courses")
+        if any(token in lower for token in ["课程信息", "course info", "所有课程", "全部课程", "本学期课程",
+                                             "课程详情", "课程资料", "course_info"]):
+            entities.append("course_info")
         if any(token in lower for token in ["通知", "公告", "notice", "消息", "门户"]):
             entities.append("notices")
         if any(token in lower for token in ["文件", "课件", "资料", "file"]):
@@ -1062,11 +1065,22 @@ class OpenTHULangGraphAgent:
                 "获取教务日历事件",
             )
 
-        if "courses" in entities or "assignments" in entities or "notices" in entities or "files" in entities:
+        if "courses" in entities or "assignments" in entities or "notices" in entities or "files" in entities or "course_info" in entities:
             course_args: dict[str, Any] = {}
             if semester_id:
                 course_args["semester_id"] = semester_id
             append_skill("get_courses", course_args, "获取课程上下文，供后续技能复用")
+
+        if "course_info" in entities:
+            # Full course information pipeline: semesters -> courses -> notices + files + assignments
+            if not any(item["skill_name"] == "get_semesters" for item in plan):
+                append_skill("get_semesters", {}, "获取学期列表确认当前学期")
+            if not any(item["skill_name"] == "get_user_info" for item in plan):
+                append_skill("get_user_info", {}, "获取学生个人信息")
+            # notices/files/assignments will use course_ids populated by get_courses result
+            append_skill("get_notices", {}, "获取本学期所有课程通知")
+            append_skill("get_files", {}, "获取本学期所有课程文件")
+            append_skill("get_assignments", {}, "获取本学期所有课程作业与 DDL")
 
         if "assignments" in entities:
             append_skill("get_assignments", {}, "读取本学期作业与 DDL")

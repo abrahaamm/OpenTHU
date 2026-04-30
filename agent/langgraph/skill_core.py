@@ -9,6 +9,10 @@ try:
 except ImportError:
     from calendar_handlers import register_calendar_handlers
 
+try:
+        from .course_info_handlers import register_course_info_handlers
+except ImportError:
+        from course_info_handlers import register_course_info_handlers
 
 @dataclass
 class SkillSpec:
@@ -302,4 +306,5 @@ def build_default_registry() -> SkillRegistry:
     except ImportError:
         pass
     register_calendar_handlers(registry)
+    register_course_info_handlers(registry)
     return registry
