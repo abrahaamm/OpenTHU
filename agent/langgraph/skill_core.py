@@ -6,8 +6,10 @@ from typing import Any, Protocol
 
 try:
     from .calendar_handlers import register_calendar_handlers
+    from .homework_handlers import register_homework_handlers
 except ImportError:
     from calendar_handlers import register_calendar_handlers
+    from homework_handlers import register_homework_handlers
 
 
 @dataclass
@@ -168,6 +170,111 @@ def build_default_registry() -> SkillRegistry:
             args_schema={"course_ids": "list[string]"},
         ),
         SkillSpec(
+            "crawl_course_homeworks",
+            "Crawl all homework records for selected courses",
+            "data",
+            "low",
+            False,
+            session_required=True,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "semester_id": {"type": "string"},
+                    "course_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "include_submitted": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "crawl_unsubmitted_homeworks",
+            "Crawl unsubmitted homework records for selected courses",
+            "data",
+            "low",
+            False,
+            session_required=True,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "semester_id": {"type": "string"},
+                    "course_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "include_overdue": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "upload_homework_attachment",
+            "Upload one attachment into a homework submission window",
+            "action",
+            "medium",
+            True,
+            session_required=True,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "homework_id": {"type": "string"},
+                    "file_path": {"type": "string"},
+                    "file_uri": {"type": "string"},
+                    "file_name": {"type": "string"},
+                    "overwrite_existing": {"type": "boolean"},
+                },
+                "required": ["homework_id"],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "submit_homework",
+            "Submit homework content and/or uploaded files",
+            "action",
+            "high",
+            True,
+            session_required=True,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "homework_id": {"type": "string"},
+                    "submission_text": {"type": "string"},
+                    "attachment_tokens": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "local_file_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "confirm_submit": {"type": "boolean"},
+                },
+                "required": ["homework_id", "confirm_submit"],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "preview_homework_attachments",
+            "Preview attachment entries in a homework submission window",
+            "data",
+            "low",
+            False,
+            session_required=True,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "homework_id": {"type": "string"},
+                    "include_feedback_attachments": {"type": "boolean"},
+                },
+                "required": ["homework_id"],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
             "get_academic_calendar",
             "Fetch academic calendar events",
             "data",
@@ -302,4 +409,5 @@ def build_default_registry() -> SkillRegistry:
     except ImportError:
         pass
     register_calendar_handlers(registry)
+    register_homework_handlers(registry)
     return registry

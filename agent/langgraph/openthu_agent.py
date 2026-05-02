@@ -149,6 +149,12 @@ class RequirementLLM:
 
         if any(token in lower for token in ["作业", "ddl", "deadline", "assignment", "homework"]):
             entities.append("assignments")
+        if any(token in lower for token in ["未提交作业", "未交作业", "unsubmitted homework", "pending homework"]):
+            entities.append("homework_unsubmitted")
+        if any(token in lower for token in ["提交作业", "上传作业", "submit homework", "upload homework", "交作业"]):
+            entities.append("homework_submit")
+        if any(token in lower for token in ["作业附件", "附件预览", "preview attachment", "homework attachment", "查看附件"]):
+            entities.append("homework_attachment")
         if any(token in lower for token in ["课程", "课表", "上课", "course", "schedule"]):
             entities.append("courses")
         if any(token in lower for token in ["通知", "公告", "notice", "消息", "门户"]):
@@ -1062,7 +1068,15 @@ class OpenTHULangGraphAgent:
                 "获取教务日历事件",
             )
 
-        if "courses" in entities or "assignments" in entities or "notices" in entities or "files" in entities:
+        if (
+            "courses" in entities
+            or "assignments" in entities
+            or "notices" in entities
+            or "files" in entities
+            or "homework_unsubmitted" in entities
+            or "homework_submit" in entities
+            or "homework_attachment" in entities
+        ):
             course_args: dict[str, Any] = {}
             if semester_id:
                 course_args["semester_id"] = semester_id
@@ -1070,6 +1084,42 @@ class OpenTHULangGraphAgent:
 
         if "assignments" in entities:
             append_skill("get_assignments", {}, "读取本学期作业与 DDL")
+            append_skill(
+                "crawl_course_homeworks",
+                {"semester_id": semester_id} if semester_id else {},
+                "抓取所选课程的全部作业记录",
+            )
+        if "homework_unsubmitted" in entities:
+            append_skill(
+                "crawl_unsubmitted_homeworks",
+                {"semester_id": semester_id, "include_overdue": True} if semester_id else {"include_overdue": True},
+                "抓取所选课程中未提交的作业",
+            )
+        if "homework_attachment" in entities:
+            append_skill(
+                "preview_homework_attachments",
+                {"homework_id": "<homework_id>", "include_feedback_attachments": True},
+                "读取作业提交窗口中的附件信息",
+            )
+        if "homework_submit" in entities:
+            append_skill(
+                "upload_homework_attachment",
+                {
+                    "homework_id": "<homework_id>",
+                    "file_path": "<local_file_path>",
+                    "overwrite_existing": False,
+                },
+                "上传待提交附件到作业提交窗口",
+            )
+            append_skill(
+                "submit_homework",
+                {
+                    "homework_id": "<homework_id>",
+                    "submission_text": objective[:120],
+                    "confirm_submit": True,
+                },
+                "提交作业内容与附件",
+            )
         if "notices" in entities:
             append_skill("get_notices", {}, "读取课程通知与公告")
         if "files" in entities:
@@ -1081,7 +1131,7 @@ class OpenTHULangGraphAgent:
         if "courses" in entities and not any(item["skill_name"] == "get_courses" for item in plan):
             append_skill("get_courses", {"semester_id": semester_id} if semester_id else {}, "获取课程列表")
 
-        if any(entity in entities for entity in {"assignments", "notices", "files", "activities", "courses", "search"}):
+        if any(entity in entities for entity in {"assignments", "homework_unsubmitted", "homework_submit", "homework_attachment", "notices", "files", "activities", "courses", "search"}):
             append_skill(
                 "show_summary",
                 {
@@ -1198,7 +1248,10 @@ class OpenTHULangGraphAgent:
 
         if skill_name == "delete_calendar_event":
             return "high", "calendar deletion is destructive"
-
+        if skill_name == "submit_homework":
+            return "high", "homework submission is an irreversible action"
+        if skill_name == "upload_homework_attachment":
+            return "medium", "homework upload mutates submission draft"
         if skill_name in {"create_reminder", "create_calendar_event"}:
             if any(token in args_text for token in ["delete_conflicts", "allow_high_risk_delete", "replace", "remove existing"]):
                 return "high", "calendar write may delete existing conflicts"

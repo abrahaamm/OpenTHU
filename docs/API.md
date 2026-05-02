@@ -782,3 +782,101 @@ Skill 调用状态：
 - Skill 接口版本通过 `skill_version` 字段追踪
 - 字段新增向后兼容
 - 字段删除或语义变更必须在 RD 中标注，并同步更新 Workflow 调用侧
+
+## 10. Homework Skills（新增）
+
+以下为 homework 场景新增 skill（Python 决策，Kotlin 执行）：
+
+### 10.1 `crawl_course_homeworks`
+
+用途：抓取学生所选课程的全部作业。
+
+入参：
+
+```json
+{
+  "semester_id": "2025-2026-2",
+  "course_ids": ["course_a", "course_b"],
+  "include_submitted": true
+}
+```
+
+### 10.2 `crawl_unsubmitted_homeworks`
+
+用途：抓取学生所选课程中未提交作业。
+
+入参：
+
+```json
+{
+  "semester_id": "2025-2026-2",
+  "course_ids": ["course_a", "course_b"],
+  "include_overdue": true
+}
+```
+
+### 10.3 `upload_homework_attachment`
+
+用途：上传待提交附件到指定作业提交窗口。
+
+入参：
+
+```json
+{
+  "homework_id": "hw_123",
+  "file_path": "/sdcard/Download/answer.pdf",
+  "file_uri": "",
+  "file_name": "answer.pdf",
+  "overwrite_existing": false
+}
+```
+
+返回示例：
+
+```json
+{
+  "status": "uploaded",
+  "attachment_token": "att_upload_1"
+}
+```
+
+### 10.4 `submit_homework`
+
+用途：提交作业文本/附件。高风险，必须显式确认。
+
+入参：
+
+```json
+{
+  "homework_id": "hw_123",
+  "submission_text": "my answer",
+  "attachment_tokens": ["att_upload_1"],
+  "local_file_paths": [],
+  "confirm_submit": true
+}
+```
+
+规则：
+
+- `confirm_submit=false` 时返回 `APPROVAL_REQUIRED`
+- `submission_text`、`attachment_tokens`、`local_file_paths` 至少提供一种
+
+### 10.5 `preview_homework_attachments`
+
+用途：读取/预览作业提交窗口附件列表。
+
+入参：
+
+```json
+{
+  "homework_id": "hw_123",
+  "include_feedback_attachments": true
+}
+```
+
+### 10.6 桥接环境变量
+
+- `OPENTHU_HOMEWORK_BRIDGE_MODE=json_file`
+- `OPENTHU_HOMEWORK_BRIDGE_REQUEST_FILE`
+- `OPENTHU_HOMEWORK_BRIDGE_RESPONSE_FILE`
+- `OPENTHU_HOMEWORK_BRIDGE_TIMEOUT_SEC`

@@ -150,6 +150,16 @@ These skills are registered with strict `args_json_schema` in `skill_core.py`.
 Calendar handlers perform semantic validation and then dispatch invocation payloads through a Kotlin bridge.
 Android-side execution is handled by Kotlin runtime (`ActionExecutor`) under app permissions.
 
+Homework skills are also wired with concrete handlers:
+
+- `crawl_course_homeworks`
+- `crawl_unsubmitted_homeworks`
+- `upload_homework_attachment`
+- `submit_homework`
+- `preview_homework_attachments`
+
+Homework handlers validate semantic args and then dispatch through the same Python->Kotlin bridge contract.
+
 Environment variables:
 
 - `OPENTHU_CALENDAR_BRIDGE_MODE` (`json_file` to enable file bridge)
@@ -166,3 +176,11 @@ python agent/langgraph/run_calendar_skill_tests.py --mode mock
 ```
 
 ADB-based calendar test mode is removed from the current runtime path.
+
+## Homework Skill Tests
+
+Run homework logic validation with a mock Kotlin bridge:
+
+```bash
+python agent/langgraph/run_homework_skill_tests.py --mode mock
+```
