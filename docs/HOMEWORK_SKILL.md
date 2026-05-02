@@ -1,102 +1,156 @@
-# Homework Skill 技术文档
+﻿# HOMEWORK_SKILL
 
 更新时间：2026-05-02  
 状态：Active
 
-## 1. 目标
+## 1. 目标与边界
 
-Homework Skill 为 Agent 提供作业场景的可执行工具链，覆盖：
+Homework Skill 的目标是：
+1. 拉取课程作业列表（全部）
+2. 拉取课程作业列表（未提交）
+3. 预览作业附件信息
+4. 上传作业附件
+5. 提交作业
 
-1. 抓取所选课程全部作业  
-2. 抓取所选课程未提交作业  
-3. 上传作业附件  
-4. 提交作业  
-5. 预览作业提交窗口附件
+当前架构中，Python 负责规划与参数校验，Kotlin 负责设备侧真实执行（网络请求、打开页面、文件选择器、结果回传）。
 
-当前架构与 Calendar Skill 一致：  
-Python 负责规划与参数校验，具体执行通过桥接交给 Kotlin 运行时。
+## 2. 端到端调用链
 
-## 2. 技能清单
+1. Agent-Core/LangGraph 在 `plan_skills` 产出 homework skill 调用。
+2. `SkillManager` 基于 `args_json_schema` 做参数校验与归一化。
+3. Python handler（`homework_handlers.py`）做语义校验后，把 invocation 转发给 Kotlin bridge。
+4. Kotlin `PythonSkillBridgeExecutor` 将 JSON 映射为 `SystemAction`。
+5. Kotlin `ActionExecutor` 执行真实动作（Learn 接口、页面打开、文件上传/提交）。
+6. Kotlin 将执行结果标准化为 `{code, data}` 返回 Python，再由上层进入审计/回调。
 
-在 `agent/langgraph/skill_core.py` 注册了以下 SkillSpec（均带 `args_json_schema`）：
+## 3. Skill 定义（Python）
 
-1. `crawl_course_homeworks`（low）
-2. `crawl_unsubmitted_homeworks`（low）
-3. `upload_homework_attachment`（medium, requires_approval）
-4. `submit_homework`（high, requires_approval）
-5. `preview_homework_attachments`（low）
+定义文件：`agent/langgraph/skill_core.py`
 
-## 3. Python 侧执行逻辑
+已注册 skill：
+1. `crawl_course_homeworks`
+2. `crawl_unsubmitted_homeworks`
+3. `preview_homework_attachments`
+4. `upload_homework_attachment`
+5. `submit_homework`
 
-实现文件：`agent/langgraph/homework_handlers.py`
+这些 skill 的 `args_json_schema` 已接入 `SkillManager`，用于 planner 阶段和执行阶段双重校验。
 
-核心结构：
+## 4. Kotlin Section（实现与改动说明）
 
-1. `HomeworkSkillBridge`：跨语言桥接协议
-2. `JsonFileHomeworkBridge`：文件桥接实现（Python 写请求，等待 Kotlin 回包）
-3. `*_Handler`：每个工具的语义校验 + 桥接分发
+本节是 Homework Skill 在 Android 端可执行的核心。
 
-语义校验要点：
+### 4.1 改动文件总览
 
-1. `upload_homework_attachment` 要求 `homework_id` 且 `file_path`/`file_uri` 至少一个
-2. `submit_homework` 要求 `confirm_submit=true`，否则返回 `APPROVAL_REQUIRED`
-3. `submit_homework` 要求提交内容至少有一种：`submission_text` / `attachment_tokens` / `local_file_paths`
-4. `preview_homework_attachments` 要求 `homework_id`
+1. `app/src/main/java/ai/opencray/app/execution/ActionExecutor.kt`
+2. `app/src/main/java/ai/opencray/app/bridge/PythonSkillBridgeExecutor.kt`
+3. `app/src/main/java/ai/opencray/app/runtime/OpenCrayRuntime.kt`
+4. `app/src/test/java/ai/opencray/app/bridge/PythonSkillBridgeExecutorTest.kt`
 
-## 4. Planner 适配
+### 4.2 `ActionExecutor.kt`：执行层
 
-`agent/langgraph/openthu_agent.py` 已补充 fallback 规划：
+新增/补齐的 action 路由：
+1. `crawl_course_homeworks`
+2. `crawl_unsubmitted_homeworks`
+3. `preview_homework_attachments`
+4. `upload_homework_attachment`
+5. `submit_homework`
 
-1. 新增实体识别：`homework_unsubmitted` / `homework_submit` / `homework_attachment`
-2. 在作业相关意图下自动规划 homework 工具链
-3. 风险规则中新增：
-   - `submit_homework` => high
-   - `upload_homework_attachment` => medium
+主要实现逻辑：
+1. 认证解析：从 action 参数或 payload 中读取 `session_cookie`（必须），可选 `csrf_token`、`learn_base_url`。
+2. 作业抓取：按课程调用 Learn 接口（未交/已交/已批改列表），抽取并结构化返回作业记录。
+3. 附件预览：请求作业详情接口解析附件，随后打开作业详情页。
+4. 附件上传：multipart 上传到作业提交接口；成功后返回 `attachment_token` 并打开作业页。
+5. 作业提交：要求 `confirm_submit=true`；支持文本、文件路径/URI、`local_file_paths`、`attachment_tokens`；提交后打开作业页。
 
-## 5. 桥接配置
+新增的重要约束与错误码触发点：
+1. 缺少 `session_cookie` -> `reason=missing_auth`
+2. 缺少 `homework_id` -> `reason=missing_homework_id`
+3. 缺少内容（文本/附件均无）-> `reason=missing_submission_content`
+4. 未确认提交 -> `reason=confirm_submit_required`
 
-环境变量：
+“上传、预览时给出窗口或页面”的实现：
+1. 预览/上传/提交结束后统一 `ACTION_VIEW` 打开作业详情 URL。
+2. 上传若未提供文件，主动拉起 `ACTION_OPEN_DOCUMENT` 文件选择器，并同时打开作业页面。
 
-1. `OPENTHU_HOMEWORK_BRIDGE_MODE`：`json_file` 启用文件桥接
-2. `OPENTHU_HOMEWORK_BRIDGE_REQUEST_FILE`：请求文件路径
-3. `OPENTHU_HOMEWORK_BRIDGE_RESPONSE_FILE`：响应文件路径
-4. `OPENTHU_HOMEWORK_BRIDGE_TIMEOUT_SEC`：超时（默认 12 秒）
+### 4.3 `PythonSkillBridgeExecutor.kt`：桥接层
 
-桥接请求包（Python -> Kotlin）与 Calendar 保持一致：
+改动目的：确保 Python<->Kotlin 返回契约覆盖 homework skill，不再只偏向 calendar。
 
-```json
-{
-  "type": "skill_invocation",
-  "sent_at": "2026-05-02T08:00:00Z",
-  "invocation": {
-    "skill_name": "submit_homework",
-    "request_id": "req_xxx",
-    "task_id": "task_xxx",
-    "args": {
-      "homework_id": "hw_123",
-      "submission_text": "answer",
-      "confirm_submit": true
-    }
-  }
-}
-```
+关键改动：
+1. `mapCode(...)` 增加 homework 原因映射：
+- `confirm_submit_required` -> `APPROVAL_REQUIRED`
+- `missing_auth/missing_homework_id/missing_course_ids/missing_submission_content` -> `INVALID_PARAM`
+2. `buildData(...)` 新增 homework 分支：
+- `crawl_course_homeworks`
+- `crawl_unsubmitted_homeworks`
+- `preview_homework_attachments`
+- `upload_homework_attachment`
+- `submit_homework`
+3. 新增 `putReportData(...)`：将 `ActionExecutionReport.data` 透传为 JSON，避免信息丢失。
 
-## 6. 测试
+作用：
+1. Python 侧拿到稳定 `code`（OK/APPROVAL_REQUIRED/INVALID_PARAM/...）。
+2. Python 侧拿到完整结构化 `data`（count/homeworks/attachments/homework_id/opened_url 等）。
 
-新增测试脚本：`agent/langgraph/run_homework_skill_tests.py`
+### 4.4 `OpenCrayRuntime.kt`：网关与回调层
 
-运行：
+改动 1：扩展设备能力上报（`supportedGatewayCapabilities`）
+- 新增 homework 五个能力，保证网关能向设备下发这些 skill。
+
+改动 2：扩展结果码映射（`mapGatewayResultCode`）
+- 将 homework 的 `reason` 映射到网关侧统一 code，避免回调误判。
+
+作用：
+1. 服务器规划出的 homework skill 能被 Android 设备声明支持并被分发。
+2. 执行结果可以按统一协议回传 Agent-Core。
+
+### 4.5 `PythonSkillBridgeExecutorTest.kt`：单元测试覆盖
+
+新增 homework 方向测试：
+1. `submit_homework` 未确认 -> `APPROVAL_REQUIRED`
+2. `crawl_course_homeworks` 结构化数据透传
+3. `upload_homework_attachment` 缺失认证 -> `INVALID_PARAM`
+
+作用：
+1. 保证 JSON -> `SystemAction` -> `SkillResult` 的映射在 homework 场景稳定。
+2. 防止 bridge 回归只支持 calendar 的问题。
+
+## 5. 真机可用性要求
+
+要在真机可用，必须满足：
+1. App 已有 `INTERNET` 权限（已在 Manifest 中声明）。
+2. 设备网络可访问 `learn.tsinghua.edu.cn`。
+3. 调用参数必须携带有效 `session_cookie`（可选 `csrf_token`）。
+4. 上传本地文件时，使用可读路径或 `content://` URI。
+
+## 6. 建议测试方法（真机）
+
+### 6.1 Kotlin 单元测试（桥接映射）
+
+在项目根目录执行：
 
 ```bash
-python agent/langgraph/run_homework_skill_tests.py --mode mock
+./gradlew :app:testDebugUnitTest --tests ai.opencray.app.bridge.PythonSkillBridgeExecutorTest
 ```
 
-覆盖点：
+Windows PowerShell：
 
-1. skill 注册绑定
-2. schema 严格校验（未知字段拒绝）
-3. 抓取全部/未提交作业
-4. 上传参数校验
-5. 提交确认门禁
-6. 上传后提交
-7. 附件预览
+```powershell
+.\gradlew.bat :app:testDebugUnitTest --tests ai.opencray.app.bridge.PythonSkillBridgeExecutorTest
+```
+
+### 6.2 真机手工链路测试（不依赖在线 agent）
+
+使用预置 invocation（或本地网关）按顺序验证：
+1. `crawl_course_homeworks`：检查返回 `count/homeworks`。
+2. `preview_homework_attachments`：检查是否打开作业页面且返回附件列表。
+3. `upload_homework_attachment`：检查上传成功并返回 `attachment_token`。
+4. `submit_homework`：传 `confirm_submit=true`，检查提交成功并打开页面。
+
+若 `submit_homework` 不带 `confirm_submit=true`，应返回 `APPROVAL_REQUIRED`，这是预期的高风险保护行为。
+
+## 7. 已知限制
+
+1. `attachment_tokens` 的后端字段依赖 Learn 实际接口行为，当前已透传 `fjids`，如后端字段变更需同步。
+2. 若 session 过期，Homework 相关 skill 会统一失败为认证类错误，需要上层先刷新登录态。

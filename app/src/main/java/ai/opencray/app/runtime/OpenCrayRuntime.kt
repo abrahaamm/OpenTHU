@@ -1,4 +1,4 @@
-package ai.opencray.app.runtime
+﻿package ai.opencray.app.runtime
 
 import android.Manifest
 import android.content.Context
@@ -115,14 +115,14 @@ class OpenCrayRuntime(
         gatewayRegistered = true
         runtimeRepository.updateConnectionStatus("Connected to $host:$port")
         runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
-        chatRepository.appendMessage(ChatRole.System, "Agent-Core 连接成功，后续将走服务端任务分发。")
+        chatRepository.appendMessage(ChatRole.System, "Agent-Core 杩炴帴鎴愬姛锛屽悗缁皢璧版湇鍔＄浠诲姟鍒嗗彂銆?)
       } else {
         gatewayRegistered = false
         runtimeRepository.updateConnectionStatus("Gateway connection failed")
         runtimeRepository.appendEvent("Gateway register failed: ${result.code} ${result.message}")
         chatRepository.appendMessage(
           ChatRole.System,
-          "Agent-Core 连接失败（${result.code}），将继续使用本地链路。",
+          "Agent-Core 杩炴帴澶辫触锛?{result.code}锛夛紝灏嗙户缁娇鐢ㄦ湰鍦伴摼璺€?,
         )
       }
     }
@@ -234,6 +234,11 @@ class OpenCrayRuntime(
       "create_calendar_event",
       "detect_calendar_conflicts",
       "delete_calendar_event",
+      "crawl_course_homeworks",
+      "crawl_unsubmitted_homeworks",
+      "preview_homework_attachments",
+      "upload_homework_attachment",
+      "submit_homework",
       "open_url",
     )
 
@@ -261,7 +266,7 @@ class OpenCrayRuntime(
         gatewayRegistered = false
         runtimeRepository.updateConnectionStatus("Gateway planning failed")
         runtimeRepository.appendEvent("Gateway plan failed: ${result.code} ${result.message}")
-        chatRepository.appendMessage(ChatRole.System, "服务端规划失败，回落到本地规划。")
+        chatRepository.appendMessage(ChatRole.System, "鏈嶅姟绔鍒掑け璐ワ紝鍥炶惤鍒版湰鍦拌鍒掋€?)
         planGoalLocally(goal)
         return@thread
       }
@@ -325,7 +330,7 @@ class OpenCrayRuntime(
     )
     chatRepository.appendMessage(
       ChatRole.Assistant,
-      "服务端规划完成：${approvedActions.size} 个可执行动作，${blockedActions.size} 个被拦截动作。",
+      "鏈嶅姟绔鍒掑畬鎴愶細${approvedActions.size} 涓彲鎵ц鍔ㄤ綔锛?{blockedActions.size} 涓鎷︽埅鍔ㄤ綔銆?,
     )
   }
 
@@ -396,7 +401,7 @@ class OpenCrayRuntime(
 
     chatRepository.appendMessage(
       ChatRole.Assistant,
-      "已完成任务规划：${actionsWithReviewStatus.size} 个动作，${safetyRecords.count { it.status == "Awaiting approval" }} 个需确认。",
+      "宸插畬鎴愪换鍔¤鍒掞細${actionsWithReviewStatus.size} 涓姩浣滐紝${safetyRecords.count { it.status == "Awaiting approval" }} 涓渶纭銆?,
     )
   }
 
@@ -617,9 +622,9 @@ class OpenCrayRuntime(
     chatRepository.appendMessage(
       ChatRole.System,
       if (completed) {
-        "任务执行完成，可在 Safety 面板查看审计轨迹。"
+        "浠诲姟鎵ц瀹屾垚锛屽彲鍦?Safety 闈㈡澘鏌ョ湅瀹¤杞ㄨ抗銆?
       } else {
-        "任务部分完成，仍有待确认或待执行动作。"
+        "浠诲姟閮ㄥ垎瀹屾垚锛屼粛鏈夊緟纭鎴栧緟鎵ц鍔ㄤ綔銆?
       },
     )
   }
@@ -786,32 +791,45 @@ class OpenCrayRuntime(
 
     val actionId = action.id.substringBefore("#")
     val message = report.message
-    // Check structured data first for a precise reason code
-    val reason = report.data["reason"] as? String
-    if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
-    if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
+    val reason = (report.data["reason"] as? String)?.trim().orEmpty()
 
-    if (message.contains("confirm_delete=true", ignoreCase = true)) return "APPROVAL_REQUIRED"
-    if (actionId == "create_calendar_event" &&
-      (message.contains("skip_write / coexist / delete_conflicts", ignoreCase = true) ||
-        message.contains("请选择策略", ignoreCase = true))
+    if (
+      reason == "conflict_strategy_required" ||
+      reason == "allow_conflict_delete_not_set" ||
+      reason == "confirm_submit_required"
     ) {
       return "APPROVAL_REQUIRED"
     }
-    if (message.contains("Invalid", ignoreCase = true) ||
+    if (
+      message.contains("confirm_delete=true", ignoreCase = true) ||
+      message.contains("confirm_submit=true", ignoreCase = true)
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
+    if (
+      actionId == "create_calendar_event" &&
+      message.contains("skip_write / coexist / delete_conflicts", ignoreCase = true)
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
+
+    if (
+      reason == "missing_auth" ||
+      reason == "missing_homework_id" ||
+      reason == "missing_course_ids" ||
+      reason == "missing_submission_content" ||
+      message.contains("Invalid", ignoreCase = true) ||
       message.contains("Missing", ignoreCase = true) ||
       message.contains("requires event_id/event_ids", ignoreCase = true) ||
-      message.contains("requires explicit confirmation", ignoreCase = true) ||
-      message.contains("需要明确授权", ignoreCase = true) ||
-      message.contains("缺少", ignoreCase = true)
+      message.contains("requires explicit confirmation", ignoreCase = true)
     ) {
       return "INVALID_PARAM"
     }
-    if (message.contains("permission", ignoreCase = true) ||
-      message.contains("权限", ignoreCase = true)
-    ) {
+
+    if (message.contains("permission", ignoreCase = true)) {
       return "ACTION_NOT_ALLOWED"
     }
+
     return "SKILL_EXECUTION_FAILED"
   }
 
@@ -927,3 +945,4 @@ private fun SystemAction.toSafetyRecord(status: String): SafetyRecord =
     status = status,
     actionId = id,
   )
+

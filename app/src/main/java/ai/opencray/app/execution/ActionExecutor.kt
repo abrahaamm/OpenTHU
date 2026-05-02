@@ -11,6 +11,14 @@ import android.provider.AlarmClock
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
+import java.io.BufferedOutputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -18,6 +26,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.max
 import org.json.JSONArray
+import org.json.JSONObject
 
 data class ActionExecutionReport(
   val success: Boolean,
@@ -39,6 +48,24 @@ private data class CalendarEventBrief(
   val endMs: Long,
 )
 
+private data class HomeworkAttachment(
+  val token: String,
+  val fileName: String,
+  val downloadUrl: String = "",
+  val previewUrl: String = "",
+)
+
+private data class HomeworkRecord(
+  val homeworkId: String,
+  val studentHomeworkId: String,
+  val title: String,
+  val deadline: String,
+  val submitted: Boolean,
+  val courseId: String,
+  val courseName: String,
+  val detailUrl: String,
+)
+
 class ActionExecutor(
   private val appContext: Context,
 ) {
@@ -48,6 +75,11 @@ class ActionExecutor(
       "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
+      "crawl_course_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = false)
+      "crawl_unsubmitted_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = true)
+      "preview_homework_attachments" -> executePreviewHomeworkAttachments(action)
+      "upload_homework_attachment" -> executeUploadHomeworkAttachment(action)
+      "submit_homework" -> executeSubmitHomework(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
       "open_url" -> {
@@ -69,6 +101,351 @@ class ActionExecutor(
           message = "No-op fallback executed for ${action.id}.",
           recoverable = false,
         )
+    }
+  }
+
+  private fun executeCrawlCourseHomeworks(
+    action: SystemAction,
+    unsubmittedOnly: Boolean,
+  ): ActionExecutionReport {
+    val auth = resolveHomeworkAuth(action)
+    if (!auth.ok) {
+      return ActionExecutionReport(
+        success = false,
+        message = auth.message,
+        recoverable = false,
+        data = mapOf("reason" to "missing_auth"),
+      )
+    }
+    val baseUrl = auth.baseUrl
+    val cookie = auth.cookie
+    val csrf = auth.csrf
+    val courseIds = parseCsvOrJsonArray(action.params["course_ids"])
+    if (courseIds.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "course_ids is required for homework crawl.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_course_ids"),
+      )
+    }
+
+    val records = mutableListOf<HomeworkRecord>()
+    val endpointTypes = if (unsubmittedOnly) listOf("WJ") else listOf("WJ", "YJWG", "YPG")
+    val endpointMap =
+      mapOf(
+        "WJ" to "/b/wlxt/kczy/zy/student/zyListWj",
+        "YJWG" to "/b/wlxt/kczy/zy/student/zyListYjwg",
+        "YPG" to "/b/wlxt/kczy/zy/student/zyListYpg",
+      )
+
+    return runCatching {
+      courseIds.forEach { courseId ->
+        endpointTypes.forEach { endpointType ->
+          val endpoint = endpointMap[endpointType].orEmpty()
+          val raw =
+            postForm(
+              url = "$baseUrl$endpoint",
+              form = mapOf("wlkcid" to courseId),
+              cookie = cookie,
+              csrfToken = csrf,
+            )
+          val parsed = runCatching { JSONObject(raw) }.getOrNull()
+          val items = extractHomeworkRecords(parsed, courseId, endpointType, baseUrl)
+          records += items
+        }
+      }
+
+      val deduped = records.distinctBy { "${it.homeworkId}::${it.studentHomeworkId}" }.sortedBy { it.deadline }
+      val status = if (unsubmittedOnly) "unsubmitted_crawled" else "crawled"
+      ActionExecutionReport(
+        success = true,
+        message = "Homework crawl completed: ${deduped.size} item(s).",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to status,
+            "count" to deduped.size,
+            "homeworks" to deduped.map { it.toDataMap() },
+            "course_ids" to courseIds,
+          ),
+      )
+    }.getOrElse { throwable ->
+      ActionExecutionReport(
+        success = false,
+        message = "Homework crawl failed: ${throwable.message ?: "unknown"}",
+        recoverable = true,
+        data =
+          mapOf(
+            "reason" to "crawl_failed",
+            "exception" to (throwable.message ?: "unknown"),
+            "course_ids" to courseIds,
+          ),
+      )
+    }
+  }
+
+  private fun executePreviewHomeworkAttachments(action: SystemAction): ActionExecutionReport {
+    val auth = resolveHomeworkAuth(action)
+    if (!auth.ok) {
+      return ActionExecutionReport(
+        success = false,
+        message = auth.message,
+        recoverable = false,
+        data = mapOf("reason" to "missing_auth"),
+      )
+    }
+    val baseUrl = auth.baseUrl
+    val homeworkId = action.params["homework_id"]?.trim().orEmpty()
+    if (homeworkId.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "homework_id is required.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_homework_id"),
+      )
+    }
+
+    val detailUrl = "$baseUrl/b/wlxt/kczy/zy/student/detail"
+    return runCatching {
+      val raw =
+        postForm(
+          url = detailUrl,
+          form = mapOf("id" to homeworkId),
+          cookie = auth.cookie,
+          csrfToken = auth.csrf,
+        )
+      val parsed = runCatching { JSONObject(raw) }.getOrNull()
+      val attachments = extractAttachments(parsed, baseUrl)
+      val openUrl =
+        action.params["homework_detail_url"]?.trim().orEmpty().ifEmpty {
+          "$baseUrl/f/wlxt/kczy/zy/student/viewZy?zyid=$homeworkId"
+        }
+      openWebPage(openUrl)
+      ActionExecutionReport(
+        success = true,
+        message = "Homework attachment preview opened. Found ${attachments.size} attachment(s).",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "preview_ready",
+            "homework_id" to homeworkId,
+            "attachments" to attachments.map { it.toDataMap() },
+            "opened_url" to openUrl,
+          ),
+      )
+    }.getOrElse { throwable ->
+      ActionExecutionReport(
+        success = false,
+        message = "Preview homework attachments failed: ${throwable.message ?: "unknown"}",
+        recoverable = true,
+        data =
+          mapOf(
+            "reason" to "preview_failed",
+            "homework_id" to homeworkId,
+            "exception" to (throwable.message ?: "unknown"),
+          ),
+      )
+    }
+  }
+
+  private fun executeUploadHomeworkAttachment(action: SystemAction): ActionExecutionReport {
+    val auth = resolveHomeworkAuth(action)
+    if (!auth.ok) {
+      return ActionExecutionReport(
+        success = false,
+        message = auth.message,
+        recoverable = false,
+        data = mapOf("reason" to "missing_auth"),
+      )
+    }
+    val homeworkId = action.params["homework_id"]?.trim().orEmpty()
+    if (homeworkId.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "homework_id is required.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_homework_id"),
+      )
+    }
+    val fileRef = action.params["file_path"]?.trim().orEmpty()
+    val fileUri = action.params["file_uri"]?.trim().orEmpty()
+    if (fileRef.isEmpty() && fileUri.isEmpty()) {
+      // No file yet: open a page and document picker so user can pick a file on-device.
+      val pickerIntent =
+        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+          addCategory(Intent.CATEGORY_OPENABLE)
+          type = "*/*"
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+      launchIntent(pickerIntent, "Opened file picker for homework attachment.")
+      val openUrl =
+        action.params["homework_detail_url"]?.trim().orEmpty().ifEmpty {
+          "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$homeworkId"
+        }
+      openWebPage(openUrl)
+      return ActionExecutionReport(
+        success = false,
+        message = "No file provided. Opened file picker and homework page for manual selection.",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "awaiting_file_selection",
+            "homework_id" to homeworkId,
+            "opened_url" to openUrl,
+          ),
+      )
+    }
+
+    return runCatching {
+      val uploadUrl = "${auth.baseUrl}/b/wlxt/kczy/zy/student/tjzy"
+      val filePart = resolveFilePart(fileRef, fileUri, action.params["file_name"].orEmpty())
+      val textBody = action.params["submission_text"].orEmpty()
+      val responseBody =
+        postMultipart(
+          url = uploadUrl,
+          cookie = auth.cookie,
+          csrfToken = auth.csrf,
+          textParts =
+            mapOf(
+              "xszyid" to homeworkId,
+              "zynr" to textBody,
+              "isDeleted" to "0",
+            ),
+          filePart = filePart,
+        )
+      val token = "upload_${System.currentTimeMillis()}"
+      val openUrl =
+        action.params["homework_detail_url"]?.trim().orEmpty().ifEmpty {
+          "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$homeworkId"
+        }
+      openWebPage(openUrl)
+      ActionExecutionReport(
+        success = true,
+        message = "Homework attachment uploaded successfully.",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "uploaded",
+            "homework_id" to homeworkId,
+            "attachment_token" to token,
+            "file_name" to filePart.fileName,
+            "opened_url" to openUrl,
+            "upstream_response_excerpt" to responseBody.take(512),
+          ),
+      )
+    }.getOrElse { throwable ->
+      ActionExecutionReport(
+        success = false,
+        message = "Upload homework attachment failed: ${throwable.message ?: "unknown"}",
+        recoverable = true,
+        data =
+          mapOf(
+            "reason" to "upload_failed",
+            "homework_id" to homeworkId,
+            "exception" to (throwable.message ?: "unknown"),
+          ),
+      )
+    }
+  }
+
+  private fun executeSubmitHomework(action: SystemAction): ActionExecutionReport {
+    val confirmed = action.params["confirm_submit"]?.toBooleanStrictOrNull() ?: false
+    if (!confirmed) {
+      return ActionExecutionReport(
+        success = false,
+        message = "Submit blocked: confirm_submit=true is required for high-risk homework submission.",
+        recoverable = false,
+        data = mapOf("reason" to "confirm_submit_required"),
+      )
+    }
+    val auth = resolveHomeworkAuth(action)
+    if (!auth.ok) {
+      return ActionExecutionReport(
+        success = false,
+        message = auth.message,
+        recoverable = false,
+        data = mapOf("reason" to "missing_auth"),
+      )
+    }
+    val homeworkId = action.params["homework_id"]?.trim().orEmpty()
+    if (homeworkId.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "homework_id is required.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_homework_id"),
+      )
+    }
+
+    val submissionText = action.params["submission_text"].orEmpty()
+    var fileRef = action.params["file_path"]?.trim().orEmpty()
+    var fileUri = action.params["file_uri"]?.trim().orEmpty()
+    val localFilePaths = parseCsvOrJsonArray(action.params["local_file_paths"])
+    if (fileRef.isEmpty() && fileUri.isEmpty() && localFilePaths.isNotEmpty()) {
+      fileRef = localFilePaths.first()
+    }
+    val attachmentTokens = parseCsvOrJsonArray(action.params["attachment_tokens"])
+    val hasFile = fileRef.isNotEmpty() || fileUri.isNotEmpty()
+    if (submissionText.isBlank() && !hasFile && attachmentTokens.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "submit_homework requires submission_text or file_path/file_uri/local_file_paths or attachment_tokens.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_submission_content"),
+      )
+    }
+
+    return runCatching {
+      val submitUrl = "${auth.baseUrl}/b/wlxt/kczy/zy/student/tjzy"
+      val filePart = if (hasFile) resolveFilePart(fileRef, fileUri, action.params["file_name"].orEmpty()) else null
+      val attachmentTokenText = attachmentTokens.joinToString(",")
+      val responseBody =
+        postMultipart(
+          url = submitUrl,
+          cookie = auth.cookie,
+          csrfToken = auth.csrf,
+          textParts =
+            mapOf(
+              "xszyid" to homeworkId,
+              "zynr" to submissionText,
+              "fjids" to attachmentTokenText,
+              "isDeleted" to "0",
+            ),
+          filePart = filePart,
+        )
+      val openUrl =
+        action.params["homework_detail_url"]?.trim().orEmpty().ifEmpty {
+          "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$homeworkId"
+        }
+      openWebPage(openUrl)
+      ActionExecutionReport(
+        success = true,
+        message = "Homework submitted successfully.",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "submitted",
+            "homework_id" to homeworkId,
+            "submitted_at" to Instant.now().toString(),
+            "attachment_tokens" to attachmentTokens,
+            "local_file_paths" to localFilePaths,
+            "opened_url" to openUrl,
+            "upstream_response_excerpt" to responseBody.take(512),
+          ),
+      )
+    }.getOrElse { throwable ->
+      ActionExecutionReport(
+        success = false,
+        message = "Submit homework failed: ${throwable.message ?: "unknown"}",
+        recoverable = true,
+        data =
+          mapOf(
+            "reason" to "submit_failed",
+            "homework_id" to homeworkId,
+            "exception" to (throwable.message ?: "unknown"),
+          ),
+      )
     }
   }
 
@@ -548,6 +925,304 @@ class ActionExecutor(
   private fun parseSingleId(raw: String?): List<Long> {
     val parsed = raw?.trim()?.toLongOrNull() ?: return emptyList()
     return listOf(parsed)
+  }
+
+  private data class HomeworkAuth(
+    val ok: Boolean,
+    val message: String,
+    val baseUrl: String = "https://learn.tsinghua.edu.cn",
+    val cookie: String = "",
+    val csrf: String = "",
+  )
+
+  private data class MultipartFilePart(
+    val fileName: String,
+    val mimeType: String,
+    val bytes: ByteArray,
+  )
+
+  private fun resolveHomeworkAuth(action: SystemAction): HomeworkAuth {
+    val cookieFromParams = action.params["session_cookie"].orEmpty().trim()
+    val cookieFromPayload = action.payload?.get("session_cookie")?.toString()?.trim().orEmpty()
+    val cookie = cookieFromParams.ifEmpty { cookieFromPayload }
+    val baseUrl =
+      action.params["learn_base_url"]?.trim().orEmpty().ifEmpty {
+        action.payload?.get("learn_base_url")?.toString()?.trim().orEmpty()
+      }.ifEmpty { "https://learn.tsinghua.edu.cn" }
+    val csrf =
+      action.params["csrf_token"]?.trim().orEmpty().ifEmpty {
+        action.payload?.get("csrf_token")?.toString()?.trim().orEmpty()
+      }
+    if (cookie.isEmpty()) {
+      return HomeworkAuth(
+        ok = false,
+        message = "Missing session_cookie for homework action. Please pass an authenticated Learn cookie.",
+      )
+    }
+    return HomeworkAuth(ok = true, message = "ok", baseUrl = baseUrl, cookie = cookie, csrf = csrf)
+  }
+
+  private fun postForm(
+    url: String,
+    form: Map<String, String>,
+    cookie: String,
+    csrfToken: String,
+  ): String {
+    val body =
+      form.entries.joinToString("&") { (key, value) ->
+        "${urlEncode(key)}=${urlEncode(value)}"
+      }
+    val conn = (URL(appendCsrf(url, csrfToken)).openConnection() as HttpURLConnection)
+    conn.requestMethod = "POST"
+    conn.connectTimeout = 12_000
+    conn.readTimeout = 18_000
+    conn.doOutput = true
+    conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+    conn.setRequestProperty("Cookie", cookie)
+    conn.outputStream.use { os ->
+      val bytes = body.toByteArray(StandardCharsets.UTF_8)
+      os.write(bytes)
+    }
+    val code = conn.responseCode
+    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+    val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+    conn.disconnect()
+    if (code !in 200..299) {
+      throw IllegalStateException("HTTP $code for $url: ${raw.take(256)}")
+    }
+    return raw
+  }
+
+  private fun postMultipart(
+    url: String,
+    cookie: String,
+    csrfToken: String,
+    textParts: Map<String, String>,
+    filePart: MultipartFilePart?,
+  ): String {
+    val boundary = "----OpenTHUBoundary${System.currentTimeMillis()}"
+    val conn = (URL(appendCsrf(url, csrfToken)).openConnection() as HttpURLConnection)
+    conn.requestMethod = "POST"
+    conn.connectTimeout = 12_000
+    conn.readTimeout = 24_000
+    conn.doOutput = true
+    conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+    conn.setRequestProperty("Cookie", cookie)
+
+    DataOutputStream(BufferedOutputStream(conn.outputStream)).use { out ->
+      textParts.forEach { (name, value) ->
+        out.writeBytes("--$boundary\r\n")
+        out.writeBytes("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
+        out.write(value.toByteArray(StandardCharsets.UTF_8))
+        out.writeBytes("\r\n")
+      }
+      if (filePart != null) {
+        out.writeBytes("--$boundary\r\n")
+        out.writeBytes(
+          "Content-Disposition: form-data; name=\"fileupload\"; filename=\"${filePart.fileName}\"\r\n",
+        )
+        out.writeBytes("Content-Type: ${filePart.mimeType}\r\n\r\n")
+        out.write(filePart.bytes)
+        out.writeBytes("\r\n")
+      }
+      out.writeBytes("--$boundary--\r\n")
+      out.flush()
+    }
+
+    val code = conn.responseCode
+    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+    val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+    conn.disconnect()
+    if (code !in 200..299) {
+      throw IllegalStateException("HTTP $code for $url: ${raw.take(256)}")
+    }
+    return raw
+  }
+
+  private fun resolveFilePart(
+    filePath: String,
+    fileUriText: String,
+    overrideFileName: String,
+  ): MultipartFilePart {
+    if (filePath.isNotBlank()) {
+      val file = File(filePath)
+      if (!file.exists() || !file.isFile) {
+        throw IllegalArgumentException("File not found at file_path: $filePath")
+      }
+      val bytes = FileInputStream(file).use { input -> input.readBytes() }
+      val resolvedName = overrideFileName.ifBlank { file.name.ifBlank { "upload.bin" } }
+      return MultipartFilePart(
+        fileName = resolvedName,
+        mimeType = guessMimeType(resolvedName),
+        bytes = bytes,
+      )
+    }
+    if (fileUriText.isNotBlank()) {
+      val uri = Uri.parse(fileUriText)
+      val bytes =
+        appContext.contentResolver.openInputStream(uri)?.use { input -> input.readBytes() }
+          ?: throw IllegalArgumentException("Cannot open file_uri: $fileUriText")
+      val name = overrideFileName.ifBlank { guessFileNameFromUri(uri) }
+      return MultipartFilePart(
+        fileName = name,
+        mimeType = guessMimeType(name),
+        bytes = bytes,
+      )
+    }
+    throw IllegalArgumentException("Either file_path or file_uri is required.")
+  }
+
+  private fun parseCsvOrJsonArray(raw: String?): List<String> {
+    if (raw.isNullOrBlank()) return emptyList()
+    val text = raw.trim()
+    if (text.startsWith("[")) {
+      return runCatching {
+        val arr = JSONArray(text)
+        (0 until arr.length()).mapNotNull { index -> arr.opt(index)?.toString()?.trim() }.filter { it.isNotEmpty() }
+      }.getOrElse { emptyList() }
+    }
+    return text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+  }
+
+  private fun extractHomeworkRecords(
+    root: JSONObject?,
+    courseId: String,
+    endpointType: String,
+    baseUrl: String,
+  ): List<HomeworkRecord> {
+    if (root == null) return emptyList()
+    val list = mutableListOf<HomeworkRecord>()
+    val candidates = mutableListOf<JSONObject>()
+    collectObjectsRecursively(root, candidates)
+    candidates.forEach { obj ->
+      val id = obj.optString("id").ifBlank { obj.optString("zyid") }
+      val xszyid = obj.optString("xszyid").ifBlank { obj.optString("studentHomeworkId") }
+      val title = obj.optString("bt").ifBlank { obj.optString("title") }
+      if (id.isBlank() || title.isBlank()) return@forEach
+      val deadline = obj.optString("jzsj").ifBlank { obj.optString("deadline") }
+      val submitted = when (endpointType) {
+        "WJ" -> false
+        else -> true
+      }
+      val detailUrl = "$baseUrl/f/wlxt/kczy/zy/student/viewZy?zyid=$id"
+      list +=
+        HomeworkRecord(
+          homeworkId = id,
+          studentHomeworkId = xszyid,
+          title = title,
+          deadline = deadline,
+          submitted = submitted,
+          courseId = courseId,
+          courseName = obj.optString("kcmc"),
+          detailUrl = detailUrl,
+        )
+    }
+    return list
+  }
+
+  private fun extractAttachments(
+    root: JSONObject?,
+    baseUrl: String,
+  ): List<HomeworkAttachment> {
+    if (root == null) return emptyList()
+    val objects = mutableListOf<JSONObject>()
+    collectObjectsRecursively(root, objects)
+    val result = mutableListOf<HomeworkAttachment>()
+    objects.forEach { obj ->
+      val name = obj.optString("name").ifBlank { obj.optString("wjmc") }
+      val token = obj.optString("id").ifBlank { obj.optString("wjid") }
+      if (name.isBlank() && token.isBlank()) return@forEach
+      val download = obj.optString("downloadUrl")
+      val preview = obj.optString("previewUrl")
+      result +=
+        HomeworkAttachment(
+          token = token.ifBlank { "att_${result.size + 1}" },
+          fileName = name.ifBlank { "attachment_${result.size + 1}" },
+          downloadUrl = absolutizeUrl(download, baseUrl),
+          previewUrl = absolutizeUrl(preview, baseUrl),
+        )
+    }
+    return result.distinctBy { "${it.token}::${it.fileName}" }
+  }
+
+  private fun collectObjectsRecursively(
+    root: Any?,
+    collector: MutableList<JSONObject>,
+  ) {
+    when (root) {
+      is JSONObject -> {
+        collector += root
+        val keys = root.keys()
+        while (keys.hasNext()) {
+          val key = keys.next()
+          collectObjectsRecursively(root.opt(key), collector)
+        }
+      }
+      is JSONArray -> {
+        for (i in 0 until root.length()) {
+          collectObjectsRecursively(root.opt(i), collector)
+        }
+      }
+    }
+  }
+
+  private fun appendCsrf(
+    url: String,
+    csrfToken: String,
+  ): String {
+    if (csrfToken.isBlank()) return url
+    if (url.contains("token=")) return url
+    val sep = if (url.contains("?")) "&" else "?"
+    return "$url${sep}token=${urlEncode(csrfToken)}"
+  }
+
+  private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
+
+  private fun guessMimeType(fileName: String): String {
+    val lower = fileName.lowercase()
+    return when {
+      lower.endsWith(".pdf") -> "application/pdf"
+      lower.endsWith(".doc") -> "application/msword"
+      lower.endsWith(".docx") -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      lower.endsWith(".ppt") -> "application/vnd.ms-powerpoint"
+      lower.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      lower.endsWith(".txt") -> "text/plain"
+      lower.endsWith(".zip") -> "application/zip"
+      else -> "application/octet-stream"
+    }
+  }
+
+  private fun guessFileNameFromUri(uri: Uri): String {
+    val segment = uri.lastPathSegment?.substringAfterLast('/')?.trim().orEmpty()
+    return if (segment.isBlank()) "upload.bin" else segment
+  }
+
+  private fun HomeworkRecord.toDataMap(): Map<String, Any> =
+    mapOf(
+      "homework_id" to homeworkId,
+      "student_homework_id" to studentHomeworkId,
+      "title" to title,
+      "deadline" to deadline,
+      "submitted" to submitted,
+      "course_id" to courseId,
+      "course_name" to courseName,
+      "detail_url" to detailUrl,
+    )
+
+  private fun HomeworkAttachment.toDataMap(): Map<String, Any> =
+    mapOf(
+      "attachment_token" to token,
+      "file_name" to fileName,
+      "download_url" to downloadUrl,
+      "preview_url" to previewUrl,
+    )
+
+  private fun absolutizeUrl(url: String, baseUrl: String): String {
+    val trimmed = url.trim()
+    if (trimmed.isBlank()) return ""
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
+    if (trimmed.startsWith("/")) return baseUrl.trimEnd('/') + trimmed
+    return "$baseUrl/$trimmed"
   }
 
   private fun extractIsoDateTime(text: String): List<String> =

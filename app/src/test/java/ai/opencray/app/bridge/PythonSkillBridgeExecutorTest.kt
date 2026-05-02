@@ -210,4 +210,102 @@ class PythonSkillBridgeExecutorTest {
     assertEquals("failed", result.getJSONObject("data").getString("status"))
     assertFalse(result.getJSONObject("data").optString("message").isBlank())
   }
+
+  @Test
+  fun mapsHomeworkSubmitConfirmRequirementToApprovalRequired() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = false,
+          message = "Submit blocked: confirm_submit=true is required for high-risk homework submission.",
+          recoverable = false,
+          data = mapOf("reason" to "confirm_submit_required"),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_hw_submit_1")
+        .put("skill_name", "submit_homework")
+        .put("args", JSONObject().put("homework_id", "hw_1").put("confirm_submit", false))
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("APPROVAL_REQUIRED", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("awaiting_confirmation", data.getString("status"))
+    assertTrue(data.getBoolean("high_risk"))
+    assertEquals("confirm_submit_required", data.getString("reason"))
+  }
+
+  @Test
+  fun mapsHomeworkCrawlStructuredDataFromReport() {
+    val homeworks =
+      listOf(
+        mapOf(
+          "homework_id" to "hw_101",
+          "title" to "Project 1",
+          "submitted" to false,
+        ),
+      )
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = true,
+          message = "Homework crawl completed: 1 item(s).",
+          recoverable = false,
+          data =
+            mapOf(
+              "status" to "crawled",
+              "count" to 1,
+              "homeworks" to homeworks,
+              "course_ids" to listOf("2026spring-ai"),
+            ),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_hw_crawl_1")
+        .put("skill_name", "crawl_course_homeworks")
+        .put("args", JSONObject().put("course_ids", JSONArray(listOf("2026spring-ai"))))
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("OK", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("crawled", data.getString("status"))
+    assertEquals(1, data.getInt("count"))
+    assertEquals(1, data.getJSONArray("homeworks").length())
+    assertEquals("hw_101", data.getJSONArray("homeworks").getJSONObject(0).getString("homework_id"))
+    assertEquals("2026spring-ai", data.getJSONArray("course_ids").getString(0))
+  }
+
+  @Test
+  fun mapsHomeworkUploadFailureToInvalidParamWhenAuthMissing() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = false,
+          message = "Missing session_cookie for homework action. Please pass an authenticated Learn cookie.",
+          recoverable = false,
+          data = mapOf("reason" to "missing_auth"),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_hw_upload_1")
+        .put("skill_name", "upload_homework_attachment")
+        .put(
+          "args",
+          JSONObject()
+            .put("homework_id", "hw_202")
+            .put("file_path", "/sdcard/Download/demo.pdf"),
+        )
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("INVALID_PARAM", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("failed", data.getString("status"))
+    assertEquals("missing_auth", data.getString("reason"))
+  }
 }
