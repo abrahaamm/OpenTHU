@@ -18,7 +18,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val runtime: OpenCrayRuntime =
     (app as OpenCrayApplication).appContainer.runtime
 
-  private var selectedDestination: AppDestination = AppDestination.Context
+  private var selectedDestination: AppDestination = AppDestination.Chat
   private var goalDraft: String = ""
   private var hostText: String = runtime.snapshot().host
   private var portText: String = runtime.snapshot().port.toString()
@@ -52,6 +52,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun selectDestination(destination: AppDestination) {
     selectedDestination = destination
+  }
+
+  fun sendChatMessage(text: String) {
+    runtime.sendChatMessage(text)
+    selectedDestination = AppDestination.Chat
+  }
+
+  /**
+   * Unified placeholder entry for future skills triggered from chat UI.
+   * Later skill implementations can replace the runtime internals without changing the page.
+   */
+  fun invokeSkill(
+    skillId: String,
+    args: Map<String, String> = emptyMap(),
+  ) {
+    runtime.invokeSkill(skillId = skillId, args = args)
+    selectedDestination = AppDestination.Chat
   }
 
   fun updateGoalDraft(value: String) {

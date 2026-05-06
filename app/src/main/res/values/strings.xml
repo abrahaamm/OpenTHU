@@ -1,35 +1,67 @@
 <resources>
     <string name="app_name">OpenTHU</string>
-    <string name="app_subtitle">An Android system-level agent prototype built on top of an OpenClaw-style runtime.</string>
-    <string name="connect_button">Update Agent Link</string>
-    <string name="capability_label">Capability Layers</string>
-    <string name="events_label">Runtime Events</string>
-    <string name="tab_context">Context</string>
-    <string name="tab_actions">Actions</string>
-    <string name="tab_safety">Safety</string>
-    <string name="context_title">Context Feed</string>
-    <string name="context_feed_label">Observed mobile context</string>
-    <string name="actions_title">Action Center</string>
-    <string name="action_feed_label">Planned actions</string>
-    <string name="safety_title">Safety Console</string>
-    <string name="host_hint">Host, e.g. 192.168.0.88</string>
+    <string name="app_subtitle">面向校园生活的移动端 Agent 系统</string>
+
+    <string name="tab_context">首页</string>
+    <string name="tab_chat">Agent</string>
+    <string name="tab_actions">进度</string>
+    <string name="tab_safety">设置</string>
+
+    <string name="home_title">校园工作台</string>
+    <string name="home_feed_label">今日建议</string>
+    <string name="home_quick_actions">一键操作</string>
+    <string name="onboarding_title">首次启动引导</string>
+    <string name="onboarding_body">OpenTHU 需要通知、日历、无障碍与悬浮窗权限来感知校园信息并辅助执行。高风险操作会先解释原因并等待确认。</string>
+
+    <string name="chat_title">Agent 对话</string>
+    <string name="chat_subtitle">输入自然语言目标，查看理解、规划、确认与执行反馈。</string>
+    <string name="chat_empty_title">开始一次新任务</string>
+    <string name="chat_empty_body">例如：帮我整理本周 DDL，并把重要事项加入日历。</string>
+    <string name="chat_input_hint">输入你的需求...</string>
+    <string name="chat_send">发送</string>
+
+    <string name="quick_skills_title">快捷 skills</string>
+    <string name="quick_skills_subtitle">常用能力入口预留区，每行最多三个</string>
+    <string name="skill_placeholder">占位卡片</string>
+    <string name="skill_placeholder_detail">等待接入</string>
+    <string name="skill_placeholder_1">课程 DDL</string>
+    <string name="skill_placeholder_2">活动推荐</string>
+    <string name="skill_placeholder_3">加入日历</string>
+    <string name="skill_placeholder_4">通知整理</string>
+    <string name="skills_waiting_to_join">等待后续skills加入</string>
+
+    <string name="actions_title">任务流转与执行进度</string>
+    <string name="action_feed_label">候选动作与状态反馈</string>
+    <string name="goal_hint">Describe your campus goal, e.g. 帮我关注清华活动并为课程 DDL 设置提醒</string>
+    <string name="plan_goal_button">解析并生成候选动作</string>
+    <string name="run_agent_button">执行已确认动作</string>
+    <string name="action_primary">加入日历</string>
+    <string name="action_secondary">稍后提醒</string>
+    <string name="action_tertiary">忽略建议</string>
+    <string name="approve_button">确认高风险动作</string>
+
+    <string name="settings_title">隐私、记忆与数据源</string>
+    <string name="safety_title">设置中心</string>
+    <string name="events_label">运行反馈</string>
+    <string name="capability_label">能力与隐私开关</string>
+    <string name="capability_notification">允许通知感知</string>
+    <string name="capability_cross_app">允许跨应用执行</string>
+    <string name="capability_safety">启用安全审查与回滚</string>
+    <string name="connect_button">保存数据源配置</string>
+    <string name="host_hint">校园数据源 Host, e.g. 192.168.0.88</string>
     <string name="port_hint">Port, e.g. 18789</string>
-    <string name="goal_hint">Describe your campus goal, e.g. 帮我关注清华活动并为课程DDL设置提醒</string>
-    <string name="plan_goal_button">Plan Goal</string>
-    <string name="run_agent_button">Run Approved Actions</string>
-    <string name="tls_label">Use TLS</string>
-    <string name="capability_notification">Enable notification context</string>
-    <string name="capability_cross_app">Enable cross-app action loop</string>
-    <string name="capability_safety">Enable safety guard</string>
-    <string name="action_primary">Execute route continuation</string>
-    <string name="action_secondary">Execute code fill</string>
-    <string name="action_tertiary">Execute food-order setup</string>
-    <string name="approve_button">Approve pending high-risk actions</string>
-    <string name="common_apps_label">Testable common apps</string>
-    <string name="launch_wechat">Launch WeChat</string>
-    <string name="launch_alipay">Launch Alipay</string>
-    <string name="launch_amap">Launch Amap</string>
-    <string name="launch_taobao">Launch Taobao</string>
-    <string name="launch_meituan">Launch Meituan</string>
-    <string name="launch_qq">Launch QQ</string>
+    <string name="tls_label">使用 TLS</string>
+    <string name="common_apps_label">常用应用联动测试</string>
+    <string name="launch_wechat">打开 WeChat</string>
+    <string name="launch_alipay">打开 Alipay</string>
+    <string name="launch_amap">打开 Amap</string>
+    <string name="launch_taobao">打开 Taobao</string>
+    <string name="launch_meituan">打开 Meituan</string>
+    <string name="launch_qq">打开 QQ</string>
+
+    <string name="preference_title">偏好文件预览</string>
+    <string name="preference_subtitle">后续会从本地偏好文件读取并整理为自然语言。</string>
+    <string name="preference_hint">输入新的偏好，例如：少推荐晚间活动</string>
+    <string name="preference_add">新增偏好</string>
+    <string name="preference_waiting">等待偏好文件开发</string>
 </resources>

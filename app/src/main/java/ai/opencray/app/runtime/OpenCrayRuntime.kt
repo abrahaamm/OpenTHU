@@ -33,6 +33,27 @@ class OpenCrayRuntime(
 
   fun chatMessages(): List<ChatMessage> = chatRepository.getMessages()
 
+  fun sendChatMessage(text: String) {
+    chatRepository.sendMessage(text)
+  }
+
+  /**
+   * Reserved skill invocation entry for UI shortcuts.
+   * Current implementation records the request in chat until real skills are wired.
+   */
+  fun invokeSkill(
+    skillId: String,
+    args: Map<String, String> = emptyMap(),
+  ) {
+    val argLabel =
+      if (args.isEmpty()) {
+        "{}"
+      } else {
+        args.entries.joinToString(prefix = "{", postfix = "}") { (key, value) -> "$key=$value" }
+      }
+    chatRepository.appendMessage(ChatRole.System, "Skill placeholder invoked: $skillId $argLabel")
+  }
+
   fun boot() {
     runtimeRepository.markRuntimeBooted()
     chatRepository.appendMessage(ChatRole.System, "Runtime booted. Agent pipeline ready.")
