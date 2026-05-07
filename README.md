@@ -1,79 +1,52 @@
 # OpenTHU
 
-OpenTHU is an Android system-agent prototype built on top of an OpenClaw-style runtime layout.
+OpenTHU 是一个面向校园场景的移动端 Agent 项目，采用“服务端智能规划 + 端侧安全执行”的总体思路，目标是将自然语言目标转化为可控、可审计的系统动作。
 
-Its goal is not to be just another chat client. The project is organized around three core ideas:
+## 项目规划
 
-- `Context`: capture what is happening on the phone right now
-- `Actions`: turn that context into executable mobile actions
-- `Safety`: make those actions reviewable, controllable, and auditable
+- 阶段一：核心链路打通  
+  完成从用户目标输入到任务规划、安全审查、设备执行、结果回传的端到端闭环。
+- 阶段二：技能体系扩展  
+  围绕课程、作业、通知、日历、闹钟等校园高频需求，沉淀可复用的 Skill 能力。
+- 阶段三：可靠性与工程化完善  
+  强化鉴权、审计、任务持久化与失败重试机制，提升多设备与长期运行稳定性。
 
-## Current scope
+## 技术栈
 
-The current version is an Android prototype with:
+- Android 客户端：Kotlin、Android SDK（minSdk 26）
+- 服务端：Python、FastAPI
+- 智能工作流：LangGraph
+- 模型接入：OpenAI 兼容接口（可配置模型与 base URL）
+- 数据与状态：JSON 文件持久化（任务状态、记忆数据）
 
-- a `Context / Actions / Safety` app structure
-- a lightweight runtime, repository, and domain model layout
-- mocked mobile context signals
-- prototype system actions and safety records
-- common-app detection and launch testing for:
-  - WeChat
-  - Alipay
-  - Amap
-  - Taobao
-  - Meituan
-  - QQ
+## 项目框架
 
-This means OpenTHU can already be used to verify a basic system-agent loop on device:
-
-1. detect whether common apps are installed
-2. expose them as candidate action targets
-3. trigger real app launches
-4. write the result back into the runtime state and event log
-
-## What is still missing
-
-The project is still a prototype. The major unfinished areas are:
-
-- real context ingestion
-  - notifications
-  - share intents
-  - foreground-app state
-- real cross-app execution
-  - deep links
-  - structured intents
-  - accessibility-driven UI automation
-- stronger safety controls
-  - per-action approval
-  - execution provenance
-  - replayable audit trails
-- backend integration
-  - real OpenClaw gateway/protocol connection
-  - planner/tool execution loop
-  - persistent task state
-
-In short:
-
-> OpenClaw provides the runtime direction; OpenTHU is meant to become the Android-side eyes, hands, and safety layer.
-
-## Scripts
-
-```bash
-./scripts/download_official_apks.sh
-./scripts/install_apks.sh
-./scripts/verify_common_apps.sh
+```text
+OpenCray/
+├── app/                    # Android 端：UI、运行时调度、动作执行、安全审核
+├── agent/langgraph/        # Agent-Core：规划、安全、审计、记忆、技能管理
+├── docs/                   # 架构、接口与研发文档
+├── scripts/                # 本地调试与验证脚本
+└── test-apks/              # 测试说明与相关资源
 ```
 
-These scripts support local testing of the common-app launch flow. At the moment:
+### 架构说明
 
-- `Amap` is included as a locally downloaded official APK for testing
-- several other apps must still be installed manually from their official channels, because their public sites do not expose stable scripted APK download links
+- Agent-Core（PC/Server）：负责目标标准化、技能规划、安全审查、审计记录与记忆更新。
+- Android Executor（Device）：负责拉取待执行技能，调用本地系统能力执行，并回传结构化结果。
+- 通信方式：以 HTTP API 进行设备注册、任务下发、结果回传，形成任务闭环。
 
-## Build
+### LangGraph 流程图
 
-If your local Gradle config contains a stale proxy, build with:
-
-```bash
-cd OpenTHU
-./gradlew -Dhttp.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyHost= -Dhttps.proxyPort= :app:assembleDebug
+```mermaid
+flowchart TD
+    A[normalize_requirement] --> B[plan_skills]
+    B --> C[safety_check]
+    C --> D[execute_skills]
+    D --> E{failed skills?}
+    E -- yes --> F[replan_failed]
+    E -- no --> G[audit_record]
+    F --> G
+    G --> H[memory_update]
+    H --> I[finalize]
 ```
