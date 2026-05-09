@@ -214,12 +214,22 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "medium",
             True,
-            args_schema={
-                "title": "string (required)",
-                "start_time": "ISO8601 datetime (required)",
-                "end_time": "ISO8601 datetime (required)",
-                "description": "string (optional)",
-                "conflict_decision": "prompt_user|skip_write|coexist|delete_conflicts",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "location": {"type": "string"},
+                    "description": {"type": "string"},
+                    "conflict_decision": {
+                        "type": "string",
+                        "enum": ["prompt_user", "skip_write", "coexist", "delete_conflicts"],
+                    },
+                    "allow_conflict_delete": {"type": "boolean"},
+                },
+                "required": ["title", "start_time", "end_time"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -228,9 +238,14 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "low",
             False,
-            args_schema={
-                "start_time": "ISO8601 datetime (required)",
-                "end_time": "ISO8601 datetime (required)",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                },
+                "required": ["start_time", "end_time"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -239,10 +254,18 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "high",
             True,
-            args_schema={
-                "event_id": "string (optional)",
-                "event_ids": "list[string] (optional)",
-                "confirm_delete": "bool (required)",
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string"},
+                    "event_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "confirm_delete": {"type": "boolean"},
+                },
+                "required": ["confirm_delete"],
+                "additionalProperties": False,
             },
         ),
         SkillSpec(
@@ -281,6 +304,19 @@ def build_default_registry() -> SkillRegistry:
                 "additionalProperties": False,
             },
         ),
+        SkillSpec(
+            "read_notifications",
+            "Read unread system notifications",
+            "action",
+            "low",
+            False,
+            args_schema={},
+            args_json_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        ),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
@@ -294,6 +330,8 @@ def build_default_registry() -> SkillRegistry:
             from skills.alarm_skills import GetCurrentTimeSkill, SetAlarmSkill
         registry.register_handler("get_current_time", GetCurrentTimeSkill())
         registry.register_handler("set_alarm", SetAlarmSkill())
+        from .skills.notification_skills import ReadNotificationsSkill
+        registry.register_handler("read_notifications", ReadNotificationsSkill())
     except ImportError:
         pass
     register_calendar_handlers(registry)

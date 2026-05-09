@@ -1,28 +1,25 @@
 from __future__ import annotations
 
 import argparse
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 try:
     from .calendar_handlers import (
-        AdbCalendarBridge,
-        CalendarBridgeError,
         CreateCalendarEventHandler,
         DeleteCalendarEventHandler,
         DetectCalendarConflictsHandler,
+        KotlinSkillBridge,
     )
     from .skill_core import SkillInvocation, build_default_registry
     from .skill_manager import SkillManager
 except ImportError:
     from calendar_handlers import (
-        AdbCalendarBridge,
-        CalendarBridgeError,
         CreateCalendarEventHandler,
         DeleteCalendarEventHandler,
         DetectCalendarConflictsHandler,
+        KotlinSkillBridge,
     )
     from skill_core import SkillInvocation, build_default_registry
     from skill_manager import SkillManager
@@ -38,10 +35,6 @@ def iso_at(hours_offset: int, duration_hours: int = 1) -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def _safe_int(raw: str | None) -> int:
-    return int(raw or "0")
-
-
 @dataclass
 class TestResult:
     name: str
@@ -49,86 +42,199 @@ class TestResult:
     detail: str
 
 
-class MockCalendarBridge:
-    """In-memory bridge used when adb is unavailable."""
+class MockKotlinBridge(KotlinSkillBridge):
+    """Mock Kotlin executor bridge with in-memory calendar state."""
 
     def __init__(self) -> None:
-        self._calendar_id = 1
         self._next_event_id = 1000
         self._events: dict[int, dict[str, Any]] = {}
+        self.last_invocation: dict[str, Any] | None = None
 
-    def resolve_writable_calendar_id(self) -> int:
-        return self._calendar_id
+    def execute(self, invocation: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        self.last_invocation = invocation
+        skill_name = str(invocation.get("skill_name", "")).strip()
+        args = invocation.get("args", {})
+        if not isinstance(args, dict):
+            return self._fail(invocation, "INVALID_PARAM", "args must be object")
 
-    def query_conflicts(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
-        conflicts: list[dict[str, Any]] = []
-        for event_id, event in sorted(self._events.items()):
-            existing_start = event["start_ms"]
-            existing_end = event["end_ms"]
-            if existing_start < end_ms and start_ms < existing_end:
-                conflicts.append(
-                    {
-                        "event_id": str(event_id),
-                        "title": event["title"],
-                        "start_time": datetime.fromtimestamp(existing_start / 1000, tz=UTC).isoformat(),
-                        "end_time": datetime.fromtimestamp(existing_end / 1000, tz=UTC).isoformat(),
-                        "start_ms": existing_start,
-                        "end_ms": existing_end,
-                    }
-                )
-        return conflicts
+        if skill_name == "create_calendar_event":
+            return self._create(invocation, args)
+        if skill_name == "detect_calendar_conflicts":
+            return self._detect(invocation, args)
+        if skill_name == "delete_calendar_event":
+            return self._delete(invocation, args)
+        return self._fail(invocation, "SKILL_EXECUTION_FAILED", f"unsupported skill in mock bridge: {skill_name}")
 
-    def query_events_by_ids(self, event_ids: list[int]) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        for event_id in event_ids:
-            if event_id not in self._events:
+    def _create(self, invocation: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        title = str(args.get("title", "")).strip()
+        start_time = str(args.get("start_time", "")).strip()
+        end_time = str(args.get("end_time", "")).strip()
+        start_ms = int(datetime.fromisoformat(start_time).timestamp() * 1000)
+        end_ms = int(datetime.fromisoformat(end_time).timestamp() * 1000)
+        conflict_decision = str(args.get("conflict_decision", "prompt_user")).strip().lower() or "prompt_user"
+        conflicts = self._query_conflicts(start_ms, end_ms)
+
+        if conflicts:
+            if conflict_decision == "prompt_user":
+                return {
+                    "request_id": invocation["request_id"],
+                    "code": "APPROVAL_REQUIRED",
+                    "source": "android_kotlin_bridge_mock",
+                    "data": {
+                        "status": "conflict_detected",
+                        "supports_overlap": True,
+                        "conflict_count": len(conflicts),
+                        "conflicts": conflicts,
+                        "decision_options": ["skip_write", "coexist", "delete_conflicts"],
+                    },
+                }
+            if conflict_decision == "skip_write":
+                return {
+                    "request_id": invocation["request_id"],
+                    "code": "OK",
+                    "source": "android_kotlin_bridge_mock",
+                    "data": {
+                        "status": "skipped_conflict",
+                        "conflict_count": len(conflicts),
+                        "conflicts": conflicts,
+                    },
+                }
+            if conflict_decision == "delete_conflicts":
+                allow_delete = bool(args.get("allow_conflict_delete"))
+                if not allow_delete:
+                    return self._fail(
+                        invocation,
+                        "ACTION_NOT_ALLOWED",
+                        "allow_conflict_delete=true is required for delete_conflicts",
+                    )
+                conflict_ids = [int(item["event_id"]) for item in conflicts]
+                self._delete_ids(conflict_ids)
+
+        event_id = self._next_event_id
+        self._next_event_id += 1
+        self._events[event_id] = {
+            "title": title,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+        }
+        return {
+            "request_id": invocation["request_id"],
+            "code": "OK",
+            "source": "android_kotlin_bridge_mock",
+            "data": {
+                "status": "created",
+                "event_id": str(event_id),
+                "conflict_count": len(conflicts),
+            },
+        }
+
+    def _detect(self, invocation: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        start_time = str(args.get("start_time", "")).strip()
+        end_time = str(args.get("end_time", "")).strip()
+        start_ms = int(datetime.fromisoformat(start_time).timestamp() * 1000)
+        end_ms = int(datetime.fromisoformat(end_time).timestamp() * 1000)
+        conflicts = self._query_conflicts(start_ms, end_ms)
+        return {
+            "request_id": invocation["request_id"],
+            "code": "OK",
+            "source": "android_kotlin_bridge_mock",
+            "data": {
+                "status": "detected",
+                "supports_overlap": True,
+                "conflict_count": len(conflicts),
+                "conflicts": conflicts,
+                "decision_options": ["skip_write", "coexist", "delete_conflicts"],
+            },
+        }
+
+    def _delete(self, invocation: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        if not bool(args.get("confirm_delete")):
+            return {
+                "request_id": invocation["request_id"],
+                "code": "APPROVAL_REQUIRED",
+                "source": "android_kotlin_bridge_mock",
+                "data": {
+                    "status": "awaiting_confirmation",
+                    "high_risk": True,
+                    "message": "confirm_delete=true is required for delete_calendar_event",
+                },
+            }
+        raw_ids = args.get("event_ids", [])
+        ids: list[int] = []
+        if isinstance(raw_ids, list):
+            ids.extend(int(item) for item in raw_ids if str(item).strip())
+        if not ids and str(args.get("event_id", "")).strip():
+            ids.append(int(str(args["event_id"]).strip()))
+        if not ids:
+            return self._fail(invocation, "INVALID_PARAM", "event_id/event_ids are required")
+
+        existing = []
+        for item in ids:
+            event = self._events.get(item)
+            if not event:
                 continue
-            event = self._events[event_id]
-            rows.append(
+            existing.append(
                 {
-                    "event_id": str(event_id),
+                    "event_id": str(item),
                     "title": event["title"],
                     "start_time": datetime.fromtimestamp(event["start_ms"] / 1000, tz=UTC).isoformat(),
                     "end_time": datetime.fromtimestamp(event["end_ms"] / 1000, tz=UTC).isoformat(),
                 }
             )
-        return rows
-
-    def insert_event(
-        self,
-        *,
-        calendar_id: int,
-        title: str,
-        description: str,
-        start_ms: int,
-        end_ms: int,
-    ) -> str:
-        if calendar_id != self._calendar_id:
-            raise RuntimeError("calendar id mismatch")
-        event_id = self._next_event_id
-        self._next_event_id += 1
-        self._events[event_id] = {
-            "title": title,
-            "description": description,
-            "start_ms": start_ms,
-            "end_ms": end_ms,
+        deleted_count = self._delete_ids(ids)
+        existing_ids = {int(item["event_id"]) for item in existing}
+        missing = [str(item) for item in ids if item not in existing_ids]
+        return {
+            "request_id": invocation["request_id"],
+            "code": "OK",
+            "source": "android_kotlin_bridge_mock",
+            "data": {
+                "status": "deleted",
+                "deleted_count": deleted_count,
+                "deleted": existing,
+                "missing_event_ids": missing,
+                "high_risk": True,
+            },
         }
-        return str(event_id)
 
-    def delete_events(self, event_ids: list[int]) -> int:
+    def _query_conflicts(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        conflicts: list[dict[str, Any]] = []
+        for event_id, event in sorted(self._events.items()):
+            existing_start = int(event["start_ms"])
+            existing_end = int(event["end_ms"])
+            if existing_start < end_ms and start_ms < existing_end:
+                conflicts.append(
+                    {
+                        "event_id": str(event_id),
+                        "title": str(event["title"]),
+                        "start_time": datetime.fromtimestamp(existing_start / 1000, tz=UTC).isoformat(),
+                        "end_time": datetime.fromtimestamp(existing_end / 1000, tz=UTC).isoformat(),
+                    }
+                )
+        return conflicts
+
+    def _delete_ids(self, ids: list[int]) -> int:
         deleted = 0
-        for event_id in event_ids:
-            if event_id in self._events:
-                del self._events[event_id]
+        for item in ids:
+            if item in self._events:
+                del self._events[item]
                 deleted += 1
         return deleted
 
-    def event_count(self) -> int:
-        return len(self._events)
+    def _fail(self, invocation: dict[str, Any], code: str, message: str) -> dict[str, Any]:
+        return {
+            "request_id": invocation["request_id"],
+            "code": code,
+            "source": "android_kotlin_bridge_mock",
+            "data": {
+                "status": "failed",
+                "message": message,
+            },
+        }
 
 
 class CalendarSkillHarness:
-    def __init__(self, *, bridge: Any) -> None:
+    def __init__(self, *, bridge: KotlinSkillBridge) -> None:
         self.registry = build_default_registry()
         self.manager = SkillManager(registry=self.registry)
         self.bridge = bridge
@@ -180,9 +286,25 @@ def _test_create_missing_required(harness: CalendarSkillHarness) -> None:
     _expect(result["code"] == "INVALID_PARAM", f"unexpected code: {result['code']}")
 
 
-def _test_create_and_detect(harness: CalendarSkillHarness, bridge: MockCalendarBridge) -> None:
+def _test_schema_rejects_unknown_field(harness: CalendarSkillHarness) -> None:
     start_time, end_time = iso_at(0)
-    created = harness.invoke(
+    result = harness.invoke(
+        "create_calendar_event",
+        {
+            "title": "CAL_TEST_SCHEMA_UNKNOWN",
+            "start_time": start_time,
+            "end_time": end_time,
+            "unexpected_field": "should fail by schema",
+        },
+    )
+    _expect(result["code"] == "INVALID_PARAM", f"unknown args should fail schema validation: {result}")
+    errors = result.get("data", {}).get("errors", [])
+    _expect(any("unknown field `unexpected_field`" in str(item) for item in errors), f"unexpected errors: {errors}")
+
+
+def _test_bridge_receives_invocation(harness: CalendarSkillHarness, bridge: MockKotlinBridge) -> None:
+    start_time, end_time = iso_at(0)
+    result = harness.invoke(
         "create_calendar_event",
         {
             "title": "CAL_TEST_CREATE",
@@ -192,9 +314,28 @@ def _test_create_and_detect(harness: CalendarSkillHarness, bridge: MockCalendarB
             "conflict_decision": "coexist",
         },
     )
+    _expect(result["code"] == "OK", f"create failed: {result}")
+    _expect(bridge.last_invocation is not None, "bridge should receive invocation payload")
+    _expect(
+        bridge.last_invocation.get("skill_name") == "create_calendar_event",
+        f"unexpected skill dispatched: {bridge.last_invocation}",
+    )
+
+
+def _test_create_and_detect(harness: CalendarSkillHarness) -> None:
+    start_time, end_time = iso_at(1)
+    created = harness.invoke(
+        "create_calendar_event",
+        {
+            "title": "CAL_TEST_CREATE_2",
+            "description": "first event",
+            "start_time": start_time,
+            "end_time": end_time,
+            "conflict_decision": "coexist",
+        },
+    )
     _expect(created["code"] == "OK", f"create failed: {created}")
     _expect(created["data"]["status"] == "created", f"create status mismatch: {created['data']}")
-    _expect(bridge.event_count() == 1, "event should be inserted into bridge")
 
     conflicts = harness.invoke(
         "detect_calendar_conflicts",
@@ -207,10 +348,8 @@ def _test_create_and_detect(harness: CalendarSkillHarness, bridge: MockCalendarB
     _expect(conflicts["data"]["conflict_count"] >= 1, "should detect at least one conflict")
 
 
-def _test_conflict_prompt_skip_delete(harness: CalendarSkillHarness, bridge: MockCalendarBridge) -> None:
-    start_time, end_time = iso_at(0)
-    before = bridge.event_count()
-
+def _test_conflict_prompt_skip_delete(harness: CalendarSkillHarness) -> None:
+    start_time, end_time = iso_at(1)
     prompt = harness.invoke(
         "create_calendar_event",
         {
@@ -233,7 +372,6 @@ def _test_conflict_prompt_skip_delete(harness: CalendarSkillHarness, bridge: Moc
     )
     _expect(skipped["code"] == "OK", f"skip code mismatch: {skipped}")
     _expect(skipped["data"]["status"] == "skipped_conflict", f"skip status mismatch: {skipped['data']}")
-    _expect(bridge.event_count() == before, "skip_write should not change event count")
 
     blocked = harness.invoke(
         "create_calendar_event",
@@ -247,8 +385,8 @@ def _test_conflict_prompt_skip_delete(harness: CalendarSkillHarness, bridge: Moc
     _expect(blocked["code"] == "ACTION_NOT_ALLOWED", f"delete_conflicts should be blocked: {blocked}")
 
 
-def _test_conflict_delete_then_create(harness: CalendarSkillHarness, bridge: MockCalendarBridge) -> None:
-    start_time, end_time = iso_at(0)
+def _test_conflict_delete_then_create(harness: CalendarSkillHarness) -> None:
+    start_time, end_time = iso_at(1)
     result = harness.invoke(
         "create_calendar_event",
         {
@@ -261,7 +399,6 @@ def _test_conflict_delete_then_create(harness: CalendarSkillHarness, bridge: Moc
     )
     _expect(result["code"] == "OK", f"delete_conflicts allowed should pass: {result}")
     _expect(result["data"]["status"] == "created", f"expected created: {result['data']}")
-    _expect(bridge.event_count() == 1, "delete_conflicts should leave only the new event")
 
 
 def _test_delete_requires_confirm(harness: CalendarSkillHarness) -> None:
@@ -275,34 +412,68 @@ def _test_delete_requires_confirm(harness: CalendarSkillHarness) -> None:
     _expect(result["code"] == "APPROVAL_REQUIRED", f"delete should require confirm: {result}")
 
 
-def _test_delete_success(harness: CalendarSkillHarness, bridge: MockCalendarBridge) -> None:
-    existing_ids = list(bridge._events.keys())  # noqa: SLF001
-    _expect(bool(existing_ids), "bridge should contain at least one event before delete")
+def _test_delete_success(harness: CalendarSkillHarness) -> None:
+    created = harness.invoke(
+        "create_calendar_event",
+        {
+            "title": "CAL_TEST_DELETE_TARGET",
+            "start_time": iso_at(5)[0],
+            "end_time": iso_at(5)[1],
+            "conflict_decision": "coexist",
+        },
+    )
+    _expect(created["code"] == "OK", f"create target failed: {created}")
+    event_id = created["data"].get("event_id")
     result = harness.invoke(
         "delete_calendar_event",
         {
-            "event_ids": [str(existing_ids[0]), "999999"],
+            "event_ids": [str(event_id), "999999"],
             "confirm_delete": True,
         },
     )
     _expect(result["code"] == "OK", f"delete failed: {result}")
     _expect(result["data"]["deleted_count"] >= 1, f"deleted_count mismatch: {result['data']}")
     _expect("999999" in result["data"]["missing_event_ids"], "missing ids should include non-existing id")
-    _expect(bridge.event_count() == 0, "all tracked events should be deleted")
+
+
+def _test_delete_schema_coercion(harness: CalendarSkillHarness) -> None:
+    created = harness.invoke(
+        "create_calendar_event",
+        {
+            "title": "CAL_TEST_DELETE_COERCE",
+            "start_time": iso_at(7)[0],
+            "end_time": iso_at(7)[1],
+            "conflict_decision": "coexist",
+        },
+    )
+    _expect(created["code"] == "OK", f"create target failed: {created}")
+    event_id = str(created["data"].get("event_id"))
+    result = harness.invoke(
+        "delete_calendar_event",
+        {
+            "event_ids": event_id,
+            "confirm_delete": "true",
+        },
+    )
+    _expect(result["code"] == "OK", f"schema coercion delete failed: {result}")
+    _expect(result["data"]["deleted_count"] >= 1, f"deleted_count mismatch after coercion: {result['data']}")
 
 
 def run_mock_suite() -> list[TestResult]:
     results: list[TestResult] = []
-    bridge = MockCalendarBridge()
+    bridge = MockKotlinBridge()
     harness = CalendarSkillHarness(bridge=bridge)
     tests: list[tuple[str, Callable[[], None]]] = [
         ("registry_binding", _test_registry_binding),
         ("create_missing_required", lambda: _test_create_missing_required(harness)),
-        ("create_and_detect", lambda: _test_create_and_detect(harness, bridge)),
-        ("conflict_prompt_skip_delete", lambda: _test_conflict_prompt_skip_delete(harness, bridge)),
-        ("conflict_delete_then_create", lambda: _test_conflict_delete_then_create(harness, bridge)),
+        ("schema_rejects_unknown_field", lambda: _test_schema_rejects_unknown_field(harness)),
+        ("bridge_receives_invocation", lambda: _test_bridge_receives_invocation(harness, bridge)),
+        ("create_and_detect", lambda: _test_create_and_detect(harness)),
+        ("conflict_prompt_skip_delete", lambda: _test_conflict_prompt_skip_delete(harness)),
+        ("conflict_delete_then_create", lambda: _test_conflict_delete_then_create(harness)),
         ("delete_requires_confirm", lambda: _test_delete_requires_confirm(harness)),
-        ("delete_success", lambda: _test_delete_success(harness, bridge)),
+        ("delete_success", lambda: _test_delete_success(harness)),
+        ("delete_schema_coercion", lambda: _test_delete_schema_coercion(harness)),
     ]
     for name, fn in tests:
         try:
@@ -310,71 +481,6 @@ def run_mock_suite() -> list[TestResult]:
             results.append(TestResult(name=name, passed=True, detail="ok"))
         except Exception as exc:
             results.append(TestResult(name=name, passed=False, detail=f"{type(exc).__name__}: {exc}"))
-    return results
-
-
-def run_adb_smoke() -> list[TestResult]:
-    results: list[TestResult] = []
-    created_ids: list[int] = []
-    try:
-        bridge = AdbCalendarBridge()
-        calendar_id = bridge.resolve_writable_calendar_id()
-        results.append(TestResult(name="adb_writable_calendar", passed=True, detail=f"calendar_id={calendar_id}"))
-
-        start_time, end_time = iso_at(72)
-        start_ms = int(datetime.fromisoformat(start_time).timestamp() * 1000)
-        end_ms = int(datetime.fromisoformat(end_time).timestamp() * 1000)
-        unique_title = f"CAL_SMOKE_AUTOTEST_{int(datetime.now(tz=UTC).timestamp())}"
-        created_id = bridge.insert_event(
-            calendar_id=calendar_id,
-            title=unique_title,
-            description="autotest event",
-            start_ms=start_ms,
-            end_ms=end_ms,
-        )
-        created_ids.append(_safe_int(created_id))
-        results.append(TestResult(name="adb_create_event", passed=True, detail=f"event_id={created_id}"))
-
-        conflicts = bridge.query_conflicts(start_ms, end_ms)
-        has_self = any(item.get("event_id") == created_id for item in conflicts)
-        _expect(has_self, "created event should be found in conflict query")
-        results.append(TestResult(name="adb_detect_event", passed=True, detail=f"conflict_count={len(conflicts)}"))
-
-        present_after_create = bridge.query_events_by_ids([_safe_int(created_id)])
-        _expect(bool(present_after_create), "created event should be queryable before delete")
-        results.append(TestResult(name="adb_query_created_event", passed=True, detail=f"rows={len(present_after_create)}"))
-
-        deleted = bridge.delete_events([_safe_int(created_id)])
-        _expect(deleted >= 1, "created event should be deletable")
-        results.append(TestResult(name="adb_delete_event", passed=True, detail=f"deleted={deleted}"))
-
-        remaining_after_delete = bridge.query_events_by_ids([_safe_int(created_id)])
-        _expect(not remaining_after_delete, "deleted event should not appear in query")
-        results.append(
-            TestResult(
-                name="adb_verify_deleted_absent",
-                passed=True,
-                detail="event removed from provider",
-            )
-        )
-        created_ids.clear()
-    except CalendarBridgeError as exc:
-        results.append(TestResult(name="adb_smoke", passed=False, detail=str(exc)))
-    except Exception as exc:
-        results.append(TestResult(name="adb_smoke", passed=False, detail=f"{type(exc).__name__}: {exc}"))
-    finally:
-        if created_ids:
-            try:
-                bridge = AdbCalendarBridge()
-                bridge.delete_events(created_ids)
-            except Exception as cleanup_exc:
-                results.append(
-                    TestResult(
-                        name="adb_cleanup_created_event",
-                        passed=False,
-                        detail=f"{type(cleanup_exc).__name__}: {cleanup_exc}",
-                    )
-                )
     return results
 
 
@@ -392,34 +498,19 @@ def print_report(results: list[TestResult]) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Calendar skill test runner")
+    parser = argparse.ArgumentParser(description="Calendar skill bridge test runner")
     parser.add_argument(
         "--mode",
-        choices=["mock", "adb"],
+        choices=["mock"],
         default="mock",
-        help="mock: no adb required; adb: real device smoke test",
-    )
-    parser.add_argument("--adb-serial", default="", help="Optional adb device serial for adb mode")
-    parser.add_argument(
-        "--timezone",
-        default="UTC",
-        help="Timezone used for inserted events in adb mode (default UTC)",
+        help="mock: validates calendar handlers via a mock Kotlin bridge",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    args = parse_args()
-    if args.adb_serial:
-        os.environ["OPENTHU_ADB_SERIAL"] = args.adb_serial
-    if args.timezone:
-        os.environ["OPENTHU_CALENDAR_TIMEZONE"] = args.timezone
-
-    if args.mode == "mock":
-        raise_code = print_report(run_mock_suite())
-    else:
-        raise_code = print_report(run_adb_smoke())
-
+    _ = parse_args()
+    raise_code = print_report(run_mock_suite())
     raise SystemExit(raise_code)
 
 

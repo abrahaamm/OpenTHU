@@ -146,24 +146,25 @@ Calendar actions are now wired with concrete handlers:
 - `get_current_time` (device/server local time context tool)
 - `set_alarm` (local-time semantics: `HH:mm` or local ISO datetime)
 
-These handlers run through `adb shell content` against the connected Android device calendar provider.
+These skills are registered with strict `args_json_schema` in `skill_core.py`.
+`SkillManager` validates/coerces args before handlers run.
+
+Calendar handlers perform semantic validation and then dispatch invocation payloads through a Kotlin bridge.
+Android-side execution is handled by Kotlin runtime (`ActionExecutor`) under app permissions.
 
 Environment variables:
 
-- `OPENTHU_ADB_BIN` (optional, default `adb`)
-- `OPENTHU_ADB_SERIAL` (optional, choose one specific device)
-- `OPENTHU_CALENDAR_TIMEZONE` (optional, default `UTC`)
+- `OPENTHU_CALENDAR_BRIDGE_MODE` (`json_file` to enable file bridge)
+- `OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE` (required for `json_file` mode)
+- `OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE` (required for `json_file` mode)
+- `OPENTHU_KOTLIN_BRIDGE_TIMEOUT_SEC` (optional, default 12s)
 
 ## Calendar Skill Tests
 
-Run logic validation without adb/device:
+Run logic validation with a mock Kotlin bridge:
 
 ```bash
 python agent/langgraph/run_calendar_skill_tests.py --mode mock
 ```
 
-Run real-device smoke test (requires adb + connected device):
-
-```bash
-python agent/langgraph/run_calendar_skill_tests.py --mode adb --adb-serial <device_serial>
-```
+ADB-based calendar test mode is removed from the current runtime path.
