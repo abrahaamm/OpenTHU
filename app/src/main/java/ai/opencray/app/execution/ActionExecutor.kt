@@ -12,7 +12,6 @@ import android.provider.CalendarContract
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
-import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -24,8 +23,9 @@ data class ActionExecutionReport(
   val success: Boolean,
   val message: String,
   val recoverable: Boolean,
-  /** Structured key-value data submitted to server (e.g. conflict details, created event id). */
-  val data: Map<String, Any> = emptyMap(),
+  val semantic: String = if (success) "action_executed" else "action_failed",
+  val metadata: Map<String, Any?> = emptyMap(),
+
 )
 
 private data class CalendarWindow(
@@ -46,6 +46,7 @@ class ActionExecutor(
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     val actionId = action.id.substringBefore("#")
     return when (actionId) {
+      "get_current_time" -> executeGetCurrentTime()
       "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
@@ -237,6 +238,26 @@ class ActionExecutor(
     }
   }
 
+  private fun executeGetCurrentTime(): ActionExecutionReport {
+    val now = OffsetDateTime.now(ZoneId.systemDefault()).withNano(0)
+    val hour = now.hour
+    val minute = now.minute
+    val localTime = "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
+    return ActionExecutionReport(
+      success = true,
+      message = "Current local time captured: $localTime (${ZoneId.systemDefault().id})",
+      recoverable = false,
+      semantic = "current_time_captured",
+      metadata = mapOf(
+        "local_datetime" to now.toString(),
+        "local_date" to now.toLocalDate().toString(),
+        "local_time" to localTime,
+        "timezone" to ZoneId.systemDefault().id,
+        "epoch_ms" to now.toInstant().toEpochMilli(),
+      ),
+    )
+  }
+
   private fun executeConflictDetection(
     action: SystemAction,
     goal: String,
@@ -340,10 +361,20 @@ class ActionExecutor(
 
   private fun executeAlarmIntent(action: SystemAction, goal: String): ActionExecutionReport {
     val timeStr = action.payload?.get("time") as? String
-      ?: return ActionExecutionReport(false, "Missing 'time' in payload", false)
+      ?: return ActionExecutionReport(
+        success = false,
+        message = "Missing 'time' in payload",
+        recoverable = false,
+        semantic = "alarm_invalid_args",
+      )
 
     val parsed = parseAlarmTime(timeStr)
-      ?: return ActionExecutionReport(false, "Invalid 'time' format (expected ISO8601 UTC or HH:mm)", false)
+      ?: return ActionExecutionReport(
+        success = false,
+        message = "Invalid 'time' format (expected local HH:mm or local ISO8601 datetime)",
+        recoverable = false,
+        semantic = "alarm_invalid_time_format",
+      )
 
     val hourArg = parsed.first
     val minArg = parsed.second
@@ -361,23 +392,57 @@ class ActionExecutor(
         putExtra(AlarmClock.EXTRA_HOUR, hourArg)
         putExtra(AlarmClock.EXTRA_MINUTES, minArg)
         if (vibrateArg) putExtra(AlarmClock.EXTRA_VIBRATE, true)
-        putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+        putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
 
-    return launchIntent(intent, "Alarm setup intent launched for ${hourArg}:${minArg.toString().padStart(2, '0')}")
+    val report =
+      launchIntent(
+        intent = intent,
+        successMessage = "Alarm creation requested in background mode for ${hourArg}:${minArg.toString().padStart(2, '0')}",
+      )
+    val alarmMeta =
+      mapOf(
+        "alarm_hour" to hourArg,
+        "alarm_minute" to minArg,
+        "label" to labelArg,
+        "skip_ui" to true,
+      )
+    return if (report.success) {
+      report.copy(
+        semantic = "alarm_created_background_requested",
+        metadata = alarmMeta,
+      )
+    } else {
+      report.copy(
+        semantic = "alarm_creation_failed",
+        metadata = report.metadata + alarmMeta,
+      )
+    }
   }
 
   private fun parseAlarmTime(timeRaw: String): Pair<Int, Int>? {
-    runCatching {
-      val zdt = Instant.parse(timeRaw).atZone(ZoneId.systemDefault())
-      return Pair(zdt.hour, zdt.minute)
+    val text = timeRaw.trim()
+    if (text.isEmpty()) return null
+
+    // Preferred local wall-clock format.
+    Regex("""^([01]?\d|2[0-3]):([0-5]\d)$""").matchEntire(text)?.let { match ->
+      val hour = match.groupValues[1].toIntOrNull() ?: return null
+      val minute = match.groupValues[2].toIntOrNull() ?: return null
+      return Pair(hour, minute)
     }
 
-    val match = Regex("""^([01]?\d|2[0-3]):([0-5]\d)$""").matchEntire(timeRaw.trim()) ?: return null
-    val hour = match.groupValues[1].toIntOrNull() ?: return null
-    val minute = match.groupValues[2].toIntOrNull() ?: return null
-    return Pair(hour, minute)
+    // Local-time semantics for ISO-like strings:
+    // keep the wall-clock hour/minute in text and do not apply timezone conversion.
+    Regex(
+      """^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:\.\d+)?(?:Z|[+-][01]\d:[0-5]\d)?$""",
+    ).matchEntire(text)?.let { match ->
+      val hour = match.groupValues[1].toIntOrNull() ?: return null
+      val minute = match.groupValues[2].toIntOrNull() ?: return null
+      return Pair(hour, minute)
+    }
+
+    return null
   }
 
   private fun openWebPage(url: String): ActionExecutionReport {
@@ -419,12 +484,19 @@ class ActionExecutor(
   private fun launchIntent(intent: Intent, successMessage: String): ActionExecutionReport {
     return runCatching {
       appContext.startActivity(intent)
-      ActionExecutionReport(success = true, message = successMessage, recoverable = false)
+      ActionExecutionReport(
+        success = true,
+        message = successMessage,
+        recoverable = false,
+        semantic = "intent_launched",
+      )
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
         message = throwable.message ?: "Intent execution failed",
         recoverable = true,
+        semantic = "intent_launch_failed",
+        metadata = mapOf("error" to (throwable.message ?: "Intent execution failed")),
       )
     }
   }

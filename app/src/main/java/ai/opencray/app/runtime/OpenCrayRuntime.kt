@@ -230,6 +230,7 @@ class OpenCrayRuntime(
 
   private fun supportedGatewayCapabilities(): List<String> =
     listOf(
+      "get_current_time",
       "set_alarm",
       "create_calendar_event",
       "detect_calendar_conflicts",
@@ -745,7 +746,16 @@ class OpenCrayRuntime(
           skillName = action.id,
           code = code,
           message = report.message,
-          data = submitData,
+
+          data =
+            mapOf(
+              "status" to if (report.success) "executed" else "failed",
+              "recoverable" to report.recoverable,
+              "semantic" to report.semantic,
+              "metadata" to report.metadata,
+              "action_id" to action.id,
+            ),
+
         )
       val current = snapshot()
       if (result.success) {

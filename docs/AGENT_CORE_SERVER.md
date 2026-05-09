@@ -38,8 +38,8 @@ flowchart LR
 
 ## 3. 前置条件
 
-1. 本机已安装 Python 3.10+，并能创建虚拟环境  
-2. Android Studio 可启动 Emulator（或连接真机）  
+1. 本机已安装 Python 3.10+，并能创建虚拟环境
+2. Android Studio 可启动 Emulator（或连接真机）
 3. 项目目录：`/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray`
 
 可选：
@@ -132,7 +132,7 @@ curl -s http://127.0.0.1:28789/healthz
 
 ## 5. App 端连接配置（Android Studio/Emulator）
 
-1. 运行 App 到模拟器  
+1. 运行 App 到模拟器
 2. 在 App 界面配置连接参数：
    - Host：`10.0.2.2`（模拟器访问宿主机固定地址）
    - Port：与你服务端一致（如 `28789`）
@@ -148,11 +148,11 @@ curl -s http://127.0.0.1:28789/healthz
 
 以“帮我设置一个明天早上7点的闹钟”为例：
 
-1. 在 App 输入目标，点击 `Plan Goal`  
-2. App 调用 `POST /api/v1/agent/tasks/plan`，Server 返回 `task_id` 和 `approved_skills`  
-3. 点击 `Run Agent`  
-4. App 循环调用 `GET /api/v1/agent/tasks/next?device_id=...` 拉取待执行 Skill  
-5. App 本地执行后，调用 `POST /api/v1/agent/tasks/{task_id}/result` 回传  
+1. 在 App 输入目标，点击 `Plan Goal`
+2. App 调用 `POST /api/v1/agent/tasks/plan`，Server 返回 `task_id` 和 `approved_skills`
+3. 点击 `Run Agent`
+4. App 循环调用 `GET /api/v1/agent/tasks/next?device_id=...` 拉取待执行 Skill
+5. App 本地执行后，调用 `POST /api/v1/agent/tasks/{task_id}/result` 回传
 6. 全部 request_id 回传后，任务状态转为 `completed` 或 `failed`
 
 ## 7. API 调试清单（脱离 App 也可复现）
@@ -169,7 +169,7 @@ curl -s -X POST "http://127.0.0.1:28789/api/v1/devices/register" \
     "user_id":"debug_user",
     "platform":"android",
     "app_version":"0.1.0",
-    "capabilities":["set_alarm","create_calendar_event","detect_calendar_conflicts","delete_calendar_event","open_url"]
+    "capabilities":["get_current_time","set_alarm","create_calendar_event","detect_calendar_conflicts","delete_calendar_event","open_url"]
   }' | jq .
 ```
 
@@ -224,7 +224,7 @@ kill <PID>
 
 ### 8.3 `task_not_found`
 
-原因：`task_id` 过期/拼写错误/不是当前服务实例里的任务。  
+原因：`task_id` 过期、拼写错误，或不是当前服务实例里的任务。  
 处理：用同一服务进程返回的 `task_id` 查询；避免重启后换了 store 文件。
 
 ### 8.4 `/tasks/next` 返回 `NO_TASK`
@@ -240,7 +240,7 @@ kill <PID>
 先查 `GET /api/v1/agent/tasks/{task_id}` 的 `device_results`：
 
 - 如果 `code=SKILL_EXECUTION_FAILED`，查看 `message`
-- 常见为系统权限/参数格式问题，优先在 App 端事件日志和系统日志定位
+- 常见为系统权限、参数格式或端上能力缺失问题，优先在 App 事件日志和系统日志定位
 
 ## 9. 本地与生产建议
 

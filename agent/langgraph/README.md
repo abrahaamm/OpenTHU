@@ -143,6 +143,8 @@ Calendar actions are now wired with concrete handlers:
 - `create_calendar_event`
 - `detect_calendar_conflicts`
 - `delete_calendar_event`
+- `get_current_time` (device/server local time context tool)
+- `set_alarm` (local-time semantics: `HH:mm` or local ISO datetime)
 
 These skills are registered with strict `args_json_schema` in `skill_core.py`.
 `SkillManager` validates/coerces args before handlers run.
