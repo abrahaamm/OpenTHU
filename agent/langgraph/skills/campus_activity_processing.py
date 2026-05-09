@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -290,3 +291,144 @@ def summarize_activities(activities: list[dict[str, Any]], warnings: list[str]) 
         "missing_fields": missing_fields,
         "warnings": warnings,
     }
+
+
+def answer_activity_query(query: str, activities: list[dict[str, Any]], limit: int = 5) -> dict[str, Any]:
+    question = query.strip()
+    if not question or not activities:
+        return {"answer": "", "evidence": [], "matched_activities": []}
+
+    terms = _query_terms(question)
+    scored = []
+    for activity in activities:
+        score, evidence = _score_activity(activity, terms)
+        if score > 0:
+            scored.append((score, activity, evidence))
+    scored.sort(key=lambda item: (-item[0], activity_sort_key(item[1])))
+    selected = scored[: max(1, limit)]
+
+    evidence_items = []
+    matched = []
+    for score, activity, snippets in selected:
+        evidence_items.append(
+            {
+                "activity_id": activity.get("activity_id", ""),
+                "title": activity.get("title", ""),
+                "url": activity.get("url", ""),
+                "score": round(score, 3),
+                "snippets": snippets[:3],
+            }
+        )
+        matched.append(activity)
+
+    if not matched:
+        return {
+            "answer": f"没有在已抓取的校园动态中找到与“{question}”明显相关的活动。",
+            "evidence": [],
+            "matched_activities": [],
+        }
+
+    lead = matched[0]
+    lines = [f"针对“{question}”，在已抓取的校园动态中找到 {len(matched)} 条较相关信息。"]
+    focus = _activity_brief(lead)
+    if focus:
+        lines.append(f"最值得先看的是：{focus}。")
+    if len(matched) > 1:
+        more = "；".join(_activity_brief(item) for item in matched[1:3] if _activity_brief(item))
+        if more:
+            lines.append(f"另外可以关注：{more}。")
+
+    return {
+        "answer": "".join(lines),
+        "evidence": evidence_items,
+        "matched_activities": matched,
+    }
+
+
+def _query_terms(query: str) -> list[str]:
+    normalized = query.lower()
+    terms = [item for item in re.split(r"[\s,，。；;：:、？?！!（）()【】\[\]\"']+", normalized) if len(item) >= 2]
+    phrase_bank = (
+        "ai",
+        "人工智能",
+        "大模型",
+        "机器学习",
+        "讲座",
+        "论坛",
+        "沙龙",
+        "报名",
+        "比赛",
+        "大赛",
+        "竞赛",
+        "就业",
+        "招聘",
+        "实习",
+        "展览",
+        "艺术",
+        "音乐",
+        "线上",
+        "线下",
+        "本科生",
+        "研究生",
+        "博士后",
+    )
+    terms.extend(phrase for phrase in phrase_bank if phrase in normalized)
+    cjk = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", query)
+    if len(cjk) <= 12:
+        terms.extend(cjk[idx : idx + size] for size in (2, 3) for idx in range(0, max(len(cjk) - size + 1, 0)))
+    counts = Counter(term for term in terms if term)
+    return [term for term, _ in counts.most_common()]
+
+
+def _score_activity(activity: dict[str, Any], terms: list[str]) -> tuple[float, list[str]]:
+    weighted_fields = (
+        ("title", 4.0),
+        ("category", 2.0),
+        ("organizer", 1.8),
+        ("source", 1.5),
+        ("location", 1.5),
+        ("abstract", 1.0),
+    )
+    score = 0.0
+    evidence: list[str] = []
+    for field, weight in weighted_fields:
+        text = str(activity.get(field, "") or "")
+        lower = text.lower()
+        hits = [term for term in terms if term and term in lower]
+        if not hits:
+            continue
+        score += weight * len(set(hits))
+        snippet = _field_snippet(field, text, hits[0])
+        if snippet:
+            evidence.append(snippet)
+    if score > 0 and activity.get("start_time"):
+        score += 0.2
+    return score, evidence
+
+
+def _field_snippet(field: str, text: str, term: str) -> str:
+    clean = re.sub(r"\s+", " ", text).strip()
+    if not clean:
+        return ""
+    if len(clean) <= 160:
+        return f"{field}: {clean}"
+    index = clean.lower().find(term.lower())
+    if index < 0:
+        return f"{field}: {clean[:160]}"
+    start = max(0, index - 60)
+    end = min(len(clean), index + 100)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(clean) else ""
+    return f"{field}: {prefix}{clean[start:end]}{suffix}"
+
+
+def _activity_brief(activity: dict[str, Any]) -> str:
+    parts = []
+    if activity.get("start_time"):
+        parts.append(str(activity["start_time"])[:16])
+    parts.append(str(activity.get("title", "")).strip())
+    if activity.get("location"):
+        parts.append(f"地点 {activity['location']}")
+    if activity.get("organizer"):
+        parts.append(f"主办 {activity['organizer']}")
+    return "，".join(part for part in parts if part)

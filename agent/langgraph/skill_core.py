@@ -184,6 +184,7 @@ def build_default_registry() -> SkillRegistry:
             False,
             session_required=True,
             args_schema={
+                "query": "string (optional; detailed question for activity RAG answer)",
                 "keywords": "list[string] (optional)",
                 "start_date": "YYYY-MM-DD or YYYYMMDD (optional)",
                 "end_date": "YYYY-MM-DD or YYYYMMDD (optional)",

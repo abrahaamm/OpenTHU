@@ -141,7 +141,7 @@ It still does not implement most data/auth skills:
 
 These information/display skills have concrete lightweight handlers:
 
-- `get_campus_activities` (INFO/WebVPN news APIs when session cookies are provided; otherwise records from `OPENTHU_CAMPUS_ACTIVITIES_FILE` or official entry points)
+- `get_campus_activities` (INFO/WebVPN news APIs when session cookies are provided; otherwise records from `OPENTHU_CAMPUS_ACTIVITIES_FILE` or official entry points; accepts `query` for lightweight evidence retrieval over fetched activity details)
 - `show_summary`
 - `send_notification`
 - `open_url`

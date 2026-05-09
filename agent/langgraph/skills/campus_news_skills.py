@@ -10,6 +10,7 @@ try:
     from ..skill_core import SkillHandler, SkillInvocation, SkillResult
     from .campus_activity_processing import (
         build_activity,
+        answer_activity_query,
         coerce_activity,
         dedupe_activities,
         filter_activities,
@@ -29,6 +30,7 @@ except ImportError:
     from skill_core import SkillHandler, SkillInvocation, SkillResult
     from skills.campus_activity_processing import (
         build_activity,
+        answer_activity_query,
         coerce_activity,
         dedupe_activities,
         filter_activities,
@@ -96,6 +98,19 @@ def _coerce_keywords(args: dict[str, Any]) -> list[str]:
     return values or list(DEFAULT_ACTIVITY_KEYWORDS)
 
 
+def _coerce_query(args: dict[str, Any]) -> str:
+    for key in ("query", "question", "search_query", "user_query"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    raw_keywords = args.get("keywords") or args.get("keyword")
+    if isinstance(raw_keywords, list):
+        return " ".join(str(item).strip() for item in raw_keywords if str(item).strip())
+    if isinstance(raw_keywords, str):
+        return raw_keywords.strip()
+    return ""
+
+
 def _coerce_limit(args: dict[str, Any]) -> int:
     try:
         value = int(args.get("limit", 10))
@@ -160,6 +175,7 @@ class CampusActivitiesSkill(SkillHandler):
     ) -> SkillResult:
         args = dict(invocation.args or {})
         keywords = _coerce_keywords(args)
+        query = _coerce_query(args)
         limit = _coerce_limit(args)
         start_date = str(args.get("start_date", "")).strip()
         end_date = str(args.get("end_date", "")).strip()
@@ -201,6 +217,12 @@ class CampusActivitiesSkill(SkillHandler):
             warnings.append("No parsed activity records available; returned official entry points.")
             summary_payload = summarize_activities(activities, warnings)
 
+        rag_payload = answer_activity_query(query, activities, limit=min(limit, 5)) if query else {
+            "answer": "",
+            "evidence": [],
+            "matched_activities": [],
+        }
+
         return SkillResult(
             skill_name=invocation.skill_name,
             request_id=invocation.request_id,
@@ -208,13 +230,17 @@ class CampusActivitiesSkill(SkillHandler):
             data={
                 "status": "ok",
                 "summary": summary_payload["summary"],
+                "answer": rag_payload["answer"],
                 "activities": activities,
                 "highlights": summary_payload["highlights"],
+                "matched_activities": rag_payload["matched_activities"],
+                "evidence": rag_payload["evidence"],
                 "count": len(activities),
                 "sources": sources,
                 "warnings": summary_payload["warnings"],
                 "missing_fields": summary_payload["missing_fields"],
                 "keywords": keywords,
+                "query": query,
                 "note": "Uses INFO/WebVPN news APIs when session cookies are available; falls back to OPENTHU_CAMPUS_ACTIVITIES_FILE or official entry points.",
             },
             from_cache=from_cache,
