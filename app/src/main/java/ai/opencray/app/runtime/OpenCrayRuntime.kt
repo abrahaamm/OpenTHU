@@ -192,6 +192,7 @@ class OpenCrayRuntime(
     listOf(
       "get_current_time",
       "set_alarm",
+      "get_campus_activities",
       "create_calendar_event",
       "detect_calendar_conflicts",
       "delete_calendar_event",

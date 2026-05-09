@@ -56,9 +56,9 @@ class FakeRuntimeRepository : RuntimeRepository {
       systemActions =
         listOf(
           SystemAction(
-            id = "open_tsinghua_news",
-            title = "Open Campus News",
-            summary = "Open Tsinghua portal page for latest campus updates.",
+            id = "get_campus_activities",
+            title = "Get Campus Activities",
+            summary = "Fetch campus activity information and official source links.",
             riskLevel = "low",
             requiresApproval = false,
             confidence = 90,

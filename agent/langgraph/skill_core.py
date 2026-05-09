@@ -183,6 +183,12 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=True,
+            args_schema={
+                "keywords": "list[string] (optional)",
+                "start_date": "YYYY-MM-DD or YYYYMMDD (optional)",
+                "end_date": "YYYY-MM-DD or YYYYMMDD (optional)",
+                "limit": "integer (optional)",
+            },
         ),
         SkillSpec(
             "search",
@@ -294,6 +300,19 @@ def build_default_registry() -> SkillRegistry:
             from skills.alarm_skills import GetCurrentTimeSkill, SetAlarmSkill
         registry.register_handler("get_current_time", GetCurrentTimeSkill())
         registry.register_handler("set_alarm", SetAlarmSkill())
+    except ImportError:
+        pass
+    try:
+        try:
+            from .skills.campus_news_skills import CampusActivitiesSkill
+            from .skills.summary_skills import OpenUrlSkill, SendNotificationSkill, ShowSummarySkill
+        except ImportError:
+            from skills.campus_news_skills import CampusActivitiesSkill
+            from skills.summary_skills import OpenUrlSkill, SendNotificationSkill, ShowSummarySkill
+        registry.register_handler("get_campus_activities", CampusActivitiesSkill())
+        registry.register_handler("show_summary", ShowSummarySkill())
+        registry.register_handler("send_notification", SendNotificationSkill())
+        registry.register_handler("open_url", OpenUrlSkill())
     except ImportError:
         pass
     register_calendar_handlers(registry)

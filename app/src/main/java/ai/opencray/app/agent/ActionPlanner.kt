@@ -67,9 +67,9 @@ class ActionPlanner {
     if (containsAny(normalized, listOf("资讯", "新闻", "校园网", "活动", "news", "event"))) {
       actions +=
         SystemAction(
-          id = "open_tsinghua_news",
-          title = "Open Campus News",
-          summary = "Open Tsinghua news or event page for user verification.",
+          id = "get_campus_activities",
+          title = "Get Campus Activities",
+          summary = "Fetch campus activity information and official source links.",
           riskLevel = "low",
           requiresApproval = false,
           confidence = 90,

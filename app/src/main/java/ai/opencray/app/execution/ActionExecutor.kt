@@ -48,7 +48,7 @@ class ActionExecutor(
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
-      "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
+      "get_campus_activities" -> executeGetCampusActivities()
       "open_url" -> {
         val url =
           (action.payload?.get("url") as? String)
@@ -64,12 +64,44 @@ class ActionExecutor(
         )
       else ->
         ActionExecutionReport(
-          success = true,
-          message = "No-op fallback executed for ${action.id}.",
+          success = false,
+          message = "Unsupported action: ${action.id}.",
           recoverable = false,
+          semantic = "unsupported_action",
         )
     }
   }
+
+  private fun executeGetCampusActivities(): ActionExecutionReport =
+    ActionExecutionReport(
+      success = true,
+      message = "Campus activity sources prepared.",
+      recoverable = false,
+      semantic = "campus_activities_ready",
+      metadata =
+        mapOf(
+          "activities" to
+            listOf(
+              mapOf(
+                "activity_id" to "src_tsinghua_news",
+                "title" to "清华大学新闻网",
+                "organizer" to "清华大学",
+                "start_time" to "",
+                "location" to "online",
+                "url" to "https://news.tsinghua.edu.cn/",
+              ),
+              mapOf(
+                "activity_id" to "src_tsinghua_events",
+                "title" to "清华大学校园活动与通知入口",
+                "organizer" to "清华大学",
+                "start_time" to "",
+                "location" to "online",
+                "url" to "https://www.tsinghua.edu.cn/",
+              ),
+            ),
+          "source" to "official_entrypoints",
+        ),
+    )
 
   private fun executeCreateCalendarEvent(
     action: SystemAction,
