@@ -290,6 +290,19 @@ def build_default_registry() -> SkillRegistry:
                 "additionalProperties": False,
             },
         ),
+        SkillSpec(
+            "read_notifications",
+            "Read unread system notifications",
+            "action",
+            "low",
+            False,
+            args_schema={},
+            args_json_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        ),
         SkillSpec("show_summary", "Display a structured summary to the user", "action", "low", False),
         SkillSpec("send_notification", "Send a local system notification", "action", "low", False),
         SkillSpec("open_url", "Open a URL in-app or externally", "action", "low", False),
@@ -299,6 +312,8 @@ def build_default_registry() -> SkillRegistry:
     try:
         from .skills.alarm_skills import SetAlarmSkill
         registry.register_handler("set_alarm", SetAlarmSkill())
+        from .skills.notification_skills import ReadNotificationsSkill
+        registry.register_handler("read_notifications", ReadNotificationsSkill())
     except ImportError:
         pass
     register_calendar_handlers(registry)
