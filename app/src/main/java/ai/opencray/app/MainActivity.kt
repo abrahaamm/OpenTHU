@@ -72,6 +72,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var crossAppToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
   private lateinit var connectButton: Button
+  private lateinit var saveSettingsButton: Button
+  private lateinit var testSettingsButton: Button
   private lateinit var planGoalButton: Button
   private lateinit var runAgentButton: Button
   private lateinit var actionPrimaryButton: Button
@@ -84,6 +86,25 @@ class MainActivity : AppCompatActivity() {
   private lateinit var launchMeituanButton: Button
   private lateinit var launchQqButton: Button
   private lateinit var approveButton: Button
+  private lateinit var openAiKeyInput: EditText
+  private lateinit var llmModelInput: EditText
+  private lateinit var llmBaseUrlInput: EditText
+  private lateinit var userIdInput: EditText
+  private lateinit var webvpnCookieInput: EditText
+  private lateinit var webvpnCsrfInput: EditText
+  private lateinit var campusFileInput: EditText
+  private lateinit var searchProviderInput: EditText
+  private lateinit var searchEndpointInput: EditText
+  private lateinit var searchApiKeyInput: EditText
+  private lateinit var searchTtlInput: EditText
+  private lateinit var memoryFileInput: EditText
+  private lateinit var memoryLongTtlInput: EditText
+  private lateinit var memoryMidTtlInput: EditText
+  private lateinit var memoryShortTtlInput: EditText
+  private lateinit var memoryHalfLifeInput: EditText
+  private lateinit var adbBinInput: EditText
+  private lateinit var adbSerialInput: EditText
+  private lateinit var timezoneInput: EditText
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -148,6 +169,8 @@ class MainActivity : AppCompatActivity() {
     crossAppToggle = findViewById(R.id.capability_cross_app_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
     connectButton = findViewById(R.id.connect_button)
+    saveSettingsButton = findViewById(R.id.save_settings_button)
+    testSettingsButton = findViewById(R.id.test_settings_button)
     planGoalButton = findViewById(R.id.plan_goal_button)
     runAgentButton = findViewById(R.id.run_agent_button)
     actionPrimaryButton = findViewById(R.id.action_primary_button)
@@ -160,6 +183,26 @@ class MainActivity : AppCompatActivity() {
     launchMeituanButton = findViewById(R.id.launch_meituan_button)
     launchQqButton = findViewById(R.id.launch_qq_button)
     approveButton = findViewById(R.id.approve_button)
+    openAiKeyInput = findViewById(R.id.setting_openai_key_input)
+    llmModelInput = findViewById(R.id.setting_llm_model_input)
+    llmBaseUrlInput = findViewById(R.id.setting_llm_base_url_input)
+    userIdInput = findViewById(R.id.setting_user_id_input)
+    webvpnCookieInput = findViewById(R.id.setting_webvpn_cookie_input)
+    webvpnCsrfInput = findViewById(R.id.setting_webvpn_csrf_input)
+    campusFileInput = findViewById(R.id.setting_campus_file_input)
+    searchProviderInput = findViewById(R.id.setting_search_provider_input)
+    searchEndpointInput = findViewById(R.id.setting_search_endpoint_input)
+    searchApiKeyInput = findViewById(R.id.setting_search_api_key_input)
+    searchTtlInput = findViewById(R.id.setting_search_ttl_input)
+    memoryFileInput = findViewById(R.id.setting_memory_file_input)
+    memoryLongTtlInput = findViewById(R.id.setting_memory_long_ttl_input)
+    memoryMidTtlInput = findViewById(R.id.setting_memory_mid_ttl_input)
+    memoryShortTtlInput = findViewById(R.id.setting_memory_short_ttl_input)
+    memoryHalfLifeInput = findViewById(R.id.setting_memory_half_life_input)
+    adbBinInput = findViewById(R.id.setting_adb_bin_input)
+    adbSerialInput = findViewById(R.id.setting_adb_serial_input)
+    timezoneInput = findViewById(R.id.setting_timezone_input)
+    loadSettingsInputs()
   }
 
   private fun decorateUi() {
@@ -285,6 +328,18 @@ class MainActivity : AppCompatActivity() {
       viewModel.updateTlsEnabled(tlsToggle.isChecked)
       viewModel.connectToGateway()
       render()
+    }
+    saveSettingsButton.setOnClickListener {
+      if (persistSettings()) {
+        Toast.makeText(this, getString(R.string.settings_saved), Toast.LENGTH_SHORT).show()
+      } else {
+        Toast.makeText(this, getString(R.string.settings_invalid), Toast.LENGTH_SHORT).show()
+      }
+    }
+    testSettingsButton.setOnClickListener {
+      val warnings = buildSettingsWarnings()
+      val message = if (warnings.isEmpty()) getString(R.string.settings_health_ok) else "${getString(R.string.settings_health_warn)}: ${warnings.joinToString("；")}"
+      Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     planGoalButton.setOnClickListener {
@@ -677,5 +732,67 @@ class MainActivity : AppCompatActivity() {
       Toast.LENGTH_SHORT,
     ).show()
     render()
+  }
+
+  private fun loadSettingsInputs() {
+    val pref = getSharedPreferences("openthu_settings", MODE_PRIVATE)
+    openAiKeyInput.setText(pref.getString("openai_api_key", ""))
+    llmModelInput.setText(pref.getString("llm_model", "gpt-4.1-mini"))
+    llmBaseUrlInput.setText(pref.getString("llm_base_url", ""))
+    userIdInput.setText(pref.getString("user_id", "demo_user"))
+    webvpnCookieInput.setText(pref.getString("webvpn_cookie", ""))
+    webvpnCsrfInput.setText(pref.getString("webvpn_csrf", ""))
+    campusFileInput.setText(pref.getString("campus_file", ""))
+    searchProviderInput.setText(pref.getString("search_provider", "duckduckgo"))
+    searchEndpointInput.setText(pref.getString("search_endpoint", "https://duckduckgo.com/html/"))
+    searchApiKeyInput.setText(pref.getString("search_api_key", ""))
+    searchTtlInput.setText(pref.getString("search_ttl", "3600"))
+    memoryFileInput.setText(pref.getString("memory_file", "agent/langgraph/memory_store.json"))
+    memoryLongTtlInput.setText(pref.getString("memory_long_ttl", "365"))
+    memoryMidTtlInput.setText(pref.getString("memory_mid_ttl", "30"))
+    memoryShortTtlInput.setText(pref.getString("memory_short_ttl", "7"))
+    memoryHalfLifeInput.setText(pref.getString("memory_half_life", "30"))
+    adbBinInput.setText(pref.getString("adb_bin", "adb"))
+    adbSerialInput.setText(pref.getString("adb_serial", ""))
+    timezoneInput.setText(pref.getString("timezone", "UTC"))
+  }
+
+  private fun persistSettings(): Boolean {
+    if (llmModelInput.text.toString().trim().isEmpty()) return false
+    val pref = getSharedPreferences("openthu_settings", MODE_PRIVATE)
+    pref.edit()
+      .putString("openai_api_key", openAiKeyInput.text.toString().trim())
+      .putString("llm_model", llmModelInput.text.toString().trim())
+      .putString("llm_base_url", llmBaseUrlInput.text.toString().trim())
+      .putString("user_id", userIdInput.text.toString().trim())
+      .putString("webvpn_cookie", webvpnCookieInput.text.toString().trim())
+      .putString("webvpn_csrf", webvpnCsrfInput.text.toString().trim())
+      .putString("campus_file", campusFileInput.text.toString().trim())
+      .putString("search_provider", searchProviderInput.text.toString().trim().ifEmpty { "duckduckgo" })
+      .putString("search_endpoint", searchEndpointInput.text.toString().trim())
+      .putString("search_api_key", searchApiKeyInput.text.toString().trim())
+      .putString("search_ttl", searchTtlInput.text.toString().trim())
+      .putString("memory_file", memoryFileInput.text.toString().trim())
+      .putString("memory_long_ttl", memoryLongTtlInput.text.toString().trim())
+      .putString("memory_mid_ttl", memoryMidTtlInput.text.toString().trim())
+      .putString("memory_short_ttl", memoryShortTtlInput.text.toString().trim())
+      .putString("memory_half_life", memoryHalfLifeInput.text.toString().trim())
+      .putString("adb_bin", adbBinInput.text.toString().trim())
+      .putString("adb_serial", adbSerialInput.text.toString().trim())
+      .putString("timezone", timezoneInput.text.toString().trim())
+      .apply()
+    return true
+  }
+
+  private fun buildSettingsWarnings(): List<String> {
+    val warnings = mutableListOf<String>()
+    if (openAiKeyInput.text.toString().trim().isEmpty()) warnings += "缺少 OPENAI_API_KEY"
+    if (webvpnCookieInput.text.toString().trim().isEmpty()) warnings += "缺少 WebVPN Cookie（校园资讯真实抓取会降级）"
+    if (searchProviderInput.text.toString().trim().equals("brave", ignoreCase = true) &&
+      searchApiKeyInput.text.toString().trim().isEmpty()
+    ) {
+      warnings += "Brave provider 缺少 API Key"
+    }
+    return warnings
   }
 }

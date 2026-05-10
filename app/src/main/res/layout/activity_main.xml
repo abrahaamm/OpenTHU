@@ -696,6 +696,271 @@
                 android:textSize="20sp"
                 android:textStyle="bold" />
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/panel_surface"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_runtime_section"
+                    android:textColor="@color/opencray_primary_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/setting_openai_key_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_openai_key_hint"
+                    android:inputType="textPassword"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_llm_model_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_llm_model_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_llm_base_url_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_llm_base_url_hint"
+                    android:inputType="textUri"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_user_id_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_user_id_hint"
+                    android:padding="10dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/panel_surface"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_skill_section"
+                    android:textColor="@color/opencray_primary_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/setting_webvpn_cookie_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_webvpn_cookie_hint"
+                    android:inputType="textPassword"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_webvpn_csrf_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_webvpn_csrf_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_campus_file_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_campus_file_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_search_provider_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_search_provider_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_search_endpoint_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_search_endpoint_hint"
+                    android:inputType="textUri"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_search_api_key_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_search_api_key_hint"
+                    android:inputType="textPassword"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_search_ttl_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_search_ttl_hint"
+                    android:inputType="number"
+                    android:padding="10dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/panel_surface"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_memory_section"
+                    android:textColor="@color/opencray_primary_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/setting_memory_file_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_memory_file_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_memory_long_ttl_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_memory_long_ttl_hint"
+                    android:inputType="number"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_memory_mid_ttl_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_memory_mid_ttl_hint"
+                    android:inputType="number"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_memory_short_ttl_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_memory_short_ttl_hint"
+                    android:inputType="number"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_memory_half_life_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_memory_half_life_hint"
+                    android:inputType="numberDecimal"
+                    android:padding="10dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/panel_surface"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_device_section"
+                    android:textColor="@color/opencray_primary_dark"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/setting_adb_bin_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_adb_bin_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_adb_serial_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_adb_serial_hint"
+                    android:padding="10dp" />
+
+                <EditText
+                    android:id="@+id/setting_timezone_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/input_field_surface"
+                    android:hint="@string/setting_timezone_hint"
+                    android:padding="10dp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/save_settings_button"
+                style="@style/OpenCray.PrimaryButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/connect_button" />
+
+            <Button
+                android:id="@+id/test_settings_button"
+                style="@style/OpenCray.SecondaryButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/settings_connection_test" />
+
             <TextView
                 android:id="@+id/settings_privacy_text"
                 android:layout_width="match_parent"
