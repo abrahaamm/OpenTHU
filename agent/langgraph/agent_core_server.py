@@ -13,8 +13,10 @@ import uvicorn
 
 try:
     from .openthu_agent import OpenTHULangGraphAgent
+    from .skill_core import SkillInvocation
 except ImportError:
     from openthu_agent import OpenTHULangGraphAgent
+    from skill_core import SkillInvocation
 
 
 def utc_now() -> str:
@@ -159,6 +161,80 @@ class AgentCoreStore:
                 if str(item.get("request_id", "")) == request_id:
                     item["status"] = status
 
+    def _approved_skill_count(self, task_doc: dict[str, Any]) -> int:
+        return len([item for item in task_doc.get("approved_skills", []) if isinstance(item, dict)])
+
+    def _all_results(self, task_doc: dict[str, Any]) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for key in ("server_results", "device_results"):
+            value = task_doc.get(key, [])
+            if isinstance(value, list):
+                results.extend(item for item in value if isinstance(item, dict))
+        return results
+
+    def _refresh_task_status_locked(self, task_doc: dict[str, Any]) -> None:
+        expected = self._approved_skill_count(task_doc)
+        completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
+        in_flight = set(str(item) for item in task_doc.get("in_flight_request_ids", []))
+        if expected == 0:
+            task_doc["status"] = "planned"
+        elif len(completed) >= expected:
+            task_doc["status"] = "completed" if all(item.get("code") == "OK" for item in self._all_results(task_doc)) else "failed"
+        elif in_flight:
+            task_doc["status"] = "in_progress"
+        else:
+            task_doc["status"] = "ready_for_device_execution"
+
+    def record_server_result(
+        self,
+        *,
+        task_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+
+            request_id = str(result.get("request_id", ""))
+            approved_request_ids = {
+                str(item.get("request_id", ""))
+                for item in task_doc.get("approved_skills", [])
+                if isinstance(item, dict)
+            }
+            if request_id not in approved_request_ids:
+                raise ValueError("request_id_not_in_approved_skills")
+
+            completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
+            if request_id in completed:
+                return dict(task_doc)
+            completed.add(request_id)
+
+            code = str(result.get("code", "")).strip() or "SKILL_EXECUTION_FAILED"
+            success = code == "OK"
+            result_item = {
+                "request_id": request_id,
+                "skill_name": result.get("skill_name", ""),
+                "code": code,
+                "success": success,
+                "message": result.get("message") or code,
+                "data": result.get("data", {}),
+                "source": result.get("source", "agent_core"),
+                "from_cache": bool(result.get("from_cache", False)),
+                "fetched_at": result.get("fetched_at") or utc_now(),
+            }
+            results = task_doc.get("server_results", [])
+            if not isinstance(results, list):
+                results = []
+            results.append(result_item)
+            task_doc["server_results"] = results
+            task_doc["completed_request_ids"] = sorted(completed)
+            self._mark_skill_status(task_doc, request_id, "executed" if success else "failed")
+            self._refresh_task_status_locked(task_doc)
+            task_doc["updated_at"] = utc_now()
+            self._save_locked()
+            return dict(task_doc)
+
     def pop_next_dispatch(self, device_id: str) -> dict[str, Any] | None:
         with self._lock:
             tasks = [
@@ -253,15 +329,64 @@ class AgentCoreStore:
             task_doc["completed_request_ids"] = sorted(completed)
             self._mark_skill_status(task_doc, payload.request_id, "executed" if success else "failed")
 
-            expected = len([item for item in task_doc.get("approved_skills", []) if isinstance(item, dict)])
-            received = len(task_doc["completed_request_ids"])
-            if received < expected:
-                task_doc["status"] = "in_progress"
-            else:
-                task_doc["status"] = "completed" if all(item.get("code") == "OK" for item in task_doc["device_results"]) else "failed"
+            self._refresh_task_status_locked(task_doc)
             task_doc["updated_at"] = utc_now()
             self._save_locked()
             return dict(task_doc)
+
+
+def _skill_invocation_from_dict(payload: dict[str, Any]) -> SkillInvocation:
+    return SkillInvocation(
+        skill_name=str(payload.get("skill_name", "")),
+        request_id=str(payload.get("request_id", "")),
+        task_id=str(payload.get("task_id", "")),
+        args=payload.get("args", {}) if isinstance(payload.get("args"), dict) else {},
+        risk_level=str(payload.get("risk_level", "low")),
+        requires_approval=bool(payload.get("requires_approval", False)),
+        description=str(payload.get("description", "")),
+        status=str(payload.get("status", "approved")),
+    )
+
+
+def execute_server_side_data_skills(
+    *,
+    agent: OpenTHULangGraphAgent,
+    store: AgentCoreStore,
+    task_doc: dict[str, Any],
+    session: dict[str, Any],
+) -> dict[str, Any]:
+    current_task = dict(task_doc)
+    task_id = str(current_task.get("task_id", ""))
+    state = {
+        "task_id": task_id,
+        "request_id": current_task.get("request_id", ""),
+        "session": session,
+        "skill_plan": current_task.get("skill_plan", []),
+        "approved_skills": current_task.get("approved_skills", []),
+    }
+    current_session = dict(session)
+
+    for skill in current_task.get("approved_skills", []):
+        if not isinstance(skill, dict):
+            continue
+        spec = agent.skill_manager.get_spec(str(skill.get("skill_name", "")))
+        if spec is None or spec.category != "data":
+            continue
+        invocation_payload = dict(skill)
+        invocation_payload["task_id"] = task_id
+        invocation = _skill_invocation_from_dict(invocation_payload)
+        result = agent.skill_manager.execute(invocation, current_session, state)
+        result["task_id"] = task_id
+        result["status"] = "executed" if result.get("code") == "OK" else "failed"
+        result["success"] = result.get("code") == "OK"
+        result["skill_name"] = invocation.skill_name
+        result["description"] = invocation.description
+        current_task = store.record_server_result(task_id=task_id, result=result)
+        maybe_session = result.get("data", {}).get("session")
+        if isinstance(maybe_session, dict):
+            current_session = maybe_session
+            state["session"] = current_session
+    return current_task
 
 
 def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
@@ -298,6 +423,12 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             device_id=payload.device_id,
             user_id=payload.user_id,
             goal=payload.goal,
+        )
+        task_doc = execute_server_side_data_skills(
+            agent=agent,
+            store=store,
+            task_doc=task_doc,
+            session=plan_response.get("data", {}).get("session", {}) if isinstance(plan_response.get("data"), dict) else {},
         )
         return {
             "code": "OK",

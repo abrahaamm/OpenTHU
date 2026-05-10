@@ -12,7 +12,7 @@ It is now designed around a skill-first architecture:
 Deployment modes:
 
 - Local mode: run workflow end-to-end in one Python process
-- Server dispatch mode: run planning/safety on PC server, let Android app pull and execute actions
+- Server dispatch mode: run planning/safety on PC server, execute data skills on the server, and let Android app pull remaining device actions
 
 ## Workflow
 
@@ -51,7 +51,7 @@ flowchart TD
   - validation behavior, contracts, and best practices
 - [agent_core_server.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/agent_core_server.py)
   - PC-hosted Agent-Core server
-  - plan-only workflow for device task dispatch
+  - plan workflow for device task dispatch with server-side data skill execution
   - HTTPS APIs for device registration, task pull, and result callback
 
 ## Core Design
