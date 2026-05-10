@@ -186,12 +186,22 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "search",
-            "Search cached academic and campus information",
+            "Search the web and summarize retrieved evidence",
             "data",
             "low",
             False,
             session_required=True,
-            args_schema={"query": "string"},
+            args_schema={
+                "query": "string (required)",
+                "scope": "web|all (optional)",
+                "scene": "campus|general|hybrid (optional, default hybrid)",
+                "max_results": "integer (optional)",
+                "supplemental_results": "integer (optional, only for hybrid)",
+                "domains": "list[string] (optional)",
+                "freshness_days": "integer (optional)",
+                "use_rag": "bool (optional)",
+                "language": "string (optional)",
+            },
         ),
         SkillSpec(
             "get_current_time",
@@ -332,6 +342,11 @@ def build_default_registry() -> SkillRegistry:
         registry.register_handler("set_alarm", SetAlarmSkill())
         from .skills.notification_skills import ReadNotificationsSkill
         registry.register_handler("read_notifications", ReadNotificationsSkill())
+    except ImportError:
+        pass
+    try:
+        from .skills.search_skills import SearchSkill
+        registry.register_handler("search", SearchSkill())
     except ImportError:
         pass
     register_calendar_handlers(registry)
