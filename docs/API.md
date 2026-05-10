@@ -442,7 +442,7 @@ class SkillResult:
             "title": "...",
             "url": "https://...",
             "snippet": "...",
-            "source": "brave",
+            "source": "duckduckgo",
             "score": 0.92
         }
     ],
@@ -458,7 +458,7 @@ class SkillResult:
 
 环境变量：
 
-- `OPENTHU_SEARCH_PROVIDER=mock|searxng|brave`
+- `OPENTHU_SEARCH_PROVIDER=duckduckgo|mock|searxng|brave`（默认 `duckduckgo`，无需 API key）
 - `OPENTHU_SEARCH_ENDPOINT`：SearXNG endpoint 或 Brave API endpoint 覆盖值
 - `OPENTHU_SEARCH_API_KEY`：Brave Search API key
 - `OPENTHU_SEARCH_CACHE_DIR`：搜索结果和网页正文缓存目录，默认 `/tmp/openthu_search_cache`

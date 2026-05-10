@@ -10,7 +10,7 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, parse_qs, unquote, urlparse
 from urllib.request import Request, build_opener
 
 try:
@@ -256,6 +256,38 @@ class SearxngSearchProvider(SearchProvider):
         return results, False
 
 
+class DuckDuckGoSearchProvider(SearchProvider):
+    name = "duckduckgo"
+
+    def __init__(self, endpoint: str = "https://duckduckgo.com/html/") -> None:
+        self.endpoint = endpoint
+
+    def search(
+        self,
+        *,
+        query: str,
+        max_results: int,
+        domains: list[str],
+        freshness_days: int,
+        language: str,
+    ) -> tuple[list[WebSearchResult], bool]:
+        del freshness_days
+        scoped_query = _with_domain_filters(query, domains)
+        cache_key = _cache_key("duckduckgo", scoped_query, max_results, language)
+        cached = _read_cache(cache_key)
+        if cached:
+            return [_result_from_dict(item) for item in cached.get("results", [])], True
+
+        params = {
+            "q": scoped_query,
+            "kl": "cn-zh" if language.lower().startswith("zh") else "us-en",
+        }
+        html = _text_request(f"{self.endpoint}?{urlencode(params)}")
+        results = parse_duckduckgo_html(html)[:max_results]
+        _write_cache(cache_key, {"results": [asdict(item) for item in results]})
+        return results, False
+
+
 class BraveSearchProvider(SearchProvider):
     name = "brave"
 
@@ -306,9 +338,12 @@ class BraveSearchProvider(SearchProvider):
 
 
 def _build_provider() -> SearchProvider:
-    provider = os.getenv("OPENTHU_SEARCH_PROVIDER", "mock").strip().lower() or "mock"
+    provider = os.getenv("OPENTHU_SEARCH_PROVIDER", "duckduckgo").strip().lower() or "duckduckgo"
     if provider == "mock":
         return MockSearchProvider()
+    if provider == "duckduckgo":
+        endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "https://duckduckgo.com/html/").strip()
+        return DuckDuckGoSearchProvider(endpoint)
     if provider == "searxng":
         endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "").strip()
         if not endpoint:
@@ -321,6 +356,46 @@ def _build_provider() -> SearchProvider:
         endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "https://api.search.brave.com/res/v1/web/search").strip()
         return BraveSearchProvider(api_key, endpoint)
     raise SearchProviderError(f"Unsupported search provider `{provider}`")
+
+
+def parse_duckduckgo_html(html: str) -> list[WebSearchResult]:
+    blocks = re.findall(r'(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>.*?</div>\s*</div>', html)
+    if not blocks:
+        blocks = re.findall(r'(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>.*?</div>', html)
+    results: list[WebSearchResult] = []
+    for block in blocks:
+        title_match = re.search(r'(?is)<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block)
+        if not title_match:
+            continue
+        raw_url = unescape(title_match.group(1))
+        url = _unwrap_duckduckgo_redirect(raw_url)
+        title = _clean_text(re.sub(r"(?s)<[^>]+>", " ", title_match.group(2)))
+        snippet_match = re.search(r'(?is)<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>', block)
+        if not snippet_match:
+            snippet_match = re.search(r'(?is)<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>', block)
+        snippet = _clean_text(re.sub(r"(?s)<[^>]+>", " ", snippet_match.group(1) if snippet_match else ""))
+        if not url or not title:
+            continue
+        results.append(
+            WebSearchResult(
+                title=title,
+                url=url,
+                snippet=snippet,
+                source="duckduckgo",
+            )
+        )
+    return results
+
+
+def _unwrap_duckduckgo_redirect(url: str) -> str:
+    parsed = urlparse(url)
+    if "duckduckgo.com" not in parsed.netloc:
+        return url
+    query = parse_qs(parsed.query)
+    uddg = query.get("uddg", [])
+    if uddg:
+        return unquote(uddg[0])
+    return url
 
 
 def fetch_documents(results: list[WebSearchResult], warnings: list[str]) -> list[WebDocument]:

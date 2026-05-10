@@ -13,10 +13,10 @@ import uvicorn
 
 try:
     from .openthu_agent import OpenTHULangGraphAgent
-    from .skill_core import SkillInvocation
+    from .skill_core import MissingSkillHandler, SkillInvocation
 except ImportError:
     from openthu_agent import OpenTHULangGraphAgent
-    from skill_core import SkillInvocation
+    from skill_core import MissingSkillHandler, SkillInvocation
 
 
 def utc_now() -> str:
@@ -369,8 +369,12 @@ def execute_server_side_data_skills(
     for skill in current_task.get("approved_skills", []):
         if not isinstance(skill, dict):
             continue
-        spec = agent.skill_manager.get_spec(str(skill.get("skill_name", "")))
+        skill_name = str(skill.get("skill_name", ""))
+        spec = agent.skill_manager.get_spec(skill_name)
         if spec is None or spec.category != "data":
+            continue
+        handler = agent.skill_manager.registry.get_handler(skill_name)
+        if isinstance(handler, MissingSkillHandler):
             continue
         invocation_payload = dict(skill)
         invocation_payload["task_id"] = task_id
