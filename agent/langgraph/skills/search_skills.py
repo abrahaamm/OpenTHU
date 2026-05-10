@@ -21,6 +21,11 @@ except ImportError:
 
 USER_AGENT = "OpenTHU-Agent-Core/1.0 (+https://github.com/thu-info-community/thu-info-app)"
 DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
+DEFAULT_CAMPUS_DOMAINS = [
+    "tsinghua.edu.cn",
+    "info.tsinghua.edu.cn",
+    "news.tsinghua.edu.cn",
+]
 
 
 @dataclass
@@ -76,6 +81,13 @@ def _coerce_domains(raw: Any) -> list[str]:
     return [item for item in values if item]
 
 
+def _coerce_scene(raw: Any) -> str:
+    value = str(raw or "hybrid").strip().lower()
+    if value in {"campus", "general", "hybrid"}:
+        return value
+    return "hybrid"
+
+
 class SearchSkill(SkillHandler):
     def invoke(
         self,
@@ -100,6 +112,8 @@ class SearchSkill(SkillHandler):
         fetch_limit = _coerce_limit(args, "fetch_limit", max_results, 8)
         scope = str(args.get("scope", "web") or "web").strip().lower()
         domains = _coerce_domains(args.get("domains") or args.get("domain"))
+        scene = _coerce_scene(args.get("scene"))
+        supplemental_results = _coerce_limit(args, "supplemental_results", 3, 8)
         freshness_days = _coerce_limit(args, "freshness_days", 30, 3650)
         use_rag = _coerce_bool(args.get("use_rag", True), default=True)
         language = str(args.get("language", "zh-CN") or "zh-CN")
@@ -110,9 +124,12 @@ class SearchSkill(SkillHandler):
 
         try:
             provider = _build_provider()
-            results, search_from_cache = provider.search(
+            results, supplemental, search_from_cache = search_with_scene(
+                provider=provider,
                 query=query,
+                scene=scene,
                 max_results=max_results,
+                supplemental_results=supplemental_results,
                 domains=domains,
                 freshness_days=freshness_days,
                 language=language,
@@ -150,8 +167,10 @@ class SearchSkill(SkillHandler):
                 "status": "ok",
                 "query": query,
                 "scope": scope,
+                "scene": scene,
                 "answer": rag["answer"],
                 "results": [asdict(item) for item in results],
+                "supplemental_results": [asdict(item) for item in supplemental],
                 "citations": rag["citations"],
                 "evidence": rag["evidence"],
                 "warnings": warnings,
@@ -236,7 +255,9 @@ class SearxngSearchProvider(SearchProvider):
         cache_key = _cache_key("searxng", scoped_query, max_results, freshness_days, language)
         cached = _read_cache(cache_key)
         if cached:
-            return [_result_from_dict(item) for item in cached.get("results", [])], True
+            cached_results = [_result_from_dict(item) for item in cached.get("results", [])]
+            if cached_results:
+                return cached_results, True
 
         url = f"{self.endpoint}/search?{urlencode({'q': scoped_query, 'format': 'json', 'language': language})}"
         payload = _json_request(url)
@@ -276,7 +297,9 @@ class DuckDuckGoSearchProvider(SearchProvider):
         cache_key = _cache_key("duckduckgo", scoped_query, max_results, language)
         cached = _read_cache(cache_key)
         if cached:
-            return [_result_from_dict(item) for item in cached.get("results", [])], True
+            cached_results = [_result_from_dict(item) for item in cached.get("results", [])]
+            if cached_results:
+                return cached_results, True
 
         params = {
             "q": scoped_query,
@@ -308,7 +331,9 @@ class BraveSearchProvider(SearchProvider):
         cache_key = _cache_key("brave", scoped_query, max_results, freshness_days, language)
         cached = _read_cache(cache_key)
         if cached:
-            return [_result_from_dict(item) for item in cached.get("results", [])], True
+            cached_results = [_result_from_dict(item) for item in cached.get("results", [])]
+            if cached_results:
+                return cached_results, True
 
         params = {
             "q": scoped_query,
@@ -356,6 +381,101 @@ def _build_provider() -> SearchProvider:
         endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "https://api.search.brave.com/res/v1/web/search").strip()
         return BraveSearchProvider(api_key, endpoint)
     raise SearchProviderError(f"Unsupported search provider `{provider}`")
+
+
+def search_with_scene(
+    *,
+    provider: SearchProvider,
+    query: str,
+    scene: str,
+    max_results: int,
+    supplemental_results: int,
+    domains: list[str],
+    freshness_days: int,
+    language: str,
+) -> tuple[list[WebSearchResult], list[WebSearchResult], bool]:
+    scene_domains = domains or list(DEFAULT_CAMPUS_DOMAINS)
+    from_cache_all = True
+
+    if scene == "general":
+        general, from_cache = provider.search(
+            query=query,
+            max_results=max_results,
+            domains=[],
+            freshness_days=freshness_days,
+            language=language,
+        )
+        return general, [], from_cache
+
+    campus_results, from_cache = provider.search(
+        query=query,
+        max_results=max_results,
+        domains=scene_domains,
+        freshness_days=freshness_days,
+        language=language,
+    )
+    from_cache_all = from_cache_all and from_cache
+
+    if scene == "campus":
+        return campus_results, [], from_cache_all
+
+    general_results, from_cache_general = provider.search(
+        query=query,
+        max_results=max(max_results, supplemental_results),
+        domains=[],
+        freshness_days=freshness_days,
+        language=language,
+    )
+    from_cache_all = from_cache_all and from_cache_general
+    supplemental = []
+    seen = {item.url for item in campus_results}
+    for item in general_results:
+        if item.url in seen:
+            continue
+        supplemental.append(item)
+        if len(supplemental) >= supplemental_results:
+            break
+
+    merged = merge_ranked_results(campus_results, supplemental, max_results)
+    return merged, supplemental, from_cache_all
+
+
+def merge_ranked_results(
+    campus_results: list[WebSearchResult],
+    supplemental: list[WebSearchResult],
+    max_results: int,
+) -> list[WebSearchResult]:
+    merged: list[WebSearchResult] = []
+    merged.extend(campus_results)
+    merged.extend(supplemental)
+    scored = []
+    for item in merged:
+        score = rank_result(item, campus_preferred=True)
+        scored.append((score, item))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    deduped: list[WebSearchResult] = []
+    seen: set[str] = set()
+    for _, item in scored:
+        if item.url in seen:
+            continue
+        seen.add(item.url)
+        deduped.append(item)
+        if len(deduped) >= max_results:
+            break
+    return deduped
+
+
+def rank_result(item: WebSearchResult, campus_preferred: bool) -> float:
+    score = float(item.score or 0.0)
+    title = item.title.lower()
+    host = urlparse(item.url).netloc.lower()
+    if "tsinghua.edu.cn" in host:
+        score += 3.0 if campus_preferred else 1.0
+    elif host.endswith(".edu.cn"):
+        score += 1.0
+    if any(keyword in title for keyword in ("讲座", "论坛", "活动", "报名", "通知")):
+        score += 0.8
+    return score
 
 
 def parse_duckduckgo_html(html: str) -> list[WebSearchResult]:

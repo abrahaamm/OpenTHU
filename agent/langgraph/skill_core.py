@@ -194,7 +194,9 @@ def build_default_registry() -> SkillRegistry:
             args_schema={
                 "query": "string (required)",
                 "scope": "web|all (optional)",
+                "scene": "campus|general|hybrid (optional, default hybrid)",
                 "max_results": "integer (optional)",
+                "supplemental_results": "integer (optional, only for hybrid)",
                 "domains": "list[string] (optional)",
                 "freshness_days": "integer (optional)",
                 "use_rag": "bool (optional)",

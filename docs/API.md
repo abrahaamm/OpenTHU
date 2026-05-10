@@ -424,7 +424,9 @@ class SkillResult:
 {
     "query": "机器学习作业",
     "scope": "web",               # "web" | "all"
+    "scene": "hybrid",            # "campus" | "general" | "hybrid"
     "max_results": 5,
+    "supplemental_results": 3,    # hybrid 下用于补充非校园来源
     "domains": ["tsinghua.edu.cn"],
     "freshness_days": 30,
     "use_rag": true,
@@ -445,6 +447,9 @@ class SkillResult:
             "source": "duckduckgo",
             "score": 0.92
         }
+    ],
+    "supplemental_results": [
+        {"title": "...", "url": "https://...", "source": "duckduckgo"}
     ],
     "citations": [
         {"title": "...", "url": "https://...", "snippet": "..."}
