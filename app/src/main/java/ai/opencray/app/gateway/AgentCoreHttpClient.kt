@@ -253,7 +253,9 @@ class AgentCoreHttpClient {
       requestMethod = method
       connectTimeout = 8_000
       readTimeout = 12_000
+      useCaches = false
       setRequestProperty("Accept", "application/json")
+      setRequestProperty("Connection", "close")
       if (payload != null) {
         doOutput = true
         setRequestProperty("Content-Type", "application/json; charset=utf-8")

@@ -1,14 +1,19 @@
 package ai.opencray.app.runtime
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import ai.opencray.app.agent.ActionPlanner
 import ai.opencray.app.agent.TaskReplanner
+import ai.opencray.app.bridge.PythonSkillBridgeExecutor
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.data.repository.ChatRepository
 import ai.opencray.app.data.repository.RuntimeRepository
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
+import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.execution.ActionExecutor
@@ -22,19 +27,31 @@ import ai.opencray.app.gateway.PlanTaskData
 import ai.opencray.app.gateway.PlannedSkillInvocation
 import ai.opencray.app.memory.MemoryManager
 import ai.opencray.app.safety.SafetyAuditor
+import org.json.JSONObject
+import java.io.File
 import kotlin.concurrent.thread
 import java.util.UUID
+
+/**
+ * Delegate that allows the runtime to request Android runtime permissions from an Activity.
+ * Set this from MainActivity via [OpenCrayRuntime.setCalendarPermissionDelegate].
+ */
+fun interface CalendarPermissionDelegate {
+  fun requestCalendarPermissions()
+}
 
 class OpenCrayRuntime(
   appContext: Context,
   private val runtimeRepository: RuntimeRepository,
   private val chatRepository: ChatRepository,
 ) {
+  private val appContext: Context = appContext.applicationContext
   private val actionPlanner = ActionPlanner()
   private val safetyAuditor = SafetyAuditor()
   private val memoryManager = MemoryManager()
   private val taskReplanner = TaskReplanner()
-  private val actionExecutor = ActionExecutor(appContext.applicationContext)
+  private val actionExecutor = ActionExecutor(this.appContext)
+  private val pythonSkillBridgeExecutor = PythonSkillBridgeExecutor(actionExecutor)
   private val gatewayClient = AgentCoreHttpClient()
   private val deviceId =
     Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
@@ -44,10 +61,33 @@ class OpenCrayRuntime(
 
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
+  @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
+  /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
+  @Volatile private var pendingPermissionCallback: (() -> Unit)? = null
 
   fun snapshot(): RuntimeSnapshot = runtimeRepository.getSnapshot()
 
   fun chatMessages(): List<ChatMessage> = chatRepository.getMessages()
+
+  /**
+   * Set a delegate so the runtime can request calendar permissions from the Activity context.
+   * Call this from MainActivity.onCreate / onStart.
+   */
+  fun setCalendarPermissionDelegate(delegate: CalendarPermissionDelegate?) {
+    calendarPermissionDelegate = delegate
+  }
+
+  /**
+   * Call this from MainActivity.onRequestPermissionsResult when READ/WRITE_CALENDAR is granted.
+   * Resumes any action that was deferred pending the permission grant.
+   */
+  fun notifyCalendarPermissionGranted() {
+    val callback = pendingPermissionCallback
+    pendingPermissionCallback = null
+    if (callback != null) {
+      thread(name = "opencray-permission-retry", isDaemon = true) { callback() }
+    }
+  }
 
   fun boot() {
     runtimeRepository.markRuntimeBooted()
@@ -197,6 +237,7 @@ class OpenCrayRuntime(
       "detect_calendar_conflicts",
       "delete_calendar_event",
       "open_url",
+      "read_notifications",
     )
 
   private fun currentGatewayConfig(): GatewayConfig {
@@ -426,6 +467,31 @@ class OpenCrayRuntime(
     )
 
     val goal = snapshot().tasks.firstOrNull { it.id == task.id }?.goal ?: "Server dispatched task"
+
+    // If this skill needs calendar permission, request it and defer execution.
+    if (requiresCalendarPermission(action) && !hasCalendarPermissions()) {
+      val delegate = calendarPermissionDelegate
+      if (delegate != null) {
+        pendingPermissionCallback = { executeDispatchedSkill(dispatch) }
+        runtimeRepository.appendEvent(
+          "Calendar permission required for ${action.id}. Requesting from user."
+        )
+        delegate.requestCalendarPermissions()
+      } else {
+        applyExecutionReport(
+          task = task,
+          action = action,
+          report = ActionExecutionReport(
+            success = false,
+            message = "Missing calendar permission. Please grant READ_CALENDAR and WRITE_CALENDAR.",
+            recoverable = false,
+          ),
+          submitGatewayResult = true,
+        )
+      }
+      return
+    }
+
     val report = actionExecutor.execute(action, goal)
     applyExecutionReport(task = task, action = action, report = report, submitGatewayResult = true)
   }
@@ -453,7 +519,42 @@ class OpenCrayRuntime(
       return
     }
 
-    targetActions.forEach { action ->
+    // Partition: defer calendar actions that still need runtime permission.
+    val calendarDeferred = if (!hasCalendarPermissions()) {
+      targetActions.filter { requiresCalendarPermission(it) }
+    } else emptyList()
+
+    if (calendarDeferred.isNotEmpty()) {
+      val deferredIds = calendarDeferred.map { it.id }.toSet()
+      val delegate = calendarPermissionDelegate
+      if (delegate != null) {
+        pendingPermissionCallback = {
+          runActionsLocally(actionIds = deferredIds, submitGatewayResult = submitGatewayResult)
+        }
+        runtimeRepository.appendEvent(
+          "Calendar permission required for $deferredIds. Requesting from user."
+        )
+        delegate.requestCalendarPermissions()
+      } else {
+        calendarDeferred.forEach { action ->
+          applyExecutionReport(
+            task = latestTask,
+            action = action,
+            report = ActionExecutionReport(
+              success = false,
+              message = "Missing calendar permission. Please grant READ_CALENDAR and WRITE_CALENDAR.",
+              recoverable = false,
+            ),
+            submitGatewayResult = submitGatewayResult,
+          )
+        }
+      }
+    }
+
+    val executableActions = targetActions - calendarDeferred.toSet()
+    if (executableActions.isEmpty()) return
+
+    executableActions.forEach { action ->
       val report = actionExecutor.execute(action, latestTask.goal)
       applyExecutionReport(task = latestTask, action = action, report = report, submitGatewayResult = submitGatewayResult)
 
@@ -533,7 +634,14 @@ class OpenCrayRuntime(
     submitGatewayResult: Boolean,
   ) {
     val now = System.currentTimeMillis()
-    val nextStatus = if (report.success) "executed" else "failed"
+    // When the executor requires a conflict strategy choice, keep the action in a special
+    // intermediate state so the user can pick a strategy without the server being notified yet.
+    val needsConflictResolution = report.metadata["reason"] == "conflict_strategy_required"
+    val nextStatus = when {
+      report.success -> "executed"
+      needsConflictResolution -> "conflict_pending"
+      else -> "failed"
+    }
     val current = snapshot()
     val updatedActions =
       current.systemActions.map { candidate ->
@@ -552,18 +660,68 @@ class OpenCrayRuntime(
         message = report.message,
         timestampEpochMs = now,
       )
+    val pendingConflict = if (needsConflictResolution) {
+      PendingConflictResolution(
+        action = action,
+        taskId = task.id,
+        conflictMessage = report.message,
+      )
+    } else {
+      null
+    }
 
     runtimeRepository.replaceSnapshot(
       current.copy(
         systemActions = updatedActions,
+        pendingConflict = pendingConflict,
         auditTrail = listOf(audit) + current.auditTrail.take(149),
-        recentEvents = listOf("Action ${action.id}: ${if (report.success) "success" else "failed"}") + current.recentEvents,
+        recentEvents = listOf("Action ${action.id}: ${if (report.success) "success" else if (needsConflictResolution) "conflict_pending" else "failed"}") + current.recentEvents,
       ),
     )
 
-    if (submitGatewayResult && !action.requestId.isNullOrBlank()) {
+    // For conflict resolution, we wait for the user to pick a strategy before submitting.
+    if (submitGatewayResult && !action.requestId.isNullOrBlank() && !needsConflictResolution) {
       submitGatewayResultAsync(taskId = task.id, action = action, report = report)
     }
+  }
+
+  /**
+   * Called from the UI when the user selects a conflict resolution strategy.
+   * Re-executes the pending calendar action with the chosen [strategy]
+   * (one of: skip_write, coexist, delete_conflicts).
+   */
+  fun resolveConflict(strategy: String) {
+    val current = snapshot()
+    val pending = current.pendingConflict ?: return
+
+    // Clear the pending conflict immediately so the UI reverts.
+    runtimeRepository.replaceSnapshot(current.copy(pendingConflict = null))
+
+    // Re-execute with the chosen strategy injected into params.
+    val resolvedAction = pending.action.copy(
+      params = pending.action.params + mapOf("conflict_decision" to strategy),
+      status = "approved",
+      lastResult = null,
+    )
+    val task = snapshot().tasks.firstOrNull { it.id == pending.taskId }
+      ?: AgentTask(
+        id = pending.taskId,
+        goal = "Conflict resolution",
+        status = "in_progress",
+        attempt = 1,
+        createdAtEpochMs = System.currentTimeMillis(),
+        updatedAtEpochMs = System.currentTimeMillis(),
+        summary = "User resolved calendar conflict: $strategy",
+      )
+    runtimeRepository.appendEvent("Conflict resolved by user: strategy=$strategy for action=${resolvedAction.id}")
+
+    val report = actionExecutor.execute(resolvedAction, task.goal)
+    applyExecutionReport(
+      task = task,
+      action = resolvedAction,
+      report = report,
+      submitGatewayResult = !resolvedAction.requestId.isNullOrBlank(),
+    )
   }
 
   private fun submitGatewayResultAsync(
@@ -573,7 +731,18 @@ class OpenCrayRuntime(
   ) {
     val requestId = action.requestId ?: return
     thread(name = "opencray-gateway-submit", isDaemon = true) {
-      val code = if (report.success) "OK" else "SKILL_EXECUTION_FAILED"
+      val code = mapGatewayResultCode(action, report)
+      val submitData: Map<String, Any> = buildMap {
+        put("status", if (report.success) "executed" else "failed")
+        put("recoverable", report.recoverable)
+        put("action_id", action.id)
+        // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
+        report.metadata.forEach { (key, value) ->
+          if (value != null) {
+            put(key, value)
+          }
+        }
+      }
       val result =
         gatewayClient.submitResult(
           config = currentGatewayConfig(),
@@ -583,6 +752,7 @@ class OpenCrayRuntime(
           skillName = action.id,
           code = code,
           message = report.message,
+
           data =
             mapOf(
               "status" to if (report.success) "executed" else "failed",
@@ -591,6 +761,7 @@ class OpenCrayRuntime(
               "metadata" to report.metadata,
               "action_id" to action.id,
             ),
+
         )
       val current = snapshot()
       if (result.success) {
@@ -623,6 +794,43 @@ class OpenCrayRuntime(
     }
   }
 
+  private fun mapGatewayResultCode(
+    action: SystemAction,
+    report: ActionExecutionReport,
+  ): String {
+    if (report.success) return "OK"
+
+    val actionId = action.id.substringBefore("#")
+    val message = report.message
+    // Check structured data first for a precise reason code
+    val reason = report.metadata["reason"] as? String
+    if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
+    if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
+
+    if (message.contains("confirm_delete=true", ignoreCase = true)) return "APPROVAL_REQUIRED"
+    if (actionId == "create_calendar_event" &&
+      (message.contains("skip_write / coexist / delete_conflicts", ignoreCase = true) ||
+        message.contains("请选择策略", ignoreCase = true))
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
+    if (message.contains("Invalid", ignoreCase = true) ||
+      message.contains("Missing", ignoreCase = true) ||
+      message.contains("requires event_id/event_ids", ignoreCase = true) ||
+      message.contains("requires explicit confirmation", ignoreCase = true) ||
+      message.contains("需要明确授权", ignoreCase = true) ||
+      message.contains("缺少", ignoreCase = true)
+    ) {
+      return "INVALID_PARAM"
+    }
+    if (message.contains("permission", ignoreCase = true) ||
+      message.contains("权限", ignoreCase = true)
+    ) {
+      return "ACTION_NOT_ALLOWED"
+    }
+    return "SKILL_EXECUTION_FAILED"
+  }
+
   private fun upsertAction(
     existing: List<SystemAction>,
     incoming: SystemAction,
@@ -649,6 +857,45 @@ class OpenCrayRuntime(
     } else {
       left.id == right.id
     }
+  }
+
+  private fun requiresCalendarPermission(action: SystemAction): Boolean =
+    action.id.substringBefore("#") in setOf(
+      "create_calendar_event",
+      "detect_calendar_conflicts",
+      "delete_calendar_event",
+    )
+
+  private fun hasCalendarPermissions(): Boolean {
+    val read = ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALENDAR) ==
+      PackageManager.PERMISSION_GRANTED
+    val write = ContextCompat.checkSelfPermission(appContext, Manifest.permission.WRITE_CALENDAR) ==
+      PackageManager.PERMISSION_GRANTED
+    return read && write
+  }
+
+  fun executeSkillInvocationFromPython(invocationJson: String): String {
+    return pythonSkillBridgeExecutor.executeSkillInvocationJson(invocationJson)
+  }
+
+  fun processPythonBridgeFiles(
+    requestFilePath: String,
+    responseFilePath: String,
+  ): Boolean {
+    val requestFile = File(requestFilePath)
+    if (!requestFile.exists() || !requestFile.isFile) return false
+
+    val rawRequest = requestFile.readText(Charsets.UTF_8).trim()
+    if (rawRequest.isEmpty()) return false
+
+    val envelope = JSONObject(rawRequest)
+    val invocation = envelope.optJSONObject("invocation") ?: return false
+    val response = pythonSkillBridgeExecutor.executeSkillInvocation(invocation)
+
+    val responseFile = File(responseFilePath)
+    responseFile.parentFile?.mkdirs()
+    responseFile.writeText(response.toString(), Charsets.UTF_8)
+    return true
   }
 }
 

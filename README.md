@@ -41,6 +41,7 @@ flowchart LR
   - `API_http.md`: upstream Tsinghua interface references for future skill implementers
 - `/scripts`
   - prototype Android testing helpers
+  - `run_calendar_preset_gateway_server.py`: preset-plan gateway stub for calendar emulator e2e tests
 
 ## What Changed
 
@@ -77,7 +78,7 @@ The LangGraph core now provides:
 
 What is not implemented here:
 
-- the actual skill bodies
+- most data/auth skill bodies
 - upstream Tsinghua HTTP adapters
 - complete device bridge coverage for all action skills (in progress)
 

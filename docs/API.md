@@ -37,6 +37,7 @@
 - **调用方**：LangGraph Workflow 节点（`plan` / `safety_check`）以及 Agent-Core Server 分发器
 - **执行方**：Android Agent 内置 Skill 实现层（Device Executor）
 - **绑定方式**：Workflow 仅依赖 `SkillRegistry` 提供的 `SkillSpec` / `SkillHandler`，不直接耦合具体 Skill 实现
+- **跨语言执行**：动作类 Skill 可由 Python Handler 通过桥接协议转发至 Kotlin Runtime 执行，返回 `SkillResult` 风格结果
 - **会话传递**：数据类 Skill 共享 Agent 持有的 `Session` 对象（含 `JSESSIONID` / `CSRF token`）
 - **幂等**：所有写操作 Skill（动作类）支持 `request_id` 幂等
 - **时间**：统一 ISO8601（UTC）；`set_alarm.time` 为本地时区语义（`HH:mm` 或本地 ISO8601）
@@ -416,15 +417,21 @@ class SkillResult:
 
 ## 4.9 `search`
 
-**用途**：在 Agent 本地缓存中全文检索；缓存不命中时触发对应数据类 Skill 刷新。
+**用途**：通过可配置搜索引擎检索网页结果，并对抓取到的网页正文做轻量 RAG 召回与带引用总结。未配置真实搜索 provider 时可使用 `mock` provider 做链路验证。
 
 **入参**：
 
 ```python
 {
-    "session": ...,
     "query": "机器学习作业",
-    "scope": "all"    # "assignments" | "notices" | "files" | "activities" | "all"
+    "scope": "web",               # "web" | "all"
+    "scene": "hybrid",            # "campus" | "general" | "hybrid"
+    "max_results": 5,
+    "supplemental_results": 3,    # hybrid 下用于补充非校园来源
+    "domains": ["tsinghua.edu.cn"],
+    "freshness_days": 30,
+    "use_rag": true,
+    "language": "zh-CN"
 }
 ```
 
@@ -432,18 +439,35 @@ class SkillResult:
 
 ```python
 {
+    "answer": "根据检索到的网页证据，找到 2 个来源与“机器学习作业”相关。优先参考：...",
     "results": [
         {
-            "type": "assignment",
-            "id": "...",
-            "title": "机器学习第3次作业",
+            "title": "...",
+            "url": "https://...",
             "snippet": "...",
-            "relevance": 0.92,
-            "source_skill": "get_assignments"
+            "source": "duckduckgo",
+            "score": 0.92
         }
-    ]
+    ],
+    "supplemental_results": [
+        {"title": "...", "url": "https://...", "source": "duckduckgo"}
+    ],
+    "citations": [
+        {"title": "...", "url": "https://...", "snippet": "..."}
+    ],
+    "evidence": [
+        {"title": "...", "url": "https://...", "chunk_index": 0, "score": 3.4, "text": "..."}
+    ],
+    "warnings": []
 }
 ```
+
+环境变量：
+
+- `OPENTHU_SEARCH_PROVIDER=duckduckgo|mock|searxng|brave`（默认 `duckduckgo`，无需 API key）
+- `OPENTHU_SEARCH_ENDPOINT`：SearXNG endpoint 或 Brave API endpoint 覆盖值
+- `OPENTHU_SEARCH_API_KEY`：Brave Search API key
+- `OPENTHU_SEARCH_CACHE_DIR`：搜索结果和网页正文缓存目录，默认 `/tmp/openthu_search_cache`
 
 ---
 
@@ -526,7 +550,9 @@ class SkillResult:
 ```
 
 **返回**：`{ "event_id": "...", "status": "created|skipped_conflict|conflict_detected" }`  
-**实现**：通过 Android `CalendarContract` + `ContentResolver` 直接写入系统日历（Provider 模式）
+**实现**：Python 侧仅输出 `SkillInvocation`，由 Kotlin `ActionExecutor` 通过 Android `CalendarContract` + `ContentResolver` 执行写入（桥接执行模式）
+
+`SkillManager` 会先按 `SkillSpec.args_json_schema` 对入参做校验与归一化（当前 calendar skills 为 strict schema，`additionalProperties=false`）。
 
 冲突策略说明：
 - Android 日历支持时间重叠事件共存
@@ -796,9 +822,9 @@ Skill 调用状态：
 | `get_assignments` | learn.tsinghua.edu.cn | `/b/wlxt/kczy/zy/student/zyListWj` 等三个状态接口 | POST |
 | `get_academic_calendar` | zhjw.cic.tsinghua.edu.cn | `/b/wlxt/common/auth/gnt` → `j_acegi_login.do` → `jxmh_out.do` | POST/GET |
 | `create_reminder` | Android System | `android.provider.CalendarContract.Reminders` | Intent |
-| `create_calendar_event` | Android System | `content://com.android.calendar/events`（默认 Provider 写入，必要时回退 Intent） | Provider Write (+ Intent Fallback) |
-| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（本地查询） | Provider Query |
-| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（本地删除） | Provider Delete |
+| `create_calendar_event` | Android System | `content://com.android.calendar/events`（由 Kotlin `ActionExecutor` 执行） | Provider Write (Kotlin Executor) |
+| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（由 Kotlin `ActionExecutor` 查询） | Provider Query (Kotlin Executor) |
+| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（由 Kotlin `ActionExecutor` 删除） | Provider Delete (Kotlin Executor) |
 | `set_alarm` | Android System | `android.intent.action.SET_ALARM` | Intent |
 
 ---

@@ -51,10 +51,19 @@ flowchart LR
 
 ### 4.1 安装依赖
 
+创建虚拟环境：
 ```bash
-cd /Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray
 python3 -m venv .venv
-.venv/bin/pip install -r agent/langgraph/requirements.txt
+```
+
+或者使用 conda：
+```bash
+conda create -n openthu python=3.11
+```
+
+之后安装依赖：
+```bash
+pip install -r agent/langgraph/requirements.txt
 ```
 
 ### 4.2 启动服务
@@ -81,8 +90,25 @@ python3 -m venv .venv
 
 LLM 兼容模式示例：
 
+先设置环境变量:
+
+- cmd:
+```cmd
+set OPENAI_API_KEY=<YOUR_KEY>
+```
+
+- powershell:
+```powershell
+$env:OPENAI_API_KEY="<YOUR_KEY>"
+```
+
+- linux:
 ```bash
-OPENAI_API_KEY="<YOUR_KEY>" \
+export OPENAI_API_KEY=<YOUR_KEY>
+```
+
+
+```bash
 .venv/bin/python -m agent.langgraph.agent_core_server \
   --host 0.0.0.0 \
   --port 28789 \
