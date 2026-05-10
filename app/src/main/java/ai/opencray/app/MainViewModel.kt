@@ -12,17 +12,53 @@ import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
+import ai.opencray.app.feature.chat.ChatRole
 import ai.opencray.app.runtime.OpenCrayRuntime
+import java.util.UUID
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val runtime: OpenCrayRuntime =
     (app as OpenCrayApplication).appContainer.runtime
 
   private var selectedDestination: AppDestination = AppDestination.Chat
+  private var selectedConversationId: String = "conv_default"
+  private val conversations = linkedMapOf<String, ConversationThread>()
   private var goalDraft: String = ""
   private var hostText: String = runtime.snapshot().host
   private var portText: String = runtime.snapshot().port.toString()
   private var tlsEnabled: Boolean = runtime.snapshot().tlsEnabled
+
+  private fun conversationSummaries(): List<ConversationSummary> {
+    return conversations.values
+      .sortedByDescending { it.updatedAtEpochMs }
+      .map {
+        ConversationSummary(
+          id = it.id,
+          title = it.title,
+          subtitle = it.messages.lastOrNull()?.text?.take(30) ?: "空会话",
+          updatedAtEpochMs = it.updatedAtEpochMs,
+          selected = it.id == selectedConversationId,
+        )
+      }
+  }
+
+  private fun currentConversationMessages(): List<ChatMessage> {
+    val selected = conversations[selectedConversationId]
+    return selected?.messages ?: emptyList()
+  }
+
+  private fun upsertCurrentConversation(messages: List<ChatMessage>) {
+    val existing = conversations[selectedConversationId]
+    val titleSeed = messages.firstOrNull { it.role == ChatRole.User }?.text?.take(18) ?: "新对话"
+    val now = System.currentTimeMillis()
+    conversations[selectedConversationId] =
+      ConversationThread(
+        id = selectedConversationId,
+        title = existing?.title ?: titleSeed,
+        messages = messages,
+        updatedAtEpochMs = now,
+      )
+  }
 
   private fun buildUiState(): MainUiState {
     val snapshot = runtime.snapshot()
@@ -40,12 +76,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       tasks = snapshot.tasks,
       memoryRecords = snapshot.memoryRecords,
       auditTrail = snapshot.auditTrail,
-      chatMessages = runtime.chatMessages(),
+      chatMessages = currentConversationMessages(),
+      conversationSummaries = conversationSummaries(),
+      selectedConversationId = selectedConversationId,
     )
   }
 
   init {
     runtime.boot()
+    val bootMessages = runtime.chatMessages()
+    conversations[selectedConversationId] =
+      ConversationThread(
+        id = selectedConversationId,
+        title = "默认会话",
+        messages = bootMessages,
+        updatedAtEpochMs = System.currentTimeMillis(),
+      )
   }
 
   fun getUiState(): MainUiState = buildUiState()
@@ -55,7 +101,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   fun sendChatMessage(text: String) {
-    runtime.sendChatMessage(text)
+    val normalized = text.trim()
+    if (normalized.isEmpty()) return
+    runtime.sendChatMessage(normalized)
+    upsertCurrentConversation(runtime.chatMessages())
     selectedDestination = AppDestination.Chat
   }
 
@@ -68,6 +117,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     args: Map<String, String> = emptyMap(),
   ) {
     runtime.invokeSkill(skillId = skillId, args = args)
+    upsertCurrentConversation(runtime.chatMessages())
     selectedDestination = AppDestination.Chat
   }
 
@@ -91,7 +141,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val host = hostText.trim().ifEmpty { "127.0.0.1" }
     val port = portText.toIntOrNull() ?: 18789
     runtime.connectToGateway(host = host, port = port, tlsEnabled = tlsEnabled)
-    selectedDestination = AppDestination.Actions
+    selectedDestination = AppDestination.Planning
   }
 
   fun toggleCapability(
@@ -106,26 +156,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     if (text.isEmpty()) return
     goalDraft = ""
     runtime.planGoal(text)
-    selectedDestination = AppDestination.Actions
+    upsertCurrentConversation(runtime.chatMessages())
+    selectedDestination = AppDestination.Planning
   }
 
   fun runAgentPlan() {
     runtime.runActions()
-    selectedDestination = AppDestination.Safety
+    upsertCurrentConversation(runtime.chatMessages())
+    selectedDestination = AppDestination.Planning
   }
 
   fun clearChat() {
     runtime.clearChat()
+    upsertCurrentConversation(runtime.chatMessages())
   }
 
   fun executeAction(actionId: String) {
     runtime.executeAction(actionId)
-    selectedDestination = AppDestination.Actions
+    selectedDestination = AppDestination.Planning
   }
 
   fun approvePendingActions() {
     runtime.approvePendingActions()
-    selectedDestination = AppDestination.Safety
+    selectedDestination = AppDestination.Planning
   }
 
   fun updateCommonApps(apps: List<CommonApp>) {
@@ -137,7 +190,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     succeeded: Boolean,
   ) {
     runtime.noteAppLaunch(appLabel = appLabel, succeeded = succeeded)
-    selectedDestination = AppDestination.Actions
+    selectedDestination = AppDestination.Settings
+  }
+
+  fun createConversation() {
+    val now = System.currentTimeMillis()
+    val id = "conv_${UUID.randomUUID().toString().take(8)}"
+    val systemIntro =
+      ChatMessage(
+        id = "sys_${UUID.randomUUID().toString().take(8)}",
+        role = ChatRole.System,
+        text = "新会话已创建。你可以直接输入目标开始规划。",
+      )
+    conversations[id] =
+      ConversationThread(
+        id = id,
+        title = "新会话",
+        messages = listOf(systemIntro),
+        updatedAtEpochMs = now,
+      )
+    selectedConversationId = id
+    selectedDestination = AppDestination.Chat
+  }
+
+  fun selectConversation(conversationId: String) {
+    if (conversations.containsKey(conversationId)) {
+      selectedConversationId = conversationId
+      selectedDestination = AppDestination.Chat
+    }
   }
 }
 
@@ -156,4 +236,21 @@ data class MainUiState(
   val memoryRecords: List<MemoryRecord>,
   val auditTrail: List<AuditEntry>,
   val chatMessages: List<ChatMessage>,
+  val conversationSummaries: List<ConversationSummary>,
+  val selectedConversationId: String,
+)
+
+data class ConversationSummary(
+  val id: String,
+  val title: String,
+  val subtitle: String,
+  val updatedAtEpochMs: Long,
+  val selected: Boolean,
+)
+
+data class ConversationThread(
+  val id: String,
+  val title: String,
+  val messages: List<ChatMessage>,
+  val updatedAtEpochMs: Long,
 )

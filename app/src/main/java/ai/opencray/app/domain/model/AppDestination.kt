@@ -4,7 +4,6 @@ enum class AppDestination(
   val label: String,
 ) {
   Chat(label = "Chat"),
-  Context(label = "Context"),
-  Actions(label = "Actions"),
-  Safety(label = "Safety"),
+  Planning(label = "Planning"),
+  Settings(label = "Settings"),
 }

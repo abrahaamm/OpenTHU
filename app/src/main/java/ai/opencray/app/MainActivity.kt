@@ -52,6 +52,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var chatPanel: LinearLayout
   private lateinit var chatHistoryScroll: ScrollView
   private lateinit var chatHistoryContainer: LinearLayout
+  private lateinit var conversationTabsContainer: LinearLayout
+  private lateinit var newConversationButton: Button
   private lateinit var chatInput: EditText
   private lateinit var chatSendButton: Button
   private lateinit var preferenceInput: EditText
@@ -63,10 +65,9 @@ class MainActivity : AppCompatActivity() {
   private lateinit var skillCard2: Button
   private lateinit var skillCard3: Button
   private lateinit var skillCard4: Button
-  private lateinit var contextTab: Button
   private lateinit var chatTab: Button
-  private lateinit var actionsTab: Button
-  private lateinit var safetyTab: Button
+  private lateinit var planningTab: Button
+  private lateinit var settingsTab: Button
   private lateinit var notificationToggle: CheckBox
   private lateinit var crossAppToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
@@ -138,10 +139,11 @@ class MainActivity : AppCompatActivity() {
     skillCard2 = findViewById(R.id.skill_card_2)
     skillCard3 = findViewById(R.id.skill_card_3)
     skillCard4 = findViewById(R.id.skill_card_4)
-    contextTab = findViewById(R.id.context_tab)
     chatTab = findViewById(R.id.chat_tab)
-    actionsTab = findViewById(R.id.actions_tab)
-    safetyTab = findViewById(R.id.safety_tab)
+    planningTab = findViewById(R.id.planning_tab)
+    settingsTab = findViewById(R.id.settings_tab)
+    conversationTabsContainer = findViewById(R.id.conversation_tabs_container)
+    newConversationButton = findViewById(R.id.new_conversation_button)
     notificationToggle = findViewById(R.id.capability_notification_toggle)
     crossAppToggle = findViewById(R.id.capability_cross_app_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
@@ -237,20 +239,20 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun bindActions() {
-    contextTab.setOnClickListener {
-      viewModel.selectDestination(AppDestination.Context)
-      render()
-    }
     chatTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Chat)
       render()
     }
-    actionsTab.setOnClickListener {
-      viewModel.selectDestination(AppDestination.Actions)
+    planningTab.setOnClickListener {
+      viewModel.selectDestination(AppDestination.Planning)
       render()
     }
-    safetyTab.setOnClickListener {
-      viewModel.selectDestination(AppDestination.Safety)
+    settingsTab.setOnClickListener {
+      viewModel.selectDestination(AppDestination.Settings)
+      render()
+    }
+    newConversationButton.setOnClickListener {
+      viewModel.createConversation()
       render()
     }
 
@@ -330,19 +332,20 @@ class MainActivity : AppCompatActivity() {
     refreshCommonApps()
     val state = viewModel.getUiState()
 
-    contextPanel.visibility = if (state.currentDestination == AppDestination.Context) View.VISIBLE else View.GONE
+    val isPlanning = state.currentDestination == AppDestination.Planning
+    contextPanel.visibility = if (isPlanning) View.VISIBLE else View.GONE
     chatPanel.visibility = if (state.currentDestination == AppDestination.Chat) View.VISIBLE else View.GONE
-    actionsPanel.visibility = if (state.currentDestination == AppDestination.Actions) View.VISIBLE else View.GONE
-    safetyPanel.visibility = if (state.currentDestination == AppDestination.Safety) View.VISIBLE else View.GONE
+    actionsPanel.visibility = if (isPlanning) View.VISIBLE else View.GONE
+    safetyPanel.visibility = if (state.currentDestination == AppDestination.Settings) View.VISIBLE else View.GONE
 
-    contextTab.isEnabled = state.currentDestination != AppDestination.Context
     chatTab.isEnabled = state.currentDestination != AppDestination.Chat
-    actionsTab.isEnabled = state.currentDestination != AppDestination.Actions
-    safetyTab.isEnabled = state.currentDestination != AppDestination.Safety
+    planningTab.isEnabled = state.currentDestination != AppDestination.Planning
+    settingsTab.isEnabled = state.currentDestination != AppDestination.Settings
 
     statusView.text = "Agent 状态：${state.snapshot.connectionStatus}"
     transportView.text = "数据链路：${state.snapshot.transportLabel}"
     renderChatHistory(state.chatMessages)
+    renderConversationTabs(state.conversationSummaries)
 
     if (hostInput.text.toString() != state.host) hostInput.setText(state.host)
     if (portInput.text.toString() != state.port) portInput.setText(state.port)
@@ -401,6 +404,42 @@ class MainActivity : AppCompatActivity() {
         append("3. 用户确认高风险动作 → 执行并展示结果\n")
         append("4. 可撤销操作保留回滚入口，偏好反馈写入记忆层")
       }
+
+    val planningSnapshotView = findViewById<TextView>(R.id.planning_snapshot_text)
+    val planningScheduleView = findViewById<TextView>(R.id.planning_schedule_text)
+    val planningAlarmView = findViewById<TextView>(R.id.planning_alarm_text)
+    val planningTodoView = findViewById<TextView>(R.id.planning_todo_text)
+
+    planningSnapshotView.text = buildString {
+      append("${getString(R.string.planning_snapshot_title)}\n")
+      append("任务数量：${state.tasks.size}\n")
+      append("候选动作：${state.systemActions.size}\n")
+      append("安全记录：${state.safetyRecords.size}\n")
+      append("记忆条目：${state.memoryRecords.size}")
+    }
+
+    val scheduleHints =
+      state.contextSignals
+        .filter { it.title.contains("课程") || it.title.contains("课表") || it.detail.contains("课程") }
+        .take(5)
+        .joinToString("\n") { "• ${it.title}: ${it.detail.take(40)}" }
+        .ifBlank { "• 暂无已爬取课表数据，等待课程/校历 skill 返回。" }
+    planningScheduleView.text = "${getString(R.string.planning_schedule_title)}\n$scheduleHints"
+
+    val alarmHints =
+      state.systemActions
+        .filter { it.id.contains("alarm") || it.title.contains("提醒") || it.title.contains("闹钟") }
+        .take(5)
+        .joinToString("\n") { "• ${it.title} (${it.status})" }
+        .ifBlank { "• 暂无闹钟任务，可在规划动作中添加。"}
+    planningAlarmView.text = "${getString(R.string.planning_alarm_title)}\n$alarmHints"
+
+    val todoHints =
+      state.tasks
+        .take(6)
+        .joinToString("\n") { "• ${it.goal.take(36)} [${it.status}]" }
+        .ifBlank { "• 暂无待办任务，先在对话页提交目标。"}
+    planningTodoView.text = "${getString(R.string.planning_todo_title)}\n$todoHints"
 
     actionFeedView.text =
       state.systemActions.joinToString(separator = "\n\n") { action ->
@@ -472,6 +511,34 @@ class MainActivity : AppCompatActivity() {
     configureActionButton(actionPrimaryButton, state.systemActions, 0, "No action #1")
     configureActionButton(actionSecondaryButton, state.systemActions, 1, "No action #2")
     configureActionButton(actionTertiaryButton, state.systemActions, 2, "No action #3")
+  }
+
+  private fun renderConversationTabs(conversations: List<ConversationSummary>) {
+    conversationTabsContainer.removeAllViews()
+    conversations.forEach { summary ->
+      val button = Button(this).apply {
+        text = summary.title
+        setAllCaps(false)
+        textSize = 12f
+        minHeight = dp(32)
+        minimumHeight = dp(32)
+        setPadding(dp(12), dp(6), dp(12), dp(6))
+        alpha = if (summary.selected) 1f else 0.78f
+        setBackgroundResource(if (summary.selected) R.drawable.button_primary_selector else R.drawable.button_secondary_selector)
+        setOnClickListener {
+          viewModel.selectConversation(summary.id)
+          render()
+        }
+      }
+      val params =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          rightMargin = dp(8)
+        }
+      conversationTabsContainer.addView(button, params)
+    }
   }
 
   private fun bindSkillPlaceholder(

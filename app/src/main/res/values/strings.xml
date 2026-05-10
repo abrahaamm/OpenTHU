@@ -2,10 +2,9 @@
     <string name="app_name">OpenTHU</string>
     <string name="app_subtitle">面向校园生活的移动端 Agent 系统</string>
 
-    <string name="tab_context">首页</string>
-    <string name="tab_chat">Agent</string>
-    <string name="tab_actions">进度</string>
-    <string name="tab_safety">设置</string>
+    <string name="tab_chat">对话</string>
+    <string name="tab_planning">规划</string>
+    <string name="tab_settings">设置</string>
 
     <string name="home_title">校园工作台</string>
     <string name="home_feed_label">今日建议</string>
@@ -19,6 +18,8 @@
     <string name="chat_empty_body">例如：帮我整理本周 DDL，并把重要事项加入日历。</string>
     <string name="chat_input_hint">输入你的需求...</string>
     <string name="chat_send">发送</string>
+    <string name="chat_new_conversation">新对话</string>
+    <string name="chat_conversation_list_title">会话列表</string>
 
     <string name="quick_skills_title">快捷 skills</string>
     <string name="quick_skills_subtitle">常用能力入口预留区，每行最多三个</string>
@@ -30,7 +31,7 @@
     <string name="skill_placeholder_4">通知整理</string>
     <string name="skills_waiting_to_join">等待后续skills加入</string>
 
-    <string name="actions_title">任务流转与执行进度</string>
+    <string name="actions_title">规划面板</string>
     <string name="action_feed_label">候选动作与状态反馈</string>
     <string name="goal_hint">Describe your campus goal, e.g. 帮我关注清华活动并为课程 DDL 设置提醒</string>
     <string name="plan_goal_button">解析并生成候选动作</string>
@@ -64,4 +65,8 @@
     <string name="preference_hint">输入新的偏好，例如：少推荐晚间活动</string>
     <string name="preference_add">新增偏好</string>
     <string name="preference_waiting">等待偏好文件开发</string>
+    <string name="planning_snapshot_title">学习与执行快照</string>
+    <string name="planning_schedule_title">已爬取课表</string>
+    <string name="planning_alarm_title">已设置闹钟</string>
+    <string name="planning_todo_title">待办事项</string>
 </resources>

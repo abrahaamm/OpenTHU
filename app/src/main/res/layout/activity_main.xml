@@ -62,39 +62,30 @@
             android:paddingBottom="4dp">
 
             <Button
-                android:id="@+id/context_tab"
-                style="@style/OpenCray.TabButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/tab_context" />
-
-            <Button
                 android:id="@+id/chat_tab"
                 style="@style/OpenCray.TabButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:text="@string/tab_chat" />
 
             <Button
-                android:id="@+id/actions_tab"
+                android:id="@+id/planning_tab"
                 style="@style/OpenCray.TabButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:text="@string/tab_actions" />
+                android:text="@string/tab_planning" />
 
             <Button
-                android:id="@+id/safety_tab"
+                android:id="@+id/settings_tab"
                 style="@style/OpenCray.TabButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
-                android:text="@string/tab_safety" />
+                android:text="@string/tab_settings" />
         </LinearLayout>
 
         <LinearLayout
@@ -129,6 +120,36 @@
                     android:text="@string/chat_subtitle"
                     android:textColor="@color/opencray_muted"
                     android:textSize="14sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/chat_conversation_list_title"
+                    android:textColor="@color/opencray_ink"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/conversation_tabs_container"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+
+                <Button
+                    android:id="@+id/new_conversation_button"
+                    style="@style/OpenCray.SecondaryButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/chat_new_conversation" />
             </LinearLayout>
 
             <ScrollView
@@ -368,6 +389,46 @@
                 android:textColor="@color/opencray_ink"
                 android:textSize="20sp"
                 android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/planning_snapshot_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/panel_surface"
+                android:padding="16dp"
+                android:textColor="@color/opencray_ink"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/planning_schedule_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/panel_surface"
+                android:padding="16dp"
+                android:textColor="@color/opencray_ink"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/planning_alarm_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/panel_surface"
+                android:padding="16dp"
+                android:textColor="@color/opencray_ink"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/planning_todo_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/panel_surface"
+                android:padding="16dp"
+                android:textColor="@color/opencray_ink"
+                android:textSize="15sp" />
 
             <TextView
                 android:id="@+id/task_flow_text"
