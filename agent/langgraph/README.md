@@ -137,8 +137,16 @@ It still does not implement most data/auth skills:
 - login adapters
 - course / assignment / notice fetchers
 - notification concrete handlers
+- full live-campus feed crawling
 
-Calendar actions are now wired with concrete handlers:
+These information/display skills have concrete lightweight handlers:
+
+- `get_campus_activities` (INFO/WebVPN news APIs when session cookies are provided; otherwise records from `OPENTHU_CAMPUS_ACTIVITIES_FILE` or official entry points; accepts `query` for lightweight evidence retrieval over fetched activity details)
+- `show_summary`
+- `send_notification`
+- `open_url`
+
+Calendar actions are wired with concrete handlers:
 
 - `create_calendar_event`
 - `detect_calendar_conflicts`
@@ -154,6 +162,11 @@ Android-side execution is handled by Kotlin runtime (`ActionExecutor`) under app
 
 Environment variables:
 
+- `OPENTHU_ADB_BIN` (optional, default `adb`)
+- `OPENTHU_ADB_SERIAL` (optional, choose one specific device)
+- `OPENTHU_CALENDAR_TIMEZONE` (optional, default `UTC`)
+- `OPENTHU_WEBVPN_COOKIE` / `OPENTHU_WEBVPN_CSRF` (optional, enables INFO campus activity API access)
+- `OPENTHU_CAMPUS_ACTIVITIES_FILE` (optional, fallback JSON with an `activities[]` list)
 - `OPENTHU_CALENDAR_BRIDGE_MODE` (`json_file` to enable file bridge)
 - `OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE` (required for `json_file` mode)
 - `OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE` (required for `json_file` mode)

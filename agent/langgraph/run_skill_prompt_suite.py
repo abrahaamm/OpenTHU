@@ -78,6 +78,7 @@ def main() -> None:
     cases = build_suite_cases()
     results: list[dict[str, Any]] = []
     covered: set[str] = set()
+    failed_cases: list[dict[str, Any]] = []
 
     for idx, case in enumerate(cases, start=1):
         run_state = agent.run(
@@ -91,9 +92,25 @@ def main() -> None:
         planned = [item.get("skill_name", "") for item in data.get("skill_plan", [])]
         executed = [item.get("skill_name", "") for item in data.get("skill_results", [])]
         blocked = [item.get("skill_name", "") for item in data.get("blocked_skills", [])]
+        failed = data.get("failed_skills", [])
         covered.update(planned)
         covered.update(executed)
         covered.update(blocked)
+        if final_response.get("code") != "OK" or failed:
+            failed_cases.append(
+                {
+                    "case_name": case["name"],
+                    "code": final_response.get("code", ""),
+                    "failed_skills": [
+                        {
+                            "skill_name": item.get("skill_name", ""),
+                            "failure_code": item.get("failure_code", ""),
+                            "failure_message": item.get("failure_message", ""),
+                        }
+                        for item in failed
+                    ],
+                }
+            )
 
         results.append(
             {
@@ -113,6 +130,8 @@ def main() -> None:
             "case_count": len(cases),
             "covered_skills": sorted(covered),
             "missing_skills": missing,
+            "failed_case_count": len(failed_cases),
+            "failed_cases": failed_cases,
             "output_file": args.output,
             "memory_file": args.memory_file,
         },
