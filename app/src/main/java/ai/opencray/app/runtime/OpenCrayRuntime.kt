@@ -236,6 +236,7 @@ class OpenCrayRuntime(
       "detect_calendar_conflicts",
       "delete_calendar_event",
       "open_url",
+      "read_notifications",
     )
 
   private fun currentGatewayConfig(): GatewayConfig {

@@ -16,3 +16,4 @@ __pycache__/
 .env
 log/
 agent/langgraph/agent/langgraph/
+.venv/
