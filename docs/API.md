@@ -37,9 +37,10 @@
 - **调用方**：LangGraph Workflow 节点（`plan` / `safety_check`）以及 Agent-Core Server 分发器
 - **执行方**：Android Agent 内置 Skill 实现层（Device Executor）
 - **绑定方式**：Workflow 仅依赖 `SkillRegistry` 提供的 `SkillSpec` / `SkillHandler`，不直接耦合具体 Skill 实现
+- **跨语言执行**：动作类 Skill 可由 Python Handler 通过桥接协议转发至 Kotlin Runtime 执行，返回 `SkillResult` 风格结果
 - **会话传递**：数据类 Skill 共享 Agent 持有的 `Session` 对象（含 `JSESSIONID` / `CSRF token`）
 - **幂等**：所有写操作 Skill（动作类）支持 `request_id` 幂等
-- **时间**：统一 ISO8601（UTC）
+- **时间**：统一 ISO8601（UTC）；`set_alarm.time` 为本地时区语义（`HH:mm` 或本地 ISO8601）
 - **错误码**：见 2.3
 
 任务分发接口（模式 A）详见：
@@ -549,7 +550,9 @@ class SkillResult:
 ```
 
 **返回**：`{ "event_id": "...", "status": "created|skipped_conflict|conflict_detected" }`  
-**实现**：通过 Android `CalendarContract` + `ContentResolver` 直接写入系统日历（Provider 模式）
+**实现**：Python 侧仅输出 `SkillInvocation`，由 Kotlin `ActionExecutor` 通过 Android `CalendarContract` + `ContentResolver` 执行写入（桥接执行模式）
+
+`SkillManager` 会先按 `SkillSpec.args_json_schema` 对入参做校验与归一化（当前 calendar skills 为 strict schema，`additionalProperties=false`）。
 
 冲突策略说明：
 - Android 日历支持时间重叠事件共存
@@ -620,7 +623,35 @@ class SkillResult:
 }
 ```
 
-## 5.5 `set_alarm`
+## 5.5 `get_current_time`
+
+**风险等级**：low  
+**用途**：获取设备当前本地时间与时区上下文，用于相对时间任务的规划校验。
+
+**入参**：
+
+```python
+{
+    "request_id": "req_xxx"
+}
+```
+
+**返回**：
+
+```python
+{
+    "status": "ok",
+    "local_datetime": "2026-04-27T01:30:00+08:00",
+    "local_date": "2026-04-27",
+    "local_time": "01:30",
+    "timezone": "Asia/Shanghai",
+    "timezone_name": "CST",
+    "utc_offset": "+08:00",
+    "epoch_ms": 1777224600000
+}
+```
+
+## 5.6 `set_alarm`
 
 **风险等级**：low  
 **用途**：设置系统闹钟。
@@ -630,7 +661,8 @@ class SkillResult:
 ```python
 {
     "request_id": "req_xxx",
-    "time": "2026-04-28T07:30:00Z",
+    "time": "07:30",              # 推荐
+    # 或 "time": "2026-04-28T07:30:00"（本地 ISO8601，按本地时区语义解释）
     "label": "记得提交作业",    # 可选
     "vibrate": True            # 可选
 }
@@ -639,7 +671,7 @@ class SkillResult:
 **返回**：`{ "alarm_id": "...", "status": "set" }`  
 **实现**：发送 `android.intent.action.SET_ALARM` Intent
 
-## 5.6 `open_url`
+## 5.7 `open_url`
 
 **风险等级**：low  
 **用途**：打开指定 URL。
@@ -790,9 +822,9 @@ Skill 调用状态：
 | `get_assignments` | learn.tsinghua.edu.cn | `/b/wlxt/kczy/zy/student/zyListWj` 等三个状态接口 | POST |
 | `get_academic_calendar` | zhjw.cic.tsinghua.edu.cn | `/b/wlxt/common/auth/gnt` → `j_acegi_login.do` → `jxmh_out.do` | POST/GET |
 | `create_reminder` | Android System | `android.provider.CalendarContract.Reminders` | Intent |
-| `create_calendar_event` | Android System | `content://com.android.calendar/events`（默认 Provider 写入，必要时回退 Intent） | Provider Write (+ Intent Fallback) |
-| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（本地查询） | Provider Query |
-| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（本地删除） | Provider Delete |
+| `create_calendar_event` | Android System | `content://com.android.calendar/events`（由 Kotlin `ActionExecutor` 执行） | Provider Write (Kotlin Executor) |
+| `detect_calendar_conflicts` | Android System | `content://com.android.calendar/events`（由 Kotlin `ActionExecutor` 查询） | Provider Query (Kotlin Executor) |
+| `delete_calendar_event` | Android System | `content://com.android.calendar/events/{event_id}`（由 Kotlin `ActionExecutor` 删除） | Provider Delete (Kotlin Executor) |
 | `set_alarm` | Android System | `android.intent.action.SET_ALARM` | Intent |
 
 ---

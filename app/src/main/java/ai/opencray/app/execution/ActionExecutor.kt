@@ -9,19 +9,23 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.CalendarContract
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
-import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.max
+import org.json.JSONArray
 
 data class ActionExecutionReport(
   val success: Boolean,
   val message: String,
   val recoverable: Boolean,
+  val semantic: String = if (success) "action_executed" else "action_failed",
+  val metadata: Map<String, Any?> = emptyMap(),
+
 )
 
 private data class CalendarWindow(
@@ -42,10 +46,12 @@ class ActionExecutor(
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     val actionId = action.id.substringBefore("#")
     return when (actionId) {
+      "get_current_time" -> executeGetCurrentTime()
       "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
+      "read_notifications" -> executeReadNotifications()
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
       "open_url" -> {
         val url =
@@ -67,6 +73,55 @@ class ActionExecutor(
           recoverable = false,
         )
     }
+  }
+
+  private fun executeReadNotifications(): ActionExecutionReport {
+    val enabledListeners = Settings.Secure.getString(appContext.contentResolver, "enabled_notification_listeners")
+    val isEnabled = enabledListeners != null && enabledListeners.contains(appContext.packageName)
+
+    if (!isEnabled) {
+      val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+      }
+      appContext.startActivity(intent)
+      return ActionExecutionReport(
+        success = false,
+        message = "Missing notification access permission. Prompted user to enable it in Settings.",
+        recoverable = false,
+      )
+    }
+
+    val service = OpenTHUNotificationListenerService.instance
+    if (service == null) {
+      return ActionExecutionReport(
+        success = false,
+        message = "NotificationListenerService is active but not bound yet. Please wait or restart the app.",
+        recoverable = true,
+      )
+    }
+
+    val notifications = service.getUnreadNotifications()
+    val notesList = notifications.mapNotNull { sbn ->
+        val extras = sbn.notification.extras
+        val title = extras.getString(android.app.Notification.EXTRA_TITLE) ?: return@mapNotNull null
+        val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
+        val pkg = sbn.packageName
+        "[$pkg] $title: $text"
+    }
+
+    if (notesList.isEmpty()) {
+      return ActionExecutionReport(
+        success = true,
+        message = "No unread notifications found.",
+        recoverable = false,
+      )
+    }
+
+    return ActionExecutionReport(
+      success = true,
+      message = "Found ${notesList.size} unread notifications:\n" + notesList.joinToString("\n"),
+      recoverable = false,
+    )
   }
 
   private fun executeCreateCalendarEvent(
@@ -96,20 +151,30 @@ class ActionExecutor(
         "skip_write" -> {
           return ActionExecutionReport(
             success = true,
-            message = "Conflict detected (${conflicts.size}), skipped writing by decision.",
+            message = "已跳过写入（skip_write）。${conflictSummaryMessage(conflicts)}",
             recoverable = false,
+            metadata = mapOf(
+              "skipped" to true,
+              "conflict_count" to conflicts.size,
+              "conflicts" to conflictsToDataList(conflicts),
+            ),
           )
         }
         "coexist" -> {
-          // Android calendar supports overlapping events.
+          // Android calendar supports overlapping events; proceed with insert below.
         }
         "delete_conflicts" -> {
           val allowDelete = action.params["allow_conflict_delete"]?.toBooleanStrictOrNull() ?: false
           if (!allowDelete) {
             return ActionExecutionReport(
               success = false,
-              message = "Conflict delete requires explicit confirmation (allow_conflict_delete=true).",
+              message = "冲突删除需要明确授权（allow_conflict_delete=true）。${conflictSummaryMessage(conflicts)}",
               recoverable = false,
+              metadata = mapOf(
+                "reason" to "allow_conflict_delete_not_set",
+                "conflict_count" to conflicts.size,
+                "conflicts" to conflictsToDataList(conflicts),
+              ),
             )
           }
           deleteEventsByIds(conflicts.map { it.id })
@@ -117,8 +182,13 @@ class ActionExecutor(
         else -> {
           return ActionExecutionReport(
             success = false,
-            message = "Conflict detected (${conflicts.size}). Choose skip_write / coexist / delete_conflicts.",
+            message = "检测到冲突，请选择策略 skip_write / coexist / delete_conflicts。${conflictSummaryMessage(conflicts)}",
             recoverable = false,
+            metadata = mapOf(
+              "reason" to "conflict_strategy_required",
+              "conflict_count" to conflicts.size,
+              "conflicts" to conflictsToDataList(conflicts),
+            ),
           )
         }
       }
@@ -147,16 +217,45 @@ class ActionExecutor(
       val eventId = uri?.lastPathSegment ?: "unknown"
       ActionExecutionReport(
         success = true,
-        message = "Calendar event created (event_id=$eventId, conflicts=${conflicts.size}).",
+        message = "日历事项已创建：「$title」${formatEpochMs(window.startMs)}-${formatEpochMs(window.endMs)}（event_id=$eventId）",
         recoverable = false,
+        metadata = mapOf(
+          "event_id" to eventId,
+          "title" to title,
+          "start" to formatEpochMs(window.startMs),
+          "end" to formatEpochMs(window.endMs),
+          "calendar_id" to calendarId,
+          "deleted_conflicts" to if (conflicts.isNotEmpty()) conflictsToDataList(conflicts) else emptyList<Any>(),
+        ),
       )
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
-        message = throwable.message ?: "Calendar insert failed",
+        message = "日历写入失败：${throwable.message ?: "未知错误"}",
         recoverable = true,
+        metadata = mapOf("exception" to (throwable.message ?: "unknown")),
       )
     }
+  }
+
+  private fun executeGetCurrentTime(): ActionExecutionReport {
+    val now = OffsetDateTime.now(ZoneId.systemDefault()).withNano(0)
+    val hour = now.hour
+    val minute = now.minute
+    val localTime = "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
+    return ActionExecutionReport(
+      success = true,
+      message = "Current local time captured: $localTime (${ZoneId.systemDefault().id})",
+      recoverable = false,
+      semantic = "current_time_captured",
+      metadata = mapOf(
+        "local_datetime" to now.toString(),
+        "local_date" to now.toLocalDate().toString(),
+        "local_time" to localTime,
+        "timezone" to ZoneId.systemDefault().id,
+        "epoch_ms" to now.toInstant().toEpochMilli(),
+      ),
+    )
   }
 
   private fun executeConflictDetection(
@@ -176,16 +275,21 @@ class ActionExecutor(
       recoverable = false,
     )
     val conflicts = queryConflicts(window.startMs, window.endMs)
-    val overlapSupported = true
     return ActionExecutionReport(
       success = true,
-      message =
-        buildString {
-          append("Conflict check completed: ${conflicts.size} overlap(s). ")
-          append("Android calendar overlap supported=$overlapSupported. ")
-          append("Options: skip_write | coexist | delete_conflicts.")
-        },
+      message = if (conflicts.isEmpty()) {
+        "未检测到时间冲突（已排除全天事件）。"
+      } else {
+        conflictSummaryMessage(conflicts)
+      },
       recoverable = false,
+      metadata = mapOf(
+        "conflict_count" to conflicts.size,
+        "conflicts" to conflictsToDataList(conflicts),
+        "check_window_start" to formatEpochMs(window.startMs),
+        "check_window_end" to formatEpochMs(window.endMs),
+        "all_day_excluded" to true,
+      ),
     )
   }
 
@@ -235,24 +339,42 @@ class ActionExecutor(
       val deleted = deleteEventsByIds(idsToDelete)
       ActionExecutionReport(
         success = true,
-        message = "Deleted $deleted calendar event(s).",
+        message = "已删除 $deleted 个日历事项（目标 ${idsToDelete.size} 个）。",
         recoverable = false,
+        metadata = mapOf(
+          "deleted_count" to deleted,
+          "requested_ids" to idsToDelete,
+        ),
       )
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
-        message = throwable.message ?: "Calendar delete failed",
+        message = "日历删除失败：${throwable.message ?: "未知错误"}",
         recoverable = true,
+        metadata = mapOf(
+          "exception" to (throwable.message ?: "unknown"),
+          "requested_ids" to idsToDelete,
+        ),
       )
     }
   }
 
   private fun executeAlarmIntent(action: SystemAction, goal: String): ActionExecutionReport {
     val timeStr = action.payload?.get("time") as? String
-      ?: return ActionExecutionReport(false, "Missing 'time' in payload", false)
+      ?: return ActionExecutionReport(
+        success = false,
+        message = "Missing 'time' in payload",
+        recoverable = false,
+        semantic = "alarm_invalid_args",
+      )
 
     val parsed = parseAlarmTime(timeStr)
-      ?: return ActionExecutionReport(false, "Invalid 'time' format (expected ISO8601 UTC or HH:mm)", false)
+      ?: return ActionExecutionReport(
+        success = false,
+        message = "Invalid 'time' format (expected local HH:mm or local ISO8601 datetime)",
+        recoverable = false,
+        semantic = "alarm_invalid_time_format",
+      )
 
     val hourArg = parsed.first
     val minArg = parsed.second
@@ -270,23 +392,57 @@ class ActionExecutor(
         putExtra(AlarmClock.EXTRA_HOUR, hourArg)
         putExtra(AlarmClock.EXTRA_MINUTES, minArg)
         if (vibrateArg) putExtra(AlarmClock.EXTRA_VIBRATE, true)
-        putExtra(AlarmClock.EXTRA_SKIP_UI, false)
+        putExtra(AlarmClock.EXTRA_SKIP_UI, true)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       }
 
-    return launchIntent(intent, "Alarm setup intent launched for ${hourArg}:${minArg.toString().padStart(2, '0')}")
+    val report =
+      launchIntent(
+        intent = intent,
+        successMessage = "Alarm creation requested in background mode for ${hourArg}:${minArg.toString().padStart(2, '0')}",
+      )
+    val alarmMeta =
+      mapOf(
+        "alarm_hour" to hourArg,
+        "alarm_minute" to minArg,
+        "label" to labelArg,
+        "skip_ui" to true,
+      )
+    return if (report.success) {
+      report.copy(
+        semantic = "alarm_created_background_requested",
+        metadata = alarmMeta,
+      )
+    } else {
+      report.copy(
+        semantic = "alarm_creation_failed",
+        metadata = report.metadata + alarmMeta,
+      )
+    }
   }
 
   private fun parseAlarmTime(timeRaw: String): Pair<Int, Int>? {
-    runCatching {
-      val zdt = Instant.parse(timeRaw).atZone(ZoneId.systemDefault())
-      return Pair(zdt.hour, zdt.minute)
+    val text = timeRaw.trim()
+    if (text.isEmpty()) return null
+
+    // Preferred local wall-clock format.
+    Regex("""^([01]?\d|2[0-3]):([0-5]\d)$""").matchEntire(text)?.let { match ->
+      val hour = match.groupValues[1].toIntOrNull() ?: return null
+      val minute = match.groupValues[2].toIntOrNull() ?: return null
+      return Pair(hour, minute)
     }
 
-    val match = Regex("""^([01]?\d|2[0-3]):([0-5]\d)$""").matchEntire(timeRaw.trim()) ?: return null
-    val hour = match.groupValues[1].toIntOrNull() ?: return null
-    val minute = match.groupValues[2].toIntOrNull() ?: return null
-    return Pair(hour, minute)
+    // Local-time semantics for ISO-like strings:
+    // keep the wall-clock hour/minute in text and do not apply timezone conversion.
+    Regex(
+      """^\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:\.\d+)?(?:Z|[+-][01]\d:[0-5]\d)?$""",
+    ).matchEntire(text)?.let { match ->
+      val hour = match.groupValues[1].toIntOrNull() ?: return null
+      val minute = match.groupValues[2].toIntOrNull() ?: return null
+      return Pair(hour, minute)
+    }
+
+    return null
   }
 
   private fun openWebPage(url: String): ActionExecutionReport {
@@ -297,15 +453,50 @@ class ActionExecutor(
     return launchIntent(intent, "Campus website opened")
   }
 
+  /** Format a timestamp (epochMs) to local ISO datetime string for display. */
+  private fun formatEpochMs(epochMs: Long): String {
+    return runCatching {
+      val instant = java.time.Instant.ofEpochMilli(epochMs)
+      val zdt = instant.atZone(ZoneId.systemDefault())
+      zdt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    }.getOrElse { epochMs.toString() }
+  }
+
+  /** Convert conflict list to structured map list suitable for JSON submission. */
+  private fun conflictsToDataList(conflicts: List<CalendarEventBrief>): List<Map<String, Any>> =
+    conflicts.map { event ->
+      mapOf(
+        "id" to event.id,
+        "title" to event.title,
+        "start" to formatEpochMs(event.startMs),
+        "end" to formatEpochMs(event.endMs),
+      )
+    }
+
+  /** Build a human-readable conflict summary for the message field. */
+  private fun conflictSummaryMessage(conflicts: List<CalendarEventBrief>): String {
+    val items = conflicts.joinToString("; ") { event ->
+      "「${event.title}」${formatEpochMs(event.startMs)}-${formatEpochMs(event.endMs)}"
+    }
+    return "冲突事项(${conflicts.size}): $items"
+  }
+
   private fun launchIntent(intent: Intent, successMessage: String): ActionExecutionReport {
     return runCatching {
       appContext.startActivity(intent)
-      ActionExecutionReport(success = true, message = successMessage, recoverable = false)
+      ActionExecutionReport(
+        success = true,
+        message = successMessage,
+        recoverable = false,
+        semantic = "intent_launched",
+      )
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
         message = throwable.message ?: "Intent execution failed",
         recoverable = true,
+        semantic = "intent_launch_failed",
+        metadata = mapOf("error" to (throwable.message ?: "Intent execution failed")),
       )
     }
   }
@@ -348,8 +539,9 @@ class ActionExecutor(
     params: Map<String, String>,
     goal: String,
   ): CalendarWindow? {
-    val startRaw = params["start_time"] ?: extractIsoDateTime(goal).firstOrNull()
-    val endRaw = params["end_time"] ?: extractIsoDateTime(goal).getOrNull(1)
+    val extracted = extractIsoDateTime(goal)
+    val startRaw = params["start_time"]?.trim().orEmpty().ifEmpty { extracted.firstOrNull().orEmpty() }
+    val endRaw = params["end_time"]?.trim().orEmpty().ifEmpty { extracted.getOrNull(1).orEmpty() }
 
     val formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
     val now = OffsetDateTime.now(ZoneOffset.UTC).withSecond(0).withNano(0)
@@ -373,6 +565,8 @@ class ActionExecutor(
         CalendarContract.Events.DTSTART,
         CalendarContract.Events.DTEND,
       )
+    // Exclude all-day events (ALL_DAY=1) — their midnight UTC times cause false positives
+    // against regular timed events.
     val selection =
       buildString {
         append("(")
@@ -382,6 +576,8 @@ class ActionExecutor(
         append(")")
         append(" AND ")
         append("(${CalendarContract.Events.DELETED} = 0 OR ${CalendarContract.Events.DELETED} IS NULL)")
+        append(" AND ")
+        append("(${CalendarContract.Events.ALL_DAY} = 0 OR ${CalendarContract.Events.ALL_DAY} IS NULL)")
       }
     val args = arrayOf(endMs.toString(), startMs.toString())
     val sort = "${CalendarContract.Events.DTSTART} ASC"
@@ -462,7 +658,14 @@ class ActionExecutor(
 
   private fun parseIdList(raw: String?): List<Long> {
     if (raw.isNullOrBlank()) return emptyList()
-    return raw.split(",").mapNotNull { it.trim().toLongOrNull() }
+    val text = raw.trim()
+    if (text.startsWith("[")) {
+      return runCatching {
+        val arr = JSONArray(text)
+        (0 until arr.length()).mapNotNull { index -> arr.opt(index)?.toString()?.trim()?.toLongOrNull() }
+      }.getOrElse { emptyList() }
+    }
+    return text.split(",").mapNotNull { it.trim().toLongOrNull() }
   }
 
   private fun parseSingleId(raw: String?): List<Long> {

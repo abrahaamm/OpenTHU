@@ -86,6 +86,11 @@ Even with schema validation, handlers should still validate business semantics:
 - resource existence
 - cross-field domain constraints
 
+Alarm-specific note:
+
+- `set_alarm.time` uses local-time semantics (`HH:mm` preferred). Avoid UTC-offset conversions at execution time.
+- `get_current_time` can be planned before `set_alarm` when user intent contains relative time phrases.
+
 Use deterministic, structured errors:
 
 - `INVALID_PARAM` for invalid user input

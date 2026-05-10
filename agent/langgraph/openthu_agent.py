@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypedDict
 from uuid import uuid4
+
+logger = logging.getLogger("openthu_agent")
 
 from langgraph.graph import END, START, StateGraph
 
@@ -94,33 +97,35 @@ class RequirementLLM:
                 "objective, entities, constraints, success_criteria, sensitivity. "
                 "Use concise, execution-oriented values. Return JSON only."
             )
-            try:
-                response = client.responses.create(
-                    model=self.model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_input},
-                    ],
-                    max_output_tokens=500,
-                    temperature=0.1,
-                )
-                self.last_mode = "llm_responses"
-                self.last_error = ""
-                return json.loads(self._extract_json_text(response.output_text.strip()))
-            except Exception:
-                completion = client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_input},
-                    ],
-                    max_tokens=500,
-                    temperature=0.1,
-                )
-                content = completion.choices[0].message.content or ""
-                self.last_mode = "llm_chat_completions"
-                self.last_error = ""
-                return json.loads(self._extract_json_text(content.strip()))
+            if not self.base_url:
+                try:
+                    response = client.responses.create(
+                        model=self.model,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_input},
+                        ],
+                        max_output_tokens=500,
+                        temperature=0.1,
+                    )
+                    self.last_mode = "llm_responses"
+                    self.last_error = ""
+                    return json.loads(self._extract_json_text(response.output_text.strip()))
+                except Exception:
+                    pass
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_input},
+                ],
+                max_tokens=500,
+                temperature=0.1,
+            )
+            content = completion.choices[0].message.content or ""
+            self.last_mode = "llm_chat_completions"
+            self.last_error = ""
+            return json.loads(self._extract_json_text(content.strip()))
         except Exception as exc:
             self.last_mode = "fallback"
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -170,6 +175,8 @@ class RequirementLLM:
             entities.append("calendar_delete")
         if any(token in lower for token in ["闹钟", "alarm"]):
             entities.append("alarm")
+        if any(token in lower for token in ["当前时间", "现在几点", "几点了", "time now", "current time"]):
+            entities.append("current_time")
         if any(token in lower for token in ["通知我", "推送", "notification"]):
             entities.append("notification")
         if any(token in lower for token in ["刷新会话", "刷新登录", "refresh session"]):
@@ -258,6 +265,12 @@ class OpenTHULangGraphAgent:
         session: dict[str, Any] | None = None,
         semester_id: str = "",
     ) -> dict[str, Any]:
+        logger.info(
+            "[agent.run] user_id=%s approve_sensitive=%s input=%r",
+            user_id,
+            approve_sensitive,
+            user_input[:120],
+        )
         initial = self._build_initial_state(
             user_input=user_input,
             user_id=user_id,
@@ -265,7 +278,14 @@ class OpenTHULangGraphAgent:
             session=session,
             semester_id=semester_id,
         )
-        return self.graph.invoke(initial)
+        logger.debug("[agent.run] initial task_id=%s request_id=%s", initial["task_id"], initial["request_id"])
+        result = self.graph.invoke(initial)
+        logger.info(
+            "[agent.run] done task_id=%s task_status=%s",
+            result.get("task_id", ""),
+            result.get("task_status", ""),
+        )
+        return result
 
     def run_plan_only(
         self,
@@ -275,12 +295,23 @@ class OpenTHULangGraphAgent:
         session: dict[str, Any] | None = None,
         semester_id: str = "",
     ) -> dict[str, Any]:
+        logger.info(
+            "[agent.run_plan_only] user_id=%s approve_sensitive=%s input=%r",
+            user_id,
+            approve_sensitive,
+            user_input[:120],
+        )
         state = self._build_initial_state(
             user_input=user_input,
             user_id=user_id,
             approve_sensitive=approve_sensitive,
             session=session,
             semester_id=semester_id,
+        )
+        logger.debug(
+            "[agent.run_plan_only] task_id=%s request_id=%s",
+            state["task_id"],
+            state["request_id"],
         )
 
         for node_fn in (
@@ -310,6 +341,23 @@ class OpenTHULangGraphAgent:
         else:
             message = "No executable skills generated by planner"
 
+        logger.info(
+            "[agent.run_plan_only] finished task_id=%s code=%s task_status=%s "
+            "approved=%d blocked=%d normalizer=%s planner=%s",
+            state["task_id"],
+            code,
+            task_status,
+            approved_count,
+            blocked_count,
+            state.get("normalizer_source", "?"),
+            state.get("planner_source", "?"),
+        )
+        if approved_count:
+            approved_names = [
+                item.get("skill_name", "?") for item in state.get("approved_skills", [])
+                if isinstance(item, dict)
+            ]
+            logger.info("[agent.run_plan_only] approved skill chain: %s", approved_names)
         return {
             "request_id": state["request_id"],
             "code": code,
@@ -355,11 +403,32 @@ class OpenTHULangGraphAgent:
         }
 
     def _normalize_requirement(self, state: AgentState) -> dict[str, Any]:
+        logger.debug(
+            "[node.normalize] task_id=%s input=%r",
+            state.get("task_id", ""),
+            state["user_input"][:100],
+        )
         raw_prompt = self.llm.normalize(state["user_input"])
         standardized, warnings = self._coerce_structured_prompt(
             raw_prompt,
             fallback_text=state["user_input"],
         )
+        logger.info(
+            "[node.normalize] task_id=%s source=%s entities=%s sensitivity=%s warnings=%d",
+            state.get("task_id", ""),
+            self.llm.last_mode,
+            standardized["entities"],
+            standardized["sensitivity"],
+            len(warnings),
+        )
+        if self.llm.last_error:
+            logger.warning(
+                "[node.normalize] llm error task_id=%s error=%s",
+                state.get("task_id", ""),
+                self.llm.last_error,
+            )
+        if warnings:
+            logger.debug("[node.normalize] warnings task_id=%s: %s", state.get("task_id", ""), warnings)
         return {
             "standardized_prompt": standardized,
             "normalization_warnings": warnings,
@@ -378,14 +447,20 @@ class OpenTHULangGraphAgent:
         }
 
     def _plan_skills(self, state: AgentState) -> dict[str, Any]:
+        logger.debug("[node.plan] task_id=%s", state.get("task_id", ""))
         structured_prompt = self._coerce_prompt_from_state(state)
         planned = self._plan_skills_via_llm(state, structured_prompt)
         planner_source = "llm"
         if not planned:
+            logger.debug("[node.plan] task_id=%s llm returned empty, falling back to rule-based planner", state.get("task_id", ""))
             planned = self._fallback_skill_plan(state, structured_prompt)
             planner_source = "fallback"
 
         if not planned:
+            logger.warning(
+                "[node.plan] task_id=%s no skills generated, inserting show_summary placeholder",
+                state.get("task_id", ""),
+            )
             planned = [
                 self._build_skill_invocation(
                     skill_name="show_summary",
@@ -400,6 +475,14 @@ class OpenTHULangGraphAgent:
             ]
             planner_source = "fallback"
 
+        skill_names = [item.get("skill_name", "") for item in planned]
+        logger.info(
+            "[node.plan] task_id=%s source=%s planned=%d skills=%s",
+            state.get("task_id", ""),
+            planner_source,
+            len(planned),
+            skill_names,
+        )
         return {
             "skill_plan": planned,
             "planner_source": planner_source,
@@ -416,6 +499,12 @@ class OpenTHULangGraphAgent:
         }
 
     def _safety_check(self, state: AgentState) -> dict[str, Any]:
+        logger.debug(
+            "[node.safety] task_id=%s approve_sensitive=%s plan_size=%d",
+            state.get("task_id", ""),
+            state.get("approve_sensitive", False),
+            len(state.get("skill_plan", [])),
+        )
         approve_sensitive = state.get("approve_sensitive", False)
         structured_prompt = self._coerce_prompt_from_state(state)
         plan = state.get("skill_plan", [])
@@ -448,6 +537,13 @@ class OpenTHULangGraphAgent:
             if invocation["requires_approval"] and not approve_sensitive:
                 invocation["status"] = "pending_approval"
                 blocked.append(invocation)
+                logger.warning(
+                    "[node.safety] task_id=%s skill_name=%s BLOCKED risk=%s reason=%r",
+                    state.get("task_id", ""),
+                    invocation["skill_name"],
+                    assessed_risk,
+                    risk_reason,
+                )
                 approval_records.append(
                     {
                         "approval_id": f"apv_{uuid4().hex[:10]}",
@@ -464,6 +560,12 @@ class OpenTHULangGraphAgent:
             else:
                 invocation["status"] = "approved"
                 approved.append(invocation)
+                logger.debug(
+                    "[node.safety] task_id=%s skill_name=%s APPROVED risk=%s",
+                    state.get("task_id", ""),
+                    invocation["skill_name"],
+                    assessed_risk,
+                )
                 if invocation["requires_approval"]:
                     approval_records.append(
                         {
@@ -483,6 +585,12 @@ class OpenTHULangGraphAgent:
             plan=plan,
             approved=approved,
             blocked=blocked,
+        )
+        logger.info(
+            "[node.safety] task_id=%s approved=%d blocked=%d",
+            state.get("task_id", ""),
+            len(approved),
+            len(blocked),
         )
         return {
             "skill_plan": updated_plan,
@@ -508,6 +616,11 @@ class OpenTHULangGraphAgent:
 
     def _execute_skills(self, state: AgentState) -> dict[str, Any]:
         approved_skills = state.get("approved_skills", [])
+        logger.info(
+            "[node.execute] task_id=%s executing %d approved skill(s)",
+            state.get("task_id", ""),
+            len(approved_skills),
+        )
         current_plan = state.get("skill_plan", [])
         current_session = dict(state.get("session", {}))
         skill_results: list[dict[str, Any]] = []
@@ -515,6 +628,13 @@ class OpenTHULangGraphAgent:
 
         for invocation_dict in approved_skills:
             invocation = self._skill_invocation_from_dict(invocation_dict)
+            logger.debug(
+                "[node.execute] task_id=%s invoking skill_name=%s request_id=%s args=%s",
+                state.get("task_id", ""),
+                invocation.skill_name,
+                invocation.request_id,
+                json.dumps(invocation.args, ensure_ascii=False),
+            )
             result = self.skill_manager.execute(invocation, current_session, state)
 
             success = result.get("code") == "OK"
@@ -526,10 +646,22 @@ class OpenTHULangGraphAgent:
             skill_results.append(result)
 
             if success:
+                logger.info(
+                    "[node.execute] skill_name=%s request_id=%s OK",
+                    invocation.skill_name,
+                    invocation.request_id,
+                )
                 maybe_session = result.get("data", {}).get("session")
                 if isinstance(maybe_session, dict):
                     current_session = maybe_session
             else:
+                logger.warning(
+                    "[node.execute] skill_name=%s request_id=%s FAILED code=%s message=%r",
+                    invocation.skill_name,
+                    invocation.request_id,
+                    result.get("code", "SKILL_EXECUTION_FAILED"),
+                    result.get("data", {}).get("message", ""),
+                )
                 failed = dict(invocation_dict)
                 failed["status"] = "failed"
                 failed["failure_code"] = result.get("code", "SKILL_EXECUTION_FAILED")
@@ -545,6 +677,13 @@ class OpenTHULangGraphAgent:
         else:
             task_status = "completed"
 
+        logger.info(
+            "[node.execute] task_id=%s done executed=%d failed=%d task_status=%s",
+            state.get("task_id", ""),
+            len(skill_results),
+            len(failed_skills),
+            task_status,
+        )
         return {
             "session": current_session,
             "skill_plan": updated_plan,
@@ -567,9 +706,16 @@ class OpenTHULangGraphAgent:
         return "replan_failed" if state.get("needs_replan") else "audit_record"
 
     def _replan_failed(self, state: AgentState) -> dict[str, Any]:
+        failed_skills = state.get("failed_skills", [])
+        logger.warning(
+            "[node.replan] task_id=%s replanning for %d failed skill(s): %s",
+            state.get("task_id", ""),
+            len(failed_skills),
+            [item.get("skill_name", "?") for item in failed_skills],
+        )
         replanned: list[dict[str, Any]] = []
 
-        for failed_skill in state.get("failed_skills", []):
+        for failed_skill in failed_skills:
             content = (
                 f"Skill `{failed_skill['skill_name']}` 执行失败。\n\n"
                 f"- request_id: `{failed_skill['request_id']}`\n"
@@ -760,6 +906,7 @@ class OpenTHULangGraphAgent:
     ) -> list[dict[str, Any]]:
         openai_key = os.getenv("OPENAI_API_KEY")
         if not openai_key:
+            logger.debug("[llm.planner] OPENAI_API_KEY not set, skipping LLM planning")
             return []
 
         payload = {
@@ -772,7 +919,9 @@ class OpenTHULangGraphAgent:
             "Return a strict JSON array. Each item must have skill_name, args, description. "
             "Use only skill_name values from available_skills. "
             "Prefer data skills before action skills. "
-            "Do not invent backend calls. Keep the plan between 1 and 8 skills."
+            "Do not invent backend calls. Keep the plan between 1 and 8 skills. "
+            "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
+            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`."
         )
 
         try:
@@ -780,18 +929,39 @@ class OpenTHULangGraphAgent:
 
             client = self._create_openai_client(OpenAI, openai_key)
             user_content = json.dumps(payload, ensure_ascii=False)
-            try:
-                response = client.responses.create(
-                    model=self.llm.model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    max_output_tokens=1000,
-                    temperature=0.2,
-                )
-                raw_text = response.output_text.strip()
-            except Exception:
+            logger.debug(
+                "[llm.planner] task_id=%s calling model=%s entities=%s",
+                state.get("task_id", ""),
+                self.llm.model,
+                structured_prompt.get("entities", []),
+            )
+            if not self.llm.base_url:
+                try:
+                    response = client.responses.create(
+                        model=self.llm.model,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_output_tokens=1000,
+                        temperature=0.2,
+                    )
+                    raw_text = response.output_text.strip()
+                    logger.debug("[llm.planner] responses API succeeded task_id=%s", state.get("task_id", ""))
+                except Exception as e:
+                    logger.debug("[llm.planner] responses API failed (%s), falling back to chat.completions", e)
+                    completion = client.chat.completions.create(
+                        model=self.llm.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_tokens=1000,
+                        temperature=0.2,
+                    )
+                    raw_text = (completion.choices[0].message.content or "").strip()
+                    logger.debug("[llm.planner] chat.completions succeeded task_id=%s", state.get("task_id", ""))
+            else:
                 completion = client.chat.completions.create(
                     model=self.llm.model,
                     messages=[
@@ -802,12 +972,23 @@ class OpenTHULangGraphAgent:
                     temperature=0.2,
                 )
                 raw_text = (completion.choices[0].message.content or "").strip()
+                logger.debug("[llm.planner] chat.completions (base_url mode) succeeded task_id=%s", state.get("task_id", ""))
 
             parsed = json.loads(self._extract_json_text(raw_text))
             if not isinstance(parsed, list):
+                logger.warning("[llm.planner] task_id=%s LLM returned non-list, ignoring", state.get("task_id", ""))
                 return []
-            return self._sanitize_skill_plan(parsed, state["task_id"])
-        except Exception:
+            sanitized = self._sanitize_skill_plan(parsed, state["task_id"])
+            logger.info(
+                "[llm.planner] task_id=%s parsed=%d sanitized=%d skills=%s",
+                state.get("task_id", ""),
+                len(parsed),
+                len(sanitized),
+                [item.get("skill_name", "") for item in sanitized],
+            )
+            return sanitized
+        except Exception as exc:
+            logger.warning("[llm.planner] task_id=%s LLM planning failed: %s", state.get("task_id", ""), exc)
             return []
 
     def _sanitize_skill_plan(self, raw_plan: list[Any], task_id: str) -> list[dict[str, Any]]:
@@ -962,11 +1143,24 @@ class OpenTHULangGraphAgent:
                 "创建系统提醒事项",
             )
 
+        if "current_time" in entities:
+            append_skill(
+                "get_current_time",
+                {},
+                "获取当前本地时间与时区信息",
+            )
+
         if "alarm" in entities:
+            inferred_alarm_time = self._infer_alarm_local_time(objective)
+            append_skill(
+                "get_current_time",
+                {},
+                "获取当前本地时间与时区上下文，供闹钟规划校验",
+            )
             append_skill(
                 "set_alarm",
                 {
-                    "time": "08:00",
+                    "time": inferred_alarm_time,
                     "label": objective[:40] or "OpenTHU 闹钟",
                 },
                 "设置系统闹钟提醒",
@@ -1058,18 +1252,30 @@ class OpenTHULangGraphAgent:
                 "planned_skill": planned_skill,
             }
             user_content = json.dumps(payload, ensure_ascii=False)
-            try:
-                response = client.responses.create(
-                    model=self.llm.model,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_content},
-                    ],
-                    max_output_tokens=250,
-                    temperature=0.0,
-                )
-                raw_text = response.output_text.strip()
-            except Exception:
+            if not self.llm.base_url:
+                try:
+                    response = client.responses.create(
+                        model=self.llm.model,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_output_tokens=250,
+                        temperature=0.0,
+                    )
+                    raw_text = response.output_text.strip()
+                except Exception:
+                    completion = client.chat.completions.create(
+                        model=self.llm.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_tokens=250,
+                        temperature=0.0,
+                    )
+                    raw_text = (completion.choices[0].message.content or "").strip()
+            else:
                 completion = client.chat.completions.create(
                     model=self.llm.model,
                     messages=[
@@ -1132,6 +1338,36 @@ class OpenTHULangGraphAgent:
             seen.add(key)
             deduped.append(item)
         return deduped
+
+    def _infer_alarm_local_time(self, objective: str) -> str:
+        text = (objective or "").strip()
+        if not text:
+            return "08:00"
+
+        colon_match = re.search(r"(?<!\d)([01]?\d|2[0-3])\s*[：:]\s*([0-5]?\d)(?!\d)", text)
+        if colon_match:
+            hour = int(colon_match.group(1))
+            minute = int(colon_match.group(2))
+            return f"{hour:02d}:{minute:02d}"
+
+        cn_match = re.search(r"(?<!\d)(\d{1,2})\s*点\s*(半|([0-5]?\d)\s*分?)?", text)
+        if cn_match:
+            hour = int(cn_match.group(1))
+            minute = 30 if cn_match.group(2) == "半" else int(cn_match.group(3) or 0)
+
+            lowered = text.lower()
+            if any(token in lowered for token in ["下午", "晚上", "傍晚", "pm"]) and hour < 12:
+                hour += 12
+            elif "中午" in lowered and hour < 11:
+                hour += 12
+            elif "凌晨" in lowered and hour == 12:
+                hour = 0
+
+            hour = max(0, min(hour, 23))
+            minute = max(0, min(minute, 59))
+            return f"{hour:02d}:{minute:02d}"
+
+        return "08:00"
 
     def _merge_plan_statuses(
         self,
