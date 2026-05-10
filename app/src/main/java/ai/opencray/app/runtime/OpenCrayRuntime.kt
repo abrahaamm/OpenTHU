@@ -634,7 +634,7 @@ class OpenCrayRuntime(
     val now = System.currentTimeMillis()
     // When the executor requires a conflict strategy choice, keep the action in a special
     // intermediate state so the user can pick a strategy without the server being notified yet.
-    val needsConflictResolution = report.data["reason"] == "conflict_strategy_required"
+    val needsConflictResolution = report.metadata["reason"] == "conflict_strategy_required"
     val nextStatus = when {
       report.success -> "executed"
       needsConflictResolution -> "conflict_pending"
@@ -735,7 +735,11 @@ class OpenCrayRuntime(
         put("recoverable", report.recoverable)
         put("action_id", action.id)
         // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
-        putAll(report.data)
+        report.metadata.forEach { (key, value) ->
+          if (value != null) {
+            put(key, value)
+          }
+        }
       }
       val result =
         gatewayClient.submitResult(
@@ -797,7 +801,7 @@ class OpenCrayRuntime(
     val actionId = action.id.substringBefore("#")
     val message = report.message
     // Check structured data first for a precise reason code
-    val reason = report.data["reason"] as? String
+    val reason = report.metadata["reason"] as? String
     if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
     if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
 

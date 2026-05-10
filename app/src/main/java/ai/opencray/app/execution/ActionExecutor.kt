@@ -153,7 +153,7 @@ class ActionExecutor(
             success = true,
             message = "已跳过写入（skip_write）。${conflictSummaryMessage(conflicts)}",
             recoverable = false,
-            data = mapOf(
+            metadata = mapOf(
               "skipped" to true,
               "conflict_count" to conflicts.size,
               "conflicts" to conflictsToDataList(conflicts),
@@ -170,7 +170,7 @@ class ActionExecutor(
               success = false,
               message = "冲突删除需要明确授权（allow_conflict_delete=true）。${conflictSummaryMessage(conflicts)}",
               recoverable = false,
-              data = mapOf(
+              metadata = mapOf(
                 "reason" to "allow_conflict_delete_not_set",
                 "conflict_count" to conflicts.size,
                 "conflicts" to conflictsToDataList(conflicts),
@@ -184,7 +184,7 @@ class ActionExecutor(
             success = false,
             message = "检测到冲突，请选择策略 skip_write / coexist / delete_conflicts。${conflictSummaryMessage(conflicts)}",
             recoverable = false,
-            data = mapOf(
+            metadata = mapOf(
               "reason" to "conflict_strategy_required",
               "conflict_count" to conflicts.size,
               "conflicts" to conflictsToDataList(conflicts),
@@ -219,7 +219,7 @@ class ActionExecutor(
         success = true,
         message = "日历事项已创建：「$title」${formatEpochMs(window.startMs)}-${formatEpochMs(window.endMs)}（event_id=$eventId）",
         recoverable = false,
-        data = mapOf(
+        metadata = mapOf(
           "event_id" to eventId,
           "title" to title,
           "start" to formatEpochMs(window.startMs),
@@ -233,7 +233,7 @@ class ActionExecutor(
         success = false,
         message = "日历写入失败：${throwable.message ?: "未知错误"}",
         recoverable = true,
-        data = mapOf("exception" to (throwable.message ?: "unknown")),
+        metadata = mapOf("exception" to (throwable.message ?: "unknown")),
       )
     }
   }
@@ -283,7 +283,7 @@ class ActionExecutor(
         conflictSummaryMessage(conflicts)
       },
       recoverable = false,
-      data = mapOf(
+      metadata = mapOf(
         "conflict_count" to conflicts.size,
         "conflicts" to conflictsToDataList(conflicts),
         "check_window_start" to formatEpochMs(window.startMs),
@@ -341,7 +341,7 @@ class ActionExecutor(
         success = true,
         message = "已删除 $deleted 个日历事项（目标 ${idsToDelete.size} 个）。",
         recoverable = false,
-        data = mapOf(
+        metadata = mapOf(
           "deleted_count" to deleted,
           "requested_ids" to idsToDelete,
         ),
@@ -351,7 +351,7 @@ class ActionExecutor(
         success = false,
         message = "日历删除失败：${throwable.message ?: "未知错误"}",
         recoverable = true,
-        data = mapOf(
+        metadata = mapOf(
           "exception" to (throwable.message ?: "unknown"),
           "requested_ids" to idsToDelete,
         ),
