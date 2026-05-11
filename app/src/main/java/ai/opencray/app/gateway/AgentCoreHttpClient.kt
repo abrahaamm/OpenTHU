@@ -251,8 +251,8 @@ class AgentCoreHttpClient {
     val url = URL("$protocol://${config.host}:${config.port}$path")
     val connection = (url.openConnection() as HttpURLConnection).apply {
       requestMethod = method
-      connectTimeout = 8_000
-      readTimeout = 12_000
+      connectTimeout = 10_000
+      readTimeout = 60_000
       useCaches = false
       setRequestProperty("Accept", "application/json")
       setRequestProperty("Connection", "close")

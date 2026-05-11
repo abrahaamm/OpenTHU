@@ -448,29 +448,6 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <EditText
-                    android:id="@+id/goal_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/goal_hint"
-                    android:inputType="textMultiLine"
-                    android:minLines="2"
-                    android:paddingStart="12dp"
-                    android:paddingTop="10dp"
-                    android:paddingEnd="12dp"
-                    android:paddingBottom="10dp"
-                    android:textColor="@color/opencray_ink"
-                    android:textColorHint="@color/opencray_muted" />
-
-                <Button
-                    android:id="@+id/plan_goal_button"
-                    style="@style/OpenCray.PrimaryButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/plan_goal_button" />
-
                 <Button
                     android:id="@+id/run_agent_button"
                     style="@style/OpenCray.SecondaryButton"

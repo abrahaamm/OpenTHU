@@ -26,10 +26,6 @@ class FakeChatRepository : ChatRepository {
     if (trimmed.isEmpty()) return
 
     appendMessage(ChatRole.User, trimmed)
-    appendMessage(
-      ChatRole.Assistant,
-      "收到：$trimmed\n当前是前端占位回复，后续会接入大模型规划与 skills 执行链路。",
-    )
   }
 
   override fun appendMessage(

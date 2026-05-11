@@ -95,7 +95,7 @@ class OpenCrayRuntime(
 
   /**
    * Reserved skill invocation entry for UI shortcuts.
-   * Current implementation records the request in chat until real skills are wired.
+   * Current implementation invokes real skills if registered, otherwise records the request in chat.
    */
   fun invokeSkill(
     skillId: String,
@@ -107,7 +107,29 @@ class OpenCrayRuntime(
       } else {
         args.entries.joinToString(prefix = "{", postfix = "}") { (key, value) -> "$key=$value" }
       }
-    chatRepository.appendMessage(ChatRole.System, "Skill placeholder invoked: $skillId $argLabel")
+
+    val action = SystemAction(
+      id = skillId,
+      title = "Manual Invocation: $skillId",
+      summary = "Direct invocation from UI",
+      riskLevel = "unknown",
+      requiresApproval = false,
+      params = args,
+      payload = args,
+      status = "approved"
+    )
+
+    val report = actionExecutor.execute(action, "UI Manual Invocation")
+
+    if (report.semantic == "unsupported_action") {
+      chatRepository.appendMessage(ChatRole.System, "找不到 skill 或未实现: $skillId")
+    } else {
+      val statusText = if (report.success) "成功" else "失败"
+      chatRepository.appendMessage(
+        ChatRole.System,
+        "Skill 调用$statusText: $skillId $argLabel\n详细信息: ${report.message}"
+      )
+    }
   }
 
   fun boot() {
@@ -284,8 +306,9 @@ class OpenCrayRuntime(
       if (!result.success || result.data == null) {
         gatewayRegistered = false
         runtimeRepository.updateConnectionStatus("Gateway planning failed")
-        runtimeRepository.appendEvent("Gateway plan failed: ${result.code} ${result.message}")
-        chatRepository.appendMessage(ChatRole.System, "服务端规划失败，回落到本地规划。")
+        val errorMsg = "${result.code} ${result.message}"
+        runtimeRepository.appendEvent("Gateway plan failed: $errorMsg")
+        chatRepository.appendMessage(ChatRole.System, "服务端规划失败，回落到本地规划。\n\n[排错信息]\n原因：$errorMsg")
         planGoalLocally(goal)
         return@thread
       }
@@ -704,6 +727,13 @@ class OpenCrayRuntime(
     if (submitGatewayResult && !action.requestId.isNullOrBlank() && !needsConflictResolution) {
       submitGatewayResultAsync(taskId = task.id, action = action, report = report)
     }
+
+    // append to chat
+    val statusText = if (report.success) "成功" else "失败"
+    chatRepository.appendMessage(
+      ChatRole.System,
+      "动作 '${action.title}' 执行$statusText：\n${report.message}"
+    )
   }
 
   /**

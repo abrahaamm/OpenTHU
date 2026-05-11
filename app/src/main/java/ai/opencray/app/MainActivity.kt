@@ -16,7 +16,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -27,8 +26,8 @@ import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
-import ai.opencray.app.system.AppLaunchController
-import ai.opencray.app.system.CommonAppsRegistry
+//import ai.opencray.app.system.AppLaunchController
+//import ai.opencray.app.system.CommonAppsRegistry
 
 class MainActivity : AppCompatActivity() {
   companion object {
@@ -51,7 +50,6 @@ class MainActivity : AppCompatActivity() {
   private lateinit var eventsView: TextView
   private lateinit var hostInput: EditText
   private lateinit var portInput: EditText
-  private lateinit var goalInput: EditText
   private lateinit var tlsToggle: CheckBox
   private lateinit var contextPanel: LinearLayout
   private lateinit var actionsPanel: LinearLayout
@@ -80,7 +78,6 @@ class MainActivity : AppCompatActivity() {
   private lateinit var connectButton: Button
   private lateinit var saveSettingsButton: Button
   private lateinit var testSettingsButton: Button
-  private lateinit var planGoalButton: Button
   private lateinit var runAgentButton: Button
   private lateinit var actionPrimaryButton: Button
   private lateinit var actionSecondaryButton: Button
@@ -147,7 +144,6 @@ class MainActivity : AppCompatActivity() {
     eventsView = findViewById(R.id.events_text)
     hostInput = findViewById(R.id.host_input)
     portInput = findViewById(R.id.port_input)
-    goalInput = findViewById(R.id.goal_input)
     tlsToggle = findViewById(R.id.tls_toggle)
     contextPanel = findViewById(R.id.context_panel)
     actionsPanel = findViewById(R.id.actions_panel)
@@ -176,7 +172,6 @@ class MainActivity : AppCompatActivity() {
     connectButton = findViewById(R.id.connect_button)
     saveSettingsButton = findViewById(R.id.save_settings_button)
     testSettingsButton = findViewById(R.id.test_settings_button)
-    planGoalButton = findViewById(R.id.plan_goal_button)
     runAgentButton = findViewById(R.id.run_agent_button)
     actionPrimaryButton = findViewById(R.id.action_primary_button)
     actionSecondaryButton = findViewById(R.id.action_secondary_button)
@@ -306,9 +301,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     bindSkillPlaceholder(skillCard1, "placeholder_study_assistant")
-    bindSkillPlaceholder(skillCard2, "placeholder_schedule_planner")
-    bindSkillPlaceholder(skillCard3, "placeholder_cross_app_executor")
-    bindSkillPlaceholder(skillCard4, "placeholder_information_digest")
+    bindSkillPlaceholder(skillCard2, "get_campus_activities")
+    bindSkillPlaceholder(skillCard3, "create_calendar_event")
+    bindSkillPlaceholder(skillCard4, "read_notifications")
 
     val preferencePlaceholderListener = View.OnClickListener {
       Toast.makeText(this, getString(R.string.preference_waiting), Toast.LENGTH_SHORT).show()
@@ -339,12 +334,6 @@ class MainActivity : AppCompatActivity() {
       val warnings = buildSettingsWarnings()
       val message = if (warnings.isEmpty()) getString(R.string.settings_health_ok) else "${getString(R.string.settings_health_warn)}: ${warnings.joinToString("；")}"
       Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-    }
-
-    planGoalButton.setOnClickListener {
-      viewModel.updateGoalDraft(goalInput.text.toString())
-      viewModel.submitGoal()
-      render()
     }
 
     runAgentButton.setOnClickListener {
@@ -412,7 +401,6 @@ class MainActivity : AppCompatActivity() {
 
     if (hostInput.text.toString() != state.host) hostInput.setText(state.host)
     if (portInput.text.toString() != state.port) portInput.setText(state.port)
-    if (goalInput.text.toString() != state.goalDraft) goalInput.setText(state.goalDraft)
     tlsToggle.isChecked = state.tlsEnabled
 
     onboardingView.text =
@@ -528,7 +516,7 @@ class MainActivity : AppCompatActivity() {
       state.systemActions.joinToString(separator = "\n\n") { action ->
         val approval = if (action.requiresApproval) "Approval required" else "Auto/instant"
         val result = action.lastResult ?: "Not executed yet"
-        "${action.title}\n${action.summary}\nRisk: ${action.riskLevel} · $approval · Status: ${action.status}\nConfidence: ${action.confidence}%\nReason: ${action.explain}\nLast result: $result\n操作：加入日历 / 稍后提醒 / 忽略 / 修改后接受 / 回滚"
+        "${action.title}\n${action.summary}\nRisk: ${action.riskLevel} · $approval · Status: ${action.status}\nConfidence: ${action.confidence}%\nReason: ${action.explain}\nLast result: $result"
       }
 
     safetyFeedView.text =
@@ -618,7 +606,9 @@ class MainActivity : AppCompatActivity() {
   ) {
     button.setOnClickListener {
       viewModel.invokeSkill(skillId)
-      Toast.makeText(this, getString(R.string.skills_waiting_to_join), Toast.LENGTH_SHORT).show()
+      if (skillId.startsWith("placeholder_")) {
+        Toast.makeText(this, getString(R.string.skills_waiting_to_join), Toast.LENGTH_SHORT).show()
+      }
       render()
     }
   }
@@ -770,7 +760,6 @@ class MainActivity : AppCompatActivity() {
   // The original feature/UI used commonAppsRegistry, let's ensure it can compile or comment it out if undefined
   // For now I will leave it
   // private fun refreshCommonApps() { ... }
-  }
 
   override fun onRequestPermissionsResult(
     requestCode: Int,

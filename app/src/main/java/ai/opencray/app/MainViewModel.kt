@@ -65,7 +65,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val snapshot = runtime.snapshot()
     return MainUiState(
       currentDestination = selectedDestination,
-      goalDraft = goalDraft,
       host = hostText,
       port = portText,
       tlsEnabled = tlsEnabled,
@@ -104,9 +103,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun sendChatMessage(text: String) {
     val normalized = text.trim()
     if (normalized.isEmpty()) return
-    runtime.sendChatMessage(normalized)
+    runtime.planGoal(normalized)
     upsertCurrentConversation(runtime.chatMessages())
-    selectedDestination = AppDestination.Chat
+    selectedDestination = AppDestination.Planning
   }
 
   /**
@@ -120,10 +119,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.invokeSkill(skillId = skillId, args = args)
     upsertCurrentConversation(runtime.chatMessages())
     selectedDestination = AppDestination.Chat
-  }
-
-  fun updateGoalDraft(value: String) {
-    goalDraft = value
   }
 
   fun updateHost(value: String) {
@@ -150,15 +145,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     enabled: Boolean,
   ) {
     runtime.setCapabilityEnabled(capabilityId = capabilityId, enabled = enabled)
-  }
-
-  fun submitGoal() {
-    val text = goalDraft.trim()
-    if (text.isEmpty()) return
-    goalDraft = ""
-    runtime.planGoal(text)
-    upsertCurrentConversation(runtime.chatMessages())
-    selectedDestination = AppDestination.Planning
   }
 
   fun runAgentPlan() {
@@ -194,14 +180,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.resolveConflict(strategy)
   }
 
-  fun noteAppLaunch(
-    appLabel: String,
-    succeeded: Boolean,
-  ) {
-    runtime.noteAppLaunch(appLabel = appLabel, succeeded = succeeded)
-    selectedDestination = AppDestination.Settings
-  }
-
   fun createConversation() {
     val now = System.currentTimeMillis()
     val id = "conv_${UUID.randomUUID().toString().take(8)}"
@@ -232,7 +210,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
 data class MainUiState(
   val currentDestination: AppDestination,
-  val goalDraft: String,
   val host: String,
   val port: String,
   val tlsEnabled: Boolean,

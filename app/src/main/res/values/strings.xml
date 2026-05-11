@@ -98,4 +98,3 @@
     <string name="setting_adb_serial_hint">OPENTHU_ADB_SERIAL</string>
     <string name="setting_timezone_hint">OPENTHU_CALENDAR_TIMEZONE</string>
 </resources>
-</resources>

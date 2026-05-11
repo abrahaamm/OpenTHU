@@ -549,6 +549,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             store=store,
             task_doc=task_doc,
             session=plan_response.get("data", {}).get("session", {}) if isinstance(plan_response.get("data"), dict) else {},
+        )
         logger.info(
             "[api] plan complete task_id=%s task_status=%s approved=%d blocked=%d",
             task_doc["task_id"],

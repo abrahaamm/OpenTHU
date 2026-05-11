@@ -17,3 +17,5 @@ __pycache__/
 log/
 agent/langgraph/agent/langgraph/
 .venv/
+openthu_agent_core_store.json
+openthu_agent_memory.json
