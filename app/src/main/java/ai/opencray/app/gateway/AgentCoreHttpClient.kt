@@ -56,6 +56,13 @@ data class SubmitResultData(
   val receivedResultCount: Int,
 )
 
+data class SkillDecisionData(
+  val taskId: String,
+  val taskStatus: String,
+  val requestId: String,
+  val decision: String,
+)
+
 data class ChatTurnData(
   val shouldPlan: Boolean,
   val reply: String,
@@ -274,6 +281,43 @@ class AgentCoreHttpClient {
     }.also {
       connection.disconnect()
     }
+  }
+
+  fun submitDecision(
+    config: GatewayConfig,
+    taskId: String,
+    deviceId: String,
+    requestId: String,
+    decision: String,
+    userId: String,
+  ): GatewayResult<SkillDecisionData> {
+    val payload =
+      JSONObject()
+        .put("device_id", deviceId)
+        .put("request_id", requestId)
+        .put("decision", decision)
+        .put("user_id", userId)
+
+    val result = requestJson(config, "POST", "/api/v1/agent/tasks/$taskId/decision", payload)
+    if (!result.success || result.data == null) {
+      return GatewayResult(success = false, code = result.code, message = result.message, data = null)
+    }
+
+    val rootData = result.data.optJSONObject("data")
+      ?: return GatewayResult(success = false, code = "MALFORMED_RESPONSE", message = "Missing decision data", data = null)
+
+    return GatewayResult(
+      success = true,
+      code = result.code,
+      message = result.message,
+      data =
+        SkillDecisionData(
+          taskId = rootData.optString("task_id", taskId),
+          taskStatus = rootData.optString("task_status", ""),
+          requestId = rootData.optString("request_id", requestId),
+          decision = rootData.optString("decision", decision),
+        ),
+    )
   }
 
   fun pullNext(

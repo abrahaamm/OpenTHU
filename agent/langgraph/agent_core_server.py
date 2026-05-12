@@ -92,6 +92,14 @@ class SkillResultSubmitRequest(BaseModel):
     fetched_at: str | None = None
 
 
+class SkillDecisionRequest(BaseModel):
+    device_id: str
+    request_id: str
+    decision: str
+    user_id: str = "demo_user"
+    reason: str = ""
+
+
 class AgentCoreStore:
     def __init__(self, store_file: Path) -> None:
         self.store_file = store_file
@@ -261,8 +269,18 @@ class AgentCoreStore:
         expected = self._approved_skill_count(task_doc)
         completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
         in_flight = set(str(item) for item in task_doc.get("in_flight_request_ids", []))
+        pending_blocked = [
+            item
+            for item in task_doc.get("blocked_skills", [])
+            if isinstance(item, dict) and str(item.get("status", "pending_approval")) == "pending_approval"
+        ]
         if expected == 0:
-            task_doc["status"] = "planned"
+            if pending_blocked:
+                task_doc["status"] = "approval_required"
+            elif task_doc.get("rejected_skills"):
+                task_doc["status"] = "cancelled"
+            else:
+                task_doc["status"] = "planned"
         elif len(completed) >= expected:
             task_doc["status"] = "completed" if all(item.get("code") == "OK" for item in self._all_results(task_doc)) else "failed"
         elif in_flight:
@@ -453,6 +471,111 @@ class AgentCoreStore:
                 task_doc["status"],
                 len(task_doc["completed_request_ids"]),
                 len([item for item in task_doc.get("approved_skills", []) if isinstance(item, dict)]),
+            )
+            return dict(task_doc)
+
+    def apply_skill_decision(
+        self,
+        *,
+        task_id: str,
+        payload: SkillDecisionRequest,
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+            if str(task_doc.get("device_id", "")) != payload.device_id:
+                raise PermissionError("task_device_mismatch")
+
+            normalized_decision = payload.decision.strip().lower()
+            if normalized_decision in {"approve", "approved", "allow", "allowed"}:
+                normalized_decision = "approved"
+            elif normalized_decision in {"reject", "rejected", "deny", "denied"}:
+                normalized_decision = "rejected"
+            else:
+                raise ValueError("unsupported_decision")
+
+            blocked = task_doc.get("blocked_skills", [])
+            if not isinstance(blocked, list):
+                blocked = []
+            selected: dict[str, Any] | None = None
+            remaining_blocked: list[dict[str, Any]] = []
+            for item in blocked:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("request_id", "")) == payload.request_id and selected is None:
+                    selected = dict(item)
+                else:
+                    remaining_blocked.append(item)
+            if selected is None:
+                approved_ids = {
+                    str(item.get("request_id", ""))
+                    for item in task_doc.get("approved_skills", [])
+                    if isinstance(item, dict)
+                }
+                rejected_ids = {
+                    str(item.get("request_id", ""))
+                    for item in task_doc.get("rejected_skills", [])
+                    if isinstance(item, dict)
+                }
+                if payload.request_id in approved_ids or payload.request_id in rejected_ids:
+                    return dict(task_doc)
+                raise ValueError("request_id_not_pending_approval")
+
+            now = utc_now()
+            approval_record = {
+                "approval_id": f"apv_{payload.request_id}",
+                "task_id": task_id,
+                "request_id": payload.request_id,
+                "skill_name": selected.get("skill_name", ""),
+                "risk_level": selected.get("risk_level", ""),
+                "decision": normalized_decision,
+                "reason": payload.reason,
+                "decided_by": payload.user_id,
+                "decided_at": now,
+            }
+
+            task_doc["blocked_skills"] = remaining_blocked
+            if normalized_decision == "approved":
+                selected["status"] = "approved"
+                selected["approved_at"] = now
+                approved = task_doc.get("approved_skills", [])
+                if not isinstance(approved, list):
+                    approved = []
+                if payload.request_id not in {
+                    str(item.get("request_id", ""))
+                    for item in approved
+                    if isinstance(item, dict)
+                }:
+                    approved.append(selected)
+                task_doc["approved_skills"] = approved
+            else:
+                selected["status"] = "rejected"
+                selected["rejected_at"] = now
+                rejected = task_doc.get("rejected_skills", [])
+                if not isinstance(rejected, list):
+                    rejected = []
+                rejected.append(selected)
+                task_doc["rejected_skills"] = rejected
+
+            for item in task_doc.get("skill_plan", []):
+                if isinstance(item, dict) and str(item.get("request_id", "")) == payload.request_id:
+                    item["status"] = normalized_decision
+
+            approval_records = task_doc.get("approval_records", [])
+            if not isinstance(approval_records, list):
+                approval_records = []
+            approval_records.append(approval_record)
+            task_doc["approval_records"] = approval_records
+            task_doc["updated_at"] = now
+            self._refresh_task_status_locked(task_doc)
+            self._save_locked()
+            logger.info(
+                "[decision] task_id=%s request_id=%s decision=%s status=%s",
+                task_id,
+                payload.request_id,
+                normalized_decision,
+                task_doc.get("status", ""),
             )
             return dict(task_doc)
 
@@ -1023,6 +1146,44 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                 "task_id": task_doc.get("task_id", ""),
                 "task_status": task_doc.get("status", ""),
                 "received_result_count": len(task_doc.get("device_results", [])),
+            },
+        }
+
+    @app.post("/api/v1/agent/tasks/{task_id}/decision")
+    def submit_decision(task_id: str, payload: SkillDecisionRequest) -> dict[str, Any]:
+        logger.info(
+            "[api] POST /agent/tasks/%s/decision device_id=%s request_id=%s decision=%s",
+            task_id,
+            payload.device_id,
+            payload.request_id,
+            payload.decision,
+        )
+        try:
+            task_doc = store.apply_skill_decision(task_id=task_id, payload=payload)
+        except KeyError:
+            logger.warning("[api] submit_decision failed: task_id=%s not found", task_id)
+            raise HTTPException(status_code=404, detail="task_not_found")
+        except PermissionError:
+            logger.warning(
+                "[api] submit_decision rejected: task_id=%s device_id=%s mismatch",
+                task_id,
+                payload.device_id,
+            )
+            raise HTTPException(status_code=403, detail="task_device_mismatch")
+        except ValueError as exc:
+            logger.warning("[api] submit_decision invalid: task_id=%s error=%s", task_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return {
+            "code": "OK",
+            "message": "Decision accepted",
+            "data": {
+                "task_id": task_doc.get("task_id", ""),
+                "task_status": task_doc.get("status", ""),
+                "request_id": payload.request_id,
+                "decision": "approved" if payload.decision.strip().lower() in {"approve", "approved", "allow", "allowed"} else "rejected",
+                "approved_skill_count": len(task_doc.get("approved_skills", [])),
+                "blocked_skill_count": len(task_doc.get("blocked_skills", [])),
             },
         }
 

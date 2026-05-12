@@ -269,6 +269,53 @@ class OpenCrayRuntime(
     runActions()
   }
 
+  fun submitAgentDecision(
+    taskId: String,
+    requestId: String,
+    eventId: String,
+    decision: String,
+  ) {
+    if (taskId.isBlank() || requestId.isBlank() || eventId.isBlank()) {
+      chatRepository.appendMessage(ChatRole.Assistant, "这个确认项缺少执行上下文，我没法继续处理。")
+      return
+    }
+    val normalizedDecision =
+      when (decision.lowercase(Locale.getDefault())) {
+        "approve", "approved", "allow", "allowed" -> "approve"
+        "reject", "rejected", "deny", "denied" -> "reject"
+        else -> decision
+      }
+    chatRepository.updateEventStatus(eventId, "submitting")
+    thread(name = "opencray-gateway-decision", isDaemon = true) {
+      val result =
+        gatewayClient.submitDecision(
+          config = currentGatewayConfig(),
+          taskId = taskId,
+          deviceId = deviceId,
+          requestId = requestId,
+          decision = normalizedDecision,
+          userId = "android_user",
+        )
+      if (!result.success) {
+        chatRepository.updateEventStatus(
+          eventId,
+          "failed",
+          "确认没有提交成功：${result.code} ${result.message}",
+        )
+        return@thread
+      }
+
+      val acceptedStatus = if (normalizedDecision == "approve") "approved" else "rejected"
+      chatRepository.updateEventStatus(eventId, acceptedStatus)
+      if (normalizedDecision == "approve") {
+        streamAssistant("已确认，我继续执行这一步。")
+        runGatewayDispatchLoop()
+      } else {
+        streamAssistant("好的，我不会执行这一步。")
+      }
+    }
+  }
+
   fun planGoal(goal: String): Boolean {
     val normalizedGoal = goal.trim()
     if (normalizedGoal.isEmpty()) return false
@@ -315,7 +362,7 @@ class OpenCrayRuntime(
           userId = "android_user",
           deviceId = deviceId,
           message = message,
-          approveSensitive = true,
+          approveSensitive = false,
           session = buildGatewaySession(),
           history = buildGatewayChatHistory(),
         ) { event ->
@@ -1334,6 +1381,8 @@ private fun AgentStreamEvent.toChatEvent(): AgentEvent =
       },
     title = title,
     content = content,
+    taskId = taskId,
+    requestId = requestId,
     skillName = skillName,
     status = status,
     options =

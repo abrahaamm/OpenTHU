@@ -24,5 +24,11 @@ interface ChatRepository {
     event: AgentEvent,
   )
 
+  fun updateEventStatus(
+    eventId: String,
+    status: String,
+    content: String? = null,
+  )
+
   fun clearMessages()
 }

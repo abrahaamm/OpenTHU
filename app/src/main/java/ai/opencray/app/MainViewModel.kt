@@ -175,6 +175,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = AppDestination.Planning
   }
 
+  fun submitAgentDecision(
+    taskId: String,
+    requestId: String,
+    eventId: String,
+    decision: String,
+  ) {
+    runtime.submitAgentDecision(
+      taskId = taskId,
+      requestId = requestId,
+      eventId = eventId,
+      decision = decision,
+    )
+    selectedDestination = AppDestination.Chat
+  }
+
   fun setCalendarPermissionDelegate(delegate: CalendarPermissionDelegate?) {
     runtime.setCalendarPermissionDelegate(delegate)
   }

@@ -18,6 +18,8 @@ data class AgentEvent(
   val type: AgentEventType,
   val title: String = "",
   val content: String = "",
+  val taskId: String = "",
+  val requestId: String = "",
   val skillName: String = "",
   val status: String = "",
   val options: List<AgentEventOption> = emptyList(),

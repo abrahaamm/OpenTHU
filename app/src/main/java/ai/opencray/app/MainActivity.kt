@@ -27,6 +27,7 @@ import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.AgentEvent
+import ai.opencray.app.feature.chat.AgentEventOption
 import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
@@ -786,7 +787,14 @@ class MainActivity : AppCompatActivity() {
       when (event.type) {
         AgentEventType.ToolCall -> if (event.status == "queued") "等待执行" else "正在调用"
         AgentEventType.ToolResult -> "执行完成"
-        AgentEventType.ConfirmationRequired -> "需要确认"
+        AgentEventType.ConfirmationRequired ->
+          when (event.status) {
+            "submitting" -> "正在提交"
+            "approved" -> "已允许"
+            "rejected" -> "已拒绝"
+            "failed" -> "提交失败"
+            else -> "需要确认"
+          }
         AgentEventType.PermissionRequired -> "需要权限"
         AgentEventType.Error -> "执行异常"
         AgentEventType.Unknown -> "状态更新"
@@ -804,7 +812,7 @@ class MainActivity : AppCompatActivity() {
         if (event.content.isNotBlank()) {
           append(event.content)
         }
-        if (event.options.isNotEmpty()) {
+        if (event.options.isNotEmpty() && event.type != AgentEventType.ConfirmationRequired) {
           if (isNotBlank()) append("\n")
           append("选项：")
           append(event.options.joinToString(" / ") { option -> option.label.ifBlank { option.value } })
@@ -838,6 +846,74 @@ class MainActivity : AppCompatActivity() {
           setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
         },
       )
+      if (
+        event.type == AgentEventType.ConfirmationRequired &&
+        (event.status.isBlank() || event.status == "pending") &&
+        event.taskId.isNotBlank() &&
+        event.requestId.isNotBlank()
+      ) {
+        addView(createDecisionButtonRow(event))
+      }
+    }
+  }
+
+  private fun createDecisionButtonRow(event: AgentEvent): View {
+    val options =
+      event.options.ifEmpty {
+        listOf(
+          AgentEventOption("允许", "approve"),
+          AgentEventOption("拒绝", "reject"),
+        )
+      }
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.END
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.MATCH_PARENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          topMargin = dp(8)
+        }
+
+      options.forEach { option ->
+        val value = option.value.ifBlank { option.label }
+        val normalizedValue = value.lowercase()
+        val button =
+          Button(this@MainActivity).apply {
+            text = option.label.ifBlank { value }
+            textSize = 12f
+            setAllCaps(false)
+            minHeight = dp(32)
+            minimumHeight = dp(32)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundResource(
+              if (normalizedValue == "approve" || normalizedValue == "approved") {
+                R.drawable.button_primary_selector
+              } else {
+                R.drawable.button_secondary_selector
+              },
+            )
+            setOnClickListener {
+              viewModel.submitAgentDecision(
+                taskId = event.taskId,
+                requestId = event.requestId,
+                eventId = event.id,
+                decision = value,
+              )
+              render()
+            }
+          }
+        addView(
+          button,
+          LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+          ).apply {
+            leftMargin = dp(8)
+          },
+        )
+      }
     }
   }
 

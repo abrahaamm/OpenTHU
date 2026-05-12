@@ -72,6 +72,33 @@ class FakeChatRepository : ChatRepository {
       }
   }
 
+  override fun updateEventStatus(
+    eventId: String,
+    status: String,
+    content: String?,
+  ) {
+    if (eventId.isBlank()) return
+    messages =
+      messages.map { message ->
+        val updatedEvents =
+          message.events.map { event ->
+            if (event.id == eventId) {
+              event.copy(
+                status = status,
+                content = content ?: event.content,
+              )
+            } else {
+              event
+            }
+          }
+        if (updatedEvents == message.events) {
+          message
+        } else {
+          message.copy(events = updatedEvents)
+        }
+      }
+  }
+
   override fun clearMessages() {
     messages =
       listOf(
