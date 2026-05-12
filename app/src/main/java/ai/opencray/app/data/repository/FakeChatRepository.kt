@@ -2,6 +2,7 @@ package ai.opencray.app.data.repository
 
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
+import ai.opencray.app.feature.chat.AgentEvent
 import java.util.UUID
 
 class FakeChatRepository : ChatRepository {
@@ -50,6 +51,21 @@ class FakeChatRepository : ChatRepository {
       messages.map { message ->
         if (message.id == messageId) {
           message.copy(text = text)
+        } else {
+          message
+        }
+      }
+  }
+
+  override fun appendEvent(
+    messageId: String,
+    event: AgentEvent,
+  ) {
+    if (messageId.isBlank()) return
+    messages =
+      messages.map { message ->
+        if (message.id == messageId) {
+          message.copy(events = message.events + event)
         } else {
           message
         }

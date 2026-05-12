@@ -10,13 +10,16 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
 try:
+    from .agent_events import agent_event, encode_ndjson
     from .openthu_agent import OpenTHULangGraphAgent
     from .skill_core import MissingSkillHandler, SkillInvocation
 except ImportError:
+    from agent_events import agent_event, encode_ndjson
     from openthu_agent import OpenTHULangGraphAgent
     from skill_core import MissingSkillHandler, SkillInvocation
 
@@ -63,6 +66,16 @@ class ChatTurnRequest(BaseModel):
     device_id: str = ""
     user_id: str = "demo_user"
     message: str
+    session: dict[str, Any] = Field(default_factory=dict)
+    history: list[ChatMessageItem] = Field(default_factory=list)
+
+
+class AgentRunStreamRequest(BaseModel):
+    device_id: str
+    user_id: str = "demo_user"
+    message: str
+    approve_sensitive: bool = True
+    semester_id: str = ""
     session: dict[str, Any] = Field(default_factory=dict)
     history: list[ChatMessageItem] = Field(default_factory=list)
 
@@ -639,6 +652,27 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any]) -> str:
     return ""
 
 
+def _final_content_from_task(task_doc: dict[str, Any]) -> str:
+    approved = task_doc.get("approved_skills", [])
+    blocked = task_doc.get("blocked_skills", [])
+    approved_count = len(approved) if isinstance(approved, list) else 0
+    blocked_count = len(blocked) if isinstance(blocked, list) else 0
+    for skill in approved if isinstance(approved, list) else []:
+        if not isinstance(skill, dict) or str(skill.get("skill_name", "")) != "show_summary":
+            continue
+        args = skill.get("args", {})
+        if not isinstance(args, dict):
+            continue
+        content = str(args.get("content", "")).strip()
+        if content:
+            return content
+    if blocked_count:
+        return f"我已经整理好计划，其中 {approved_count} 个步骤可以继续处理，{blocked_count} 个步骤需要你确认。"
+    if approved_count:
+        return "我已经完成可在服务端处理的部分，剩余需要手机端执行的动作会继续处理。"
+    return "我没有找到需要执行的步骤。你可以补充一下目标，我再继续。"
+
+
 def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
     app = FastAPI(title="OpenTHU Agent Core Server", version="0.1.0")
 
@@ -749,6 +783,172 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             response.get("data", {}).get("source", ""),
         )
         return response
+
+    @app.post("/api/v1/agent/runs/stream")
+    def stream_agent_run(payload: AgentRunStreamRequest) -> StreamingResponse:
+        logger.info(
+            "[api] POST /agent/runs/stream device_id=%s user_id=%s message=%r",
+            payload.device_id,
+            payload.user_id,
+            payload.message[:80],
+        )
+        device = store.get_device(payload.device_id)
+        if device is None:
+            logger.warning("[api] stream rejected: device_id=%s not registered", payload.device_id)
+            raise HTTPException(status_code=404, detail="device_not_registered")
+
+        def event_stream():
+            try:
+                yield encode_ndjson(agent_event("assistant_delta", content="我先理解你的意思。"))
+                chat_response = agent.chat_turn(
+                    user_input=payload.message,
+                    user_id=payload.user_id,
+                    session=payload.session,
+                    history=[item.dict() for item in payload.history],
+                )
+                chat_data = chat_response.get("data", {}) if isinstance(chat_response.get("data"), dict) else {}
+                reply = str(chat_data.get("reply", "")).strip()
+                should_plan = bool(chat_data.get("should_plan", False))
+                if reply:
+                    yield encode_ndjson(agent_event("assistant_delta", content=reply))
+                if not should_plan:
+                    yield encode_ndjson(
+                        agent_event(
+                            "assistant_final",
+                            content=reply or "我在。你可以继续说。",
+                            status="completed",
+                            data={"mode": "chat", "source": chat_data.get("source", "")},
+                        )
+                    )
+                    return
+
+                yield encode_ndjson(agent_event("assistant_delta", content="我会把需要执行的步骤拆出来。"))
+                plan_response = agent.run_plan_only(
+                    user_input=payload.message,
+                    user_id=payload.user_id,
+                    approve_sensitive=payload.approve_sensitive,
+                    session=payload.session,
+                    semester_id=payload.semester_id,
+                )
+                task_doc = store.create_planned_task(
+                    plan_response=plan_response,
+                    device_id=payload.device_id,
+                    user_id=payload.user_id,
+                    goal=payload.message,
+                )
+                task_doc = execute_server_side_data_skills(
+                    agent=agent,
+                    store=store,
+                    task_doc=task_doc,
+                    session=plan_response.get("data", {}).get("session", {})
+                    if isinstance(plan_response.get("data"), dict)
+                    else {},
+                )
+                task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
+                task_id = str(task_doc.get("task_id", ""))
+                server_results = task_doc.get("server_results", [])
+                completed_request_ids = {
+                    str(item.get("request_id", ""))
+                    for item in server_results
+                    if isinstance(item, dict)
+                }
+                for result in server_results if isinstance(server_results, list) else []:
+                    if not isinstance(result, dict):
+                        continue
+                    skill_name = str(result.get("skill_name", ""))
+                    request_id = str(result.get("request_id", ""))
+                    yield encode_ndjson(
+                        agent_event(
+                            "tool_call",
+                            title=f"调用 {skill_name}",
+                            task_id=task_id,
+                            request_id=request_id,
+                            skill_name=skill_name,
+                            status="running",
+                        )
+                    )
+                    yield encode_ndjson(
+                        agent_event(
+                            "tool_result",
+                            title=f"{skill_name} 已完成",
+                            content=str(result.get("message", "")).strip(),
+                            task_id=task_id,
+                            request_id=request_id,
+                            skill_name=skill_name,
+                            status="ok" if result.get("code") == "OK" else "failed",
+                            data={"message": result.get("message", ""), "source": result.get("source", "")},
+                        )
+                    )
+
+                approved_skills = task_doc.get("approved_skills", [])
+                for skill in approved_skills if isinstance(approved_skills, list) else []:
+                    if not isinstance(skill, dict):
+                        continue
+                    request_id = str(skill.get("request_id", ""))
+                    if request_id in completed_request_ids:
+                        continue
+                    skill_name = str(skill.get("skill_name", ""))
+                    yield encode_ndjson(
+                        agent_event(
+                            "tool_call",
+                            title=f"等待端侧执行 {skill_name}",
+                            content=str(skill.get("description", "")).strip(),
+                            task_id=task_id,
+                            request_id=request_id,
+                            skill_name=skill_name,
+                            status="queued",
+                        )
+                    )
+
+                blocked_skills = task_doc.get("blocked_skills", [])
+                for skill in blocked_skills if isinstance(blocked_skills, list) else []:
+                    if not isinstance(skill, dict):
+                        continue
+                    skill_name = str(skill.get("skill_name", ""))
+                    yield encode_ndjson(
+                        agent_event(
+                            "confirmation_required",
+                            title=f"是否允许执行 {skill_name}？",
+                            content=str(skill.get("description", "")).strip(),
+                            task_id=task_id,
+                            request_id=str(skill.get("request_id", "")),
+                            skill_name=skill_name,
+                            status="pending",
+                            options=[
+                                {"label": "允许", "value": "approve"},
+                                {"label": "拒绝", "value": "reject"},
+                            ],
+                            data={"risk_level": skill.get("risk_level", ""), "description": skill.get("description", "")},
+                        )
+                    )
+
+                final_content = _final_content_from_task(task_doc)
+                yield encode_ndjson(
+                    agent_event(
+                        "assistant_final",
+                        content=final_content,
+                        task_id=task_id,
+                        status=str(task_doc.get("status", "planned")),
+                        data={
+                            "mode": "task",
+                            "approved_count": len(approved_skills) if isinstance(approved_skills, list) else 0,
+                            "blocked_count": len(blocked_skills) if isinstance(blocked_skills, list) else 0,
+                        },
+                    )
+                )
+            except Exception as exc:
+                logger.exception("[api] stream failed")
+                yield encode_ndjson(
+                    agent_event(
+                        "error",
+                        title="Agent 执行失败",
+                        content=str(exc),
+                        status="failed",
+                    )
+                )
+
+        return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
     @app.get("/api/v1/agent/tasks/next")
     def get_next_task(device_id: str = Query(..., min_length=1)) -> dict[str, Any]:

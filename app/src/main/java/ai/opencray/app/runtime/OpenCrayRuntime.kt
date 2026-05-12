@@ -18,9 +18,13 @@ import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.execution.ActionExecutor
 import ai.opencray.app.execution.ActionExecutionReport
+import ai.opencray.app.feature.chat.AgentEvent
+import ai.opencray.app.feature.chat.AgentEventOption
+import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
 import ai.opencray.app.gateway.AgentCoreHttpClient
+import ai.opencray.app.gateway.AgentStreamEvent
 import ai.opencray.app.gateway.DispatchSkillInvocation
 import ai.opencray.app.gateway.GatewayConfig
 import ai.opencray.app.gateway.PlanTaskData
@@ -272,7 +276,7 @@ class OpenCrayRuntime(
     chatRepository.sendMessage(normalizedGoal)
 
     if (gatewayRegistered) {
-      handleChatTurnViaGateway(normalizedGoal)
+      handleStreamingRunViaGateway(normalizedGoal)
       return false
     }
 
@@ -284,6 +288,87 @@ class OpenCrayRuntime(
     streamAssistant("好的，我来处理。")
     planGoalLocally(normalizedGoal)
     return true
+  }
+
+  private fun handleStreamingRunViaGateway(message: String) {
+    thread(name = "opencray-gateway-stream", isDaemon = true) {
+      var assistantMessageId = ""
+      val assistantText = StringBuilder()
+
+      fun ensureAssistantMessage(): String {
+        if (assistantMessageId.isBlank()) {
+          assistantMessageId = chatRepository.appendMessage(ChatRole.Assistant, "…")
+        }
+        return assistantMessageId
+      }
+
+      fun updateAssistantText(nextText: String) {
+        if (nextText.isBlank()) return
+        val id = ensureAssistantMessage()
+        assistantText.append(nextText)
+        chatRepository.updateMessage(id, assistantText.toString())
+      }
+
+      val result =
+        gatewayClient.streamAgentRun(
+          config = currentGatewayConfig(),
+          userId = "android_user",
+          deviceId = deviceId,
+          message = message,
+          approveSensitive = true,
+          session = buildGatewaySession(),
+          history = buildGatewayChatHistory(),
+        ) { event ->
+          when (event.type) {
+            "assistant_delta" -> updateAssistantText(event.content)
+            "assistant_final" -> {
+              val id = ensureAssistantMessage()
+              if (event.content.isNotBlank()) {
+                assistantText.clear()
+                assistantText.append(event.content)
+                chatRepository.updateMessage(id, event.content)
+              }
+              chatRepository.appendEvent(id, event.toChatEvent())
+            }
+            "tool_call",
+            "tool_result",
+            "confirmation_required",
+            "permission_required",
+            "error",
+            -> {
+              val id = ensureAssistantMessage()
+              chatRepository.appendEvent(id, event.toChatEvent())
+            }
+          }
+        }
+
+      if (!result.success) {
+        runtimeRepository.appendEvent("Gateway stream failed: ${result.code} ${result.message}")
+        if (assistantMessageId.isBlank()) {
+          if (shouldPlanLocally(message)) {
+            streamAssistant("我先按本地能力处理。")
+            planGoalLocally(message)
+            runActionsLocally(actionIds = null, submitGatewayResult = false)
+          } else {
+            streamAssistant(replyLocalChat(message))
+          }
+        } else {
+          chatRepository.appendEvent(
+            assistantMessageId,
+            AgentEvent(
+              id = UUID.randomUUID().toString(),
+              type = AgentEventType.Error,
+              title = "事件流中断",
+              content = "${result.code} ${result.message}",
+              status = "failed",
+            ),
+          )
+        }
+        return@thread
+      }
+
+      runGatewayDispatchLoop()
+    }
   }
 
   private fun handleChatTurnViaGateway(message: String) {
@@ -1231,4 +1316,31 @@ private fun SystemAction.toSafetyRecord(status: String): SafetyRecord =
     detail = "Risk=$riskLevel, requiresApproval=$requiresApproval, decision=$status",
     status = status,
     actionId = id,
+  )
+
+private fun AgentStreamEvent.toChatEvent(): AgentEvent =
+  AgentEvent(
+    id = eventId.ifBlank { UUID.randomUUID().toString() },
+    type =
+      when (type) {
+        "assistant_delta" -> AgentEventType.AssistantDelta
+        "assistant_final" -> AgentEventType.AssistantFinal
+        "tool_call" -> AgentEventType.ToolCall
+        "tool_result" -> AgentEventType.ToolResult
+        "confirmation_required" -> AgentEventType.ConfirmationRequired
+        "permission_required" -> AgentEventType.PermissionRequired
+        "error" -> AgentEventType.Error
+        else -> AgentEventType.Unknown
+      },
+    title = title,
+    content = content,
+    skillName = skillName,
+    status = status,
+    options =
+      options.map {
+        AgentEventOption(
+          label = it["label"].orEmpty(),
+          value = it["value"].orEmpty(),
+        )
+      },
   )
