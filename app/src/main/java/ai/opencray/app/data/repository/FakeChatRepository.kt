@@ -10,12 +10,12 @@ class FakeChatRepository : ChatRepository {
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = ChatRole.System,
-        text = "OpenTHU scaffold online. Runtime and features can plug in here.",
+        text = "OpenTHU runtime 已启动，Agent 框架与后续 skills 可以从这里接入。",
       ),
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = ChatRole.Assistant,
-        text = "可以输入校园目标，我会自动规划任务并执行审查。",
+        text = "你可以直接输入目标，我会先记录到对话历史；后续接入大模型和 skills 后，这里会展示真实执行过程。",
       ),
     )
 
@@ -26,26 +26,39 @@ class FakeChatRepository : ChatRepository {
     if (trimmed.isEmpty()) return
 
     appendMessage(ChatRole.User, trimmed)
-    appendMessage(
-      ChatRole.Assistant,
-      "收到目标：$trimmed\n我会先规划动作，再走审查与执行链路。",
-    )
   }
 
   override fun appendMessage(
     role: ChatRole,
     text: String,
-  ) {
+  ): String {
     val trimmed = text.trim()
-    if (trimmed.isEmpty()) return
+    if (trimmed.isEmpty()) return ""
 
+    val messageId = UUID.randomUUID().toString()
     messages =
       messages +
         ChatMessage(
-          id = UUID.randomUUID().toString(),
+          id = messageId,
           role = role,
           text = trimmed,
         )
+    return messageId
+  }
+
+  override fun updateMessage(
+    messageId: String,
+    text: String,
+  ) {
+    if (messageId.isBlank()) return
+    messages =
+      messages.map { message ->
+        if (message.id == messageId) {
+          message.copy(text = text)
+        } else {
+          message
+        }
+      }
   }
 
   override fun clearMessages() {
@@ -54,7 +67,7 @@ class FakeChatRepository : ChatRepository {
         ChatMessage(
           id = UUID.randomUUID().toString(),
           role = ChatRole.System,
-          text = "Chat history cleared. Ready for the next prototype flow.",
+          text = "对话历史已清空，可以开始新的任务。",
         ),
       )
   }

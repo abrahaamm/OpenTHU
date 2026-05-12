@@ -11,6 +11,11 @@ interface ChatRepository {
   fun appendMessage(
     role: ChatRole,
     text: String,
+  ): String
+
+  fun updateMessage(
+    messageId: String,
+    text: String,
   )
 
   fun clearMessages()

@@ -1,15 +1,22 @@
 package ai.opencray.app.execution
 
 import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.Settings
+import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
 import java.time.OffsetDateTime
@@ -51,8 +58,11 @@ class ActionExecutor(
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
+      "create_reminder" -> executeCreateReminder(action, goal)
       "get_campus_activities" -> executeGetCampusActivities()
       "read_notifications" -> executeReadNotifications()
+      "show_summary" -> executeShowSummary(action)
+      "send_notification" -> executeSendNotification(action)
       "open_tsinghua_news" -> openWebPage("https://www.tsinghua.edu.cn")
       "open_url" -> {
         val url =
@@ -107,6 +117,124 @@ class ActionExecutor(
           "source" to "official_entrypoints",
         ),
     )
+
+  private fun executeShowSummary(action: SystemAction): ActionExecutionReport {
+    val title =
+      (action.payload?.get("title") as? String)
+        ?: action.params["title"]
+        ?: "OpenTHU 摘要"
+    val content =
+      (action.payload?.get("content") as? String)
+        ?: action.params["content"]
+        ?: action.summary
+    return ActionExecutionReport(
+      success = true,
+      message = "$title\n$content",
+      recoverable = false,
+      semantic = "summary_shown",
+      metadata = mapOf(
+        "title" to title,
+        "content" to content,
+        "format" to ((action.payload?.get("format") as? String) ?: action.params["format"] ?: "plain"),
+      ),
+    )
+  }
+
+  private fun executeSendNotification(action: SystemAction): ActionExecutionReport {
+    val title =
+      (action.payload?.get("title") as? String)
+        ?: action.params["title"]
+        ?: "OpenTHU 通知"
+    val body =
+      (action.payload?.get("body") as? String)
+        ?: action.params["body"]
+        ?: action.summary
+
+    Handler(Looper.getMainLooper()).post {
+      Toast.makeText(appContext, "$title\n$body", Toast.LENGTH_LONG).show()
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) {
+      return ActionExecutionReport(
+        success = true,
+        message = "Notification text shown in-app because POST_NOTIFICATIONS permission is not granted: $title",
+        recoverable = false,
+        semantic = "notification_shown_in_app",
+        metadata = mapOf("title" to title, "body" to body, "system_notification_posted" to false),
+      )
+    }
+
+    val channelId = "opencray_agent"
+    val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      manager.createNotificationChannel(
+        NotificationChannel(channelId, "OpenTHU Agent", NotificationManager.IMPORTANCE_DEFAULT),
+      )
+    }
+
+    val notification =
+      NotificationCompat.Builder(appContext, channelId)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle(title)
+        .setContentText(body)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        .setAutoCancel(true)
+        .build()
+
+    return runCatching {
+      manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+      ActionExecutionReport(
+        success = true,
+        message = "Notification posted: $title",
+        recoverable = false,
+        semantic = "notification_posted",
+        metadata = mapOf("title" to title, "body" to body, "system_notification_posted" to true),
+      )
+    }.getOrElse { throwable ->
+      ActionExecutionReport(
+        success = false,
+        message = "Notification failed: ${throwable.message ?: "unknown"}",
+        recoverable = true,
+        semantic = "notification_failed",
+        metadata = mapOf("title" to title, "body" to body),
+      )
+    }
+  }
+
+  private fun executeCreateReminder(
+    action: SystemAction,
+    goal: String,
+  ): ActionExecutionReport {
+    val dueTime =
+      (action.payload?.get("due_time") as? String)
+        ?: action.params["due_time"]
+        ?: (action.payload?.get("time") as? String)
+        ?: action.params["time"]
+    if (dueTime.isNullOrBlank()) {
+      return executeSendNotification(
+        action.copy(
+          payload = mapOf(
+            "title" to ((action.payload?.get("title") as? String) ?: action.params["title"] ?: "OpenTHU 提醒"),
+            "body" to goal,
+          ),
+        ),
+      ).copy(semantic = "reminder_fallback_notification")
+    }
+    val alarmAction = action.copy(
+      id = "set_alarm",
+      payload = mapOf(
+        "time" to dueTime,
+        "label" to ((action.payload?.get("title") as? String) ?: action.params["title"] ?: goal.take(40)),
+        "vibrate" to true,
+      ),
+    )
+    return executeAlarmIntent(alarmAction, goal).copy(
+      semantic = "reminder_alarm_requested",
+    )
+  }
+
   private fun executeReadNotifications(): ActionExecutionReport {
     val enabledListeners = Settings.Secure.getString(appContext.contentResolver, "enabled_notification_listeners")
     val isEnabled = enabledListeners != null && enabledListeners.contains(appContext.packageName)

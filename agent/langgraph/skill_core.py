@@ -351,22 +351,57 @@ def build_default_registry() -> SkillRegistry:
         registry.register_handler("read_notifications", ReadNotificationsSkill())
     except ImportError:
         pass
+    search_skill_cls = None
     try:
-        from .skills.search_skills import SearchSkill
-        registry.register_handler("search", SearchSkill())
+        try:
+            from .skills.search_skills import SearchSkill
+        except ImportError:
+            from skills.search_skills import SearchSkill
+        search_skill_cls = SearchSkill
+    except ImportError:
+        try:
+            from .skills.campus_data_skills import SearchSkill
+        except ImportError:
+            from skills.campus_data_skills import SearchSkill
+        search_skill_cls = SearchSkill
+    if search_skill_cls is not None:
+        registry.register_handler("search", search_skill_cls())
+
+    campus_activities_skill_cls = None
+    try:
+        try:
+            from .skills.campus_news_skills import CampusActivitiesSkill
+        except ImportError:
+            from skills.campus_news_skills import CampusActivitiesSkill
+        campus_activities_skill_cls = CampusActivitiesSkill
+    except ImportError:
+        try:
+            from .skills.campus_data_skills import CampusActivitiesSkill
+        except ImportError:
+            from skills.campus_data_skills import CampusActivitiesSkill
+        campus_activities_skill_cls = CampusActivitiesSkill
+    if campus_activities_skill_cls is not None:
+        registry.register_handler("get_campus_activities", campus_activities_skill_cls())
+
+    try:
+        try:
+            from .skills.summary_skills import CreateReminderSkill, OpenUrlSkill, SendNotificationSkill, ShowSummarySkill
+        except ImportError:
+            from skills.summary_skills import CreateReminderSkill, OpenUrlSkill, SendNotificationSkill, ShowSummarySkill
+        registry.register_handler("create_reminder", CreateReminderSkill())
+        registry.register_handler("show_summary", ShowSummarySkill())
+        registry.register_handler("send_notification", SendNotificationSkill())
+        registry.register_handler("open_url", OpenUrlSkill())
     except ImportError:
         pass
     try:
         try:
-            from .skills.campus_news_skills import CampusActivitiesSkill
-            from .skills.summary_skills import OpenUrlSkill, SendNotificationSkill, ShowSummarySkill
+            from .skills.campus_data_skills import build_static_campus_data_handlers
         except ImportError:
-            from skills.campus_news_skills import CampusActivitiesSkill
-            from skills.summary_skills import OpenUrlSkill, SendNotificationSkill, ShowSummarySkill
-        registry.register_handler("get_campus_activities", CampusActivitiesSkill())
-        registry.register_handler("show_summary", ShowSummarySkill())
-        registry.register_handler("send_notification", SendNotificationSkill())
-        registry.register_handler("open_url", OpenUrlSkill())
+            from skills.campus_data_skills import build_static_campus_data_handlers
+        for skill_name, handler in build_static_campus_data_handlers().items():
+            if isinstance(registry.get_handler(skill_name), MissingSkillHandler):
+                registry.register_handler(skill_name, handler)
     except ImportError:
         pass
     register_calendar_handlers(registry)

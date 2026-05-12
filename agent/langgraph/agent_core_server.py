@@ -430,6 +430,35 @@ class AgentCoreStore:
             )
             return dict(task_doc)
 
+    def update_skill_args(
+        self,
+        *,
+        task_id: str,
+        request_id: str,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+
+            updated = False
+            for collection_key in ("skill_plan", "approved_skills"):
+                items = task_doc.get(collection_key, [])
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("request_id", "")) == request_id:
+                        item["args"] = dict(args)
+                        updated = True
+
+            if updated:
+                task_doc["updated_at"] = utc_now()
+                self._save_locked()
+            return dict(task_doc)
+
 
 def _skill_invocation_from_dict(payload: dict[str, Any]) -> SkillInvocation:
     return SkillInvocation(
@@ -487,6 +516,114 @@ def execute_server_side_data_skills(
             current_session = maybe_session
             state["session"] = current_session
     return current_task
+
+
+def hydrate_show_summary_skills(
+    *,
+    store: AgentCoreStore,
+    task_doc: dict[str, Any],
+) -> dict[str, Any]:
+    summary_content = build_server_data_summary(task_doc.get("server_results", []))
+    if not summary_content:
+        return task_doc
+
+    current_task = dict(task_doc)
+    completed = set(str(item) for item in current_task.get("completed_request_ids", []))
+    for skill in current_task.get("approved_skills", []):
+        if not isinstance(skill, dict):
+            continue
+        if str(skill.get("skill_name", "")) != "show_summary":
+            continue
+        request_id = str(skill.get("request_id", ""))
+        if not request_id or request_id in completed:
+            continue
+        args = dict(skill.get("args", {}) if isinstance(skill.get("args"), dict) else {})
+        args["title"] = args.get("title") or "OpenTHU 查询结果"
+        args["content"] = summary_content
+        args["format"] = "markdown"
+        current_task = store.update_skill_args(
+            task_id=str(current_task.get("task_id", "")),
+            request_id=request_id,
+            args=args,
+        )
+    return current_task
+
+
+def build_server_data_summary(results: Any) -> str:
+    if not isinstance(results, list):
+        return ""
+    sections: list[str] = []
+    for result in results:
+        if not isinstance(result, dict) or result.get("code") != "OK":
+            continue
+        skill_name = str(result.get("skill_name", ""))
+        data = result.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        section = _summarize_data_result(skill_name, data)
+        if section:
+            sections.append(section)
+    return "\n\n".join(sections)
+
+
+def _summarize_data_result(skill_name: str, data: dict[str, Any]) -> str:
+    if skill_name == "search":
+        lines = ["### 搜索结果"]
+        answer = str(data.get("answer") or data.get("summary") or "").strip()
+        if answer:
+            lines.append(answer[:1200])
+        results = data.get("results", [])
+        if isinstance(results, list) and results:
+            lines.append("来源：")
+            for item in results[:5]:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "未命名结果")).strip()
+                url = str(item.get("url", "")).strip()
+                snippet = str(item.get("snippet", "")).strip()
+                line = f"- {title}"
+                if url:
+                    line += f"：{url}"
+                if snippet:
+                    line += f"\n  {snippet[:160]}"
+                lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name == "get_campus_activities":
+        lines = ["### 校园活动"]
+        answer = str(data.get("answer") or data.get("summary") or "").strip()
+        if answer:
+            lines.append(answer[:1000])
+        activities = data.get("activities", [])
+        if isinstance(activities, list) and activities:
+            lines.append("活动：")
+            for item in activities[:6]:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "未命名活动")).strip()
+                time_label = str(item.get("start_time", "") or item.get("time", "")).strip()
+                location = str(item.get("location", "")).strip()
+                url = str(item.get("url", "")).strip()
+                details = "，".join(part for part in [time_label, location] if part)
+                line = f"- {title}"
+                if details:
+                    line += f"（{details}）"
+                if url:
+                    line += f"：{url}"
+                lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name.startswith("get_"):
+        message = str(data.get("message", "")).strip()
+        warnings = data.get("warnings", [])
+        lines = [f"### {skill_name}"]
+        if message:
+            lines.append(message)
+        if isinstance(warnings, list):
+            lines.extend(f"- {str(item)}" for item in warnings[:3] if str(item).strip())
+        return "\n".join(lines) if len(lines) > 1 else ""
+
+    return ""
 
 
 def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
@@ -548,7 +685,11 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             agent=agent,
             store=store,
             task_doc=task_doc,
-            session=plan_response.get("data", {}).get("session", {}) if isinstance(plan_response.get("data"), dict) else {},
+            session=plan_response.get("data", {}).get("session", {})
+            if isinstance(plan_response.get("data"), dict)
+            else {},
+        )
+        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
         logger.info(
             "[api] plan complete task_id=%s task_status=%s approved=%d blocked=%d",
             task_doc["task_id"],

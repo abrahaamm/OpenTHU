@@ -2,6 +2,8 @@ package ai.opencray.app.agent
 
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.domain.model.SystemAction
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -59,6 +61,12 @@ class ActionPlanner {
           summary = "Set a reminder alarm before the parsed campus event time.",
           riskLevel = "medium",
           requiresApproval = false,
+          payload =
+            mapOf(
+              "time" to deriveAlarmTime(goal),
+              "label" to deriveCalendarTitle(goal),
+              "vibrate" to true,
+            ),
           confidence = 80,
           explain = "Campus tasks usually require time-sensitive reminders.",
         )
@@ -74,6 +82,71 @@ class ActionPlanner {
           requiresApproval = false,
           confidence = 90,
           explain = "Goal asks for campus information reading.",
+        )
+    }
+
+    if (containsAny(normalized, listOf("未读通知", "系统通知", "手机通知", "通知栏", "读取通知", "read notifications", "unread notifications"))) {
+      actions +=
+        SystemAction(
+          id = "read_notifications",
+          title = "Read System Notifications",
+          summary = "Read unread notifications from Android notification listener.",
+          riskLevel = "low",
+          requiresApproval = false,
+          confidence = 88,
+          explain = "Goal asks for unread system notifications.",
+        )
+    }
+
+    if (containsAny(normalized, listOf("提醒", "待办", "reminder"))) {
+      actions +=
+        SystemAction(
+          id = "create_reminder",
+          title = "Create Reminder",
+          summary = "Create a local reminder using alarm or notification fallback.",
+          riskLevel = "medium",
+          requiresApproval = false,
+          payload =
+            mapOf(
+              "title" to deriveCalendarTitle(goal),
+              "due_time" to deriveReminderTime(goal),
+            ),
+          confidence = 82,
+          explain = "Goal asks for a reminder.",
+        )
+    }
+
+    if (containsAny(normalized, listOf("闹钟", "alarm"))) {
+      actions +=
+        SystemAction(
+          id = "set_alarm",
+          title = "Set Alarm",
+          summary = "Set a local Android alarm.",
+          riskLevel = "low",
+          requiresApproval = false,
+          payload =
+            mapOf(
+              "time" to deriveAlarmTime(goal),
+              "label" to deriveCalendarTitle(goal),
+              "vibrate" to true,
+            ),
+          confidence = 86,
+          explain = "Goal asks for an alarm.",
+        )
+    }
+
+    if (containsAny(normalized, listOf("搜索", "查找", "search"))) {
+      val encoded = URLEncoder.encode(goal, StandardCharsets.UTF_8.name())
+      actions +=
+        SystemAction(
+          id = "open_url",
+          title = "Open Search",
+          summary = "Open a web search page for this query.",
+          riskLevel = "low",
+          requiresApproval = false,
+          payload = mapOf("url" to "https://duckduckgo.com/?q=$encoded"),
+          confidence = 72,
+          explain = "Local fallback opens a browser search when Agent-Core is unavailable.",
         )
     }
 
@@ -162,6 +235,41 @@ class ActionPlanner {
     val end = start.plusHours(1)
     val formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
     return formatter.format(start) to formatter.format(end)
+  }
+
+  private fun deriveReminderTime(goal: String): String {
+    val alarmTime = deriveAlarmTime(goal)
+    val now = OffsetDateTime.now(ZoneOffset.UTC).withSecond(0).withNano(0)
+    val hour = alarmTime.substringBefore(":").toIntOrNull() ?: now.plusHours(2).hour
+    val minute = alarmTime.substringAfter(":", "00").toIntOrNull() ?: 0
+    val candidate = now.withHour(hour).withMinute(minute)
+    val due = if (candidate.isAfter(now)) candidate else candidate.plusDays(1)
+    return DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(due)
+  }
+
+  private fun deriveAlarmTime(goal: String): String {
+    Regex("""(?<!\d)([01]?\d|2[0-3])\s*[：:]\s*([0-5]\d)(?!\d)""")
+      .find(goal)
+      ?.let { match ->
+        val hour = match.groupValues[1].padStart(2, '0')
+        val minute = match.groupValues[2]
+        return "$hour:$minute"
+      }
+
+    Regex("""(?<!\d)(\d{1,2})\s*点\s*(半|([0-5]?\d)\s*分?)?""")
+      .find(goal)
+      ?.let { match ->
+        val hour = (match.groupValues[1].toIntOrNull() ?: return@let).coerceIn(0, 23)
+        val minute =
+          when {
+            match.groupValues[2] == "半" -> 30
+            match.groupValues[3].isNotBlank() -> (match.groupValues[3].toIntOrNull() ?: 0).coerceIn(0, 59)
+            else -> 0
+          }
+        return "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
+      }
+
+    return "08:00"
   }
 
   private fun extractEventIds(goal: String): List<String> {
