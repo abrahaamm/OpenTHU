@@ -54,6 +54,19 @@ class PlanTaskRequest(BaseModel):
     session: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChatMessageItem(BaseModel):
+    role: str
+    text: str
+
+
+class ChatTurnRequest(BaseModel):
+    device_id: str = ""
+    user_id: str = "demo_user"
+    message: str
+    session: dict[str, Any] = Field(default_factory=dict)
+    history: list[ChatMessageItem] = Field(default_factory=list)
+
+
 class SkillResultSubmitRequest(BaseModel):
     device_id: str
     request_id: str
@@ -708,6 +721,34 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                 "plan_only_response": task_doc.get("plan_only_response", {}),
             },
         }
+
+    @app.post("/api/v1/agent/chat")
+    def chat_turn(payload: ChatTurnRequest) -> dict[str, Any]:
+        logger.info(
+            "[api] POST /agent/chat device_id=%s user_id=%s message=%r",
+            payload.device_id,
+            payload.user_id,
+            payload.message[:80],
+        )
+        if payload.device_id:
+            device = store.get_device(payload.device_id)
+            if device is None:
+                logger.warning("[api] chat rejected: device_id=%s not registered", payload.device_id)
+                raise HTTPException(status_code=404, detail="device_not_registered")
+
+        response = agent.chat_turn(
+            user_input=payload.message,
+            user_id=payload.user_id,
+            session=payload.session,
+            history=[item.dict() for item in payload.history],
+        )
+        logger.info(
+            "[api] chat complete request_id=%s should_plan=%s source=%s",
+            response.get("request_id", ""),
+            response.get("data", {}).get("should_plan", False),
+            response.get("data", {}).get("source", ""),
+        )
+        return response
 
     @app.get("/api/v1/agent/tasks/next")
     def get_next_task(device_id: str = Query(..., min_length=1)) -> dict[str, Any]:

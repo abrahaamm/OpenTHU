@@ -56,6 +56,14 @@ data class SubmitResultData(
   val receivedResultCount: Int,
 )
 
+data class ChatTurnData(
+  val shouldPlan: Boolean,
+  val reply: String,
+  val mode: String,
+  val confidence: Double,
+  val source: String,
+)
+
 class AgentCoreHttpClient {
   fun registerDevice(
     config: GatewayConfig,
@@ -134,6 +142,45 @@ class AgentCoreHttpClient {
           taskStatus = taskStatus,
           approvedSkills = approved,
           blockedSkills = blocked,
+        ),
+    )
+  }
+
+  fun chatTurn(
+    config: GatewayConfig,
+    userId: String,
+    deviceId: String,
+    message: String,
+    session: Map<String, Any?> = emptyMap(),
+    history: List<Map<String, String>> = emptyList(),
+  ): GatewayResult<ChatTurnData> {
+    val payload =
+      JSONObject()
+        .put("device_id", deviceId)
+        .put("user_id", userId)
+        .put("message", message)
+        .put("session", session.toJsonObject())
+        .put("history", history.map { it.toJsonObject() }.toJsonArray())
+
+    val result = requestJson(config, "POST", "/api/v1/agent/chat", payload)
+    if (!result.success || result.data == null) {
+      return GatewayResult(success = false, code = result.code, message = result.message, data = null)
+    }
+
+    val rootData = result.data.optJSONObject("data")
+      ?: return GatewayResult(success = false, code = "MALFORMED_RESPONSE", message = "Missing data in chat response", data = null)
+
+    return GatewayResult(
+      success = true,
+      code = result.code,
+      message = result.message,
+      data =
+        ChatTurnData(
+          shouldPlan = rootData.optBoolean("should_plan", false),
+          reply = rootData.optString("reply", ""),
+          mode = rootData.optString("mode", "chat"),
+          confidence = rootData.optDouble("confidence", 0.0),
+          source = rootData.optString("source", ""),
         ),
     )
   }

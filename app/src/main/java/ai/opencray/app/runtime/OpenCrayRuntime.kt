@@ -154,7 +154,7 @@ class OpenCrayRuntime(
 
   fun boot() {
     runtimeRepository.markRuntimeBooted()
-    chatRepository.appendMessage(ChatRole.System, "Runtime booted. Agent pipeline ready.")
+    runtimeRepository.appendEvent("Runtime booted. Agent pipeline ready.")
   }
 
   fun connectToGateway(
@@ -270,40 +270,156 @@ class OpenCrayRuntime(
     if (normalizedGoal.isEmpty()) return false
 
     chatRepository.sendMessage(normalizedGoal)
-    if (isSmallTalk(normalizedGoal)) {
-      streamAssistant(replySmallTalk(normalizedGoal))
-      return false
-    }
-    streamAssistant("收到，我来帮你处理。")
 
     if (gatewayRegistered) {
-      planGoalViaGateway(normalizedGoal)
+      handleChatTurnViaGateway(normalizedGoal)
       return false
     }
 
+    if (!shouldPlanLocally(normalizedGoal)) {
+      streamAssistant(replyLocalChat(normalizedGoal))
+      return false
+    }
+
+    streamAssistant("好的，我来处理。")
     planGoalLocally(normalizedGoal)
     return true
   }
 
-  private fun isSmallTalk(text: String): Boolean {
-    val normalized = text.trim().lowercase(Locale.getDefault())
-    val greetings = setOf("hi", "hello", "hey", "你好", "嗨", "在吗", "早上好", "晚上好")
-    val identityQueries = setOf("who are you", "what are you", "你是谁", "你是做什么的", "你是干嘛的")
-    if (normalized in greetings) return true
-    if (identityQueries.any { normalized.contains(it) }) return true
-    return normalized.length <= 12 && greetings.any { normalized.contains(it) }
+  private fun handleChatTurnViaGateway(message: String) {
+    thread(name = "opencray-gateway-chat", isDaemon = true) {
+      val result =
+        gatewayClient.chatTurn(
+          config = currentGatewayConfig(),
+          userId = "android_user",
+          deviceId = deviceId,
+          message = message,
+          session = buildGatewaySession(),
+          history = buildGatewayChatHistory(),
+        )
+      if (!result.success || result.data == null) {
+        runtimeRepository.appendEvent("Gateway chat failed: ${result.code} ${result.message}")
+        if (shouldPlanLocally(message)) {
+          streamAssistant("我先按本地能力处理。")
+          planGoalLocally(message)
+          runActionsLocally(actionIds = null, submitGatewayResult = false)
+        } else {
+          streamAssistant(replyLocalChat(message))
+        }
+        return@thread
+      }
+
+      val data = result.data
+      val reply = data.reply.ifBlank {
+        if (data.shouldPlan) "好的，我来处理。" else replyLocalChat(message)
+      }
+      streamAssistant(reply)
+      if (data.shouldPlan) {
+        planGoalViaGateway(message)
+      }
+    }
   }
 
-  private fun replySmallTalk(text: String): String {
+  private fun shouldPlanLocally(text: String): Boolean {
+    val normalized = text.trim().lowercase(Locale.getDefault())
+    if (normalized.isBlank()) return false
+    val conversationOnlyMarkers = listOf(
+      "hello",
+      "hi",
+      "hey",
+      "你好",
+      "嗨",
+      "在吗",
+      "who are you",
+      "what are you",
+      "你是谁",
+      "你是做什么的",
+      "你是干嘛的",
+      "你能做什么",
+      "你能帮我做什么",
+      "可以帮我做什么",
+      "能干什么",
+      "讲个笑话",
+      "聊聊",
+      "随便聊",
+      "谢谢",
+      "thank",
+    )
+    if (conversationOnlyMarkers.any { normalized == it || normalized.contains(it) } && normalized.length <= 24) {
+      return false
+    }
+    val taskMarkers = listOf(
+      "帮我",
+      "请帮",
+      "请你",
+      "麻烦",
+      "安排",
+      "创建",
+      "设置",
+      "提醒",
+      "闹钟",
+      "日历",
+      "校历",
+      "课程",
+      "课表",
+      "作业",
+      "ddl",
+      "deadline",
+      "活动",
+      "讲座",
+      "搜索",
+      "查找",
+      "查询",
+      "通知栏",
+      "未读通知",
+      "系统通知",
+      "读取通知",
+      "打开",
+      "删除",
+      "总结",
+      "search",
+      "schedule",
+      "remind",
+      "alarm",
+      "calendar",
+      "open ",
+      "create",
+      "set ",
+    )
+    return taskMarkers.any { normalized.contains(it) }
+  }
+
+  private fun replyLocalChat(text: String): String {
     val normalized = text.trim().lowercase(Locale.getDefault())
     return when {
       normalized.contains("hello") || normalized.contains("hi") || normalized.contains("hey") ->
-        "Hello！我在这儿。你想让我帮你处理什么任务？"
+        "Hello，我在。你可以随便和我聊，也可以直接告诉我要处理的事。"
       normalized.contains("who are you") || normalized.contains("what are you") || normalized.contains("你是谁") ->
-        "我是你的 OpenTHU 助手，能帮你处理校园信息、提醒、日历和通知相关任务。你可以直接告诉我目标。"
-      else -> "我在，随时可以开始。你可以直接说你的目标，我会一步步帮你完成。"
+        "我是 OpenTHU 助手，一个偏校园场景的对话式 Agent。你可以和我聊天，也可以让我帮你处理提醒、日历、校园活动、搜索和系统通知。"
+      normalized.contains("你能做什么") || normalized.contains("能干什么") || normalized.contains("help") || normalized.contains("帮助") ->
+        "你可以像聊天一样说需求，比如“明早八点提醒我交作业”“帮我看看近期校园活动”“搜索一下某个话题”。普通聊天我也会直接回复。"
+      normalized.contains("讲个笑话") ->
+        "可以。这个项目现在最像一个刚学会分辨“聊天”和“干活”的助手，已经懂得先问一句：这次是真的要执行，还是只是陪你聊聊。"
+      normalized.contains("谢谢") || normalized.contains("thank") ->
+        "不客气。我在这里，下一步你直接说就行。"
+      else -> "我听到了。现在我会先按普通对话回应；如果你要我执行任务，直接用自然语言说出来就可以。"
     }
   }
+
+  private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
+    chatRepository.getMessages()
+      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+      .takeLast(limit)
+      .map { message ->
+        mapOf(
+          "role" to when (message.role) {
+            ChatRole.User -> "user"
+            ChatRole.Assistant -> "assistant"
+            ChatRole.System -> "system"
+          },
+          "text" to message.text,
+        )
+      }
 
   private fun streamAssistant(
     text: String,

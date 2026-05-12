@@ -58,6 +58,30 @@ class StructuredPrompt(TypedDict):
     sensitivity: str
 
 
+TASK_ENTITIES = {
+    "assignments",
+    "courses",
+    "notices",
+    "files",
+    "activities",
+    "search",
+    "user_profile",
+    "semesters",
+    "academic_calendar",
+    "reminder",
+    "calendar",
+    "calendar_conflict",
+    "calendar_delete",
+    "alarm",
+    "current_time",
+    "notification",
+    "system_notifications",
+    "session_refresh",
+    "logout",
+    "auth",
+}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -406,6 +430,188 @@ class OpenTHULangGraphAgent:
                 "planner_source": state.get("planner_source", "fallback"),
             },
         }
+
+    def chat_turn(
+        self,
+        user_input: str,
+        user_id: str = "demo_user",
+        session: dict[str, Any] | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        text = user_input.strip()
+        if not text:
+            return {
+                "request_id": f"chat_{uuid4().hex[:12]}",
+                "code": "INVALID_PARAM",
+                "message": "empty message",
+                "data": {
+                    "mode": "chat",
+                    "should_plan": False,
+                    "reply": "",
+                    "confidence": 1.0,
+                    "source": "rule",
+                },
+            }
+
+        llm_result = self._chat_turn_via_llm(
+            user_input=text,
+            user_id=user_id,
+            session=session or {},
+            history=history or [],
+        )
+        if llm_result is not None:
+            return llm_result
+
+        fallback = self._classify_conversation_fallback(text)
+        return {
+            "request_id": f"chat_{uuid4().hex[:12]}",
+            "code": "OK",
+            "message": "chat turn generated",
+            "data": fallback,
+        }
+
+    def _chat_turn_via_llm(
+        self,
+        *,
+        user_input: str,
+        user_id: str,
+        session: dict[str, Any],
+        history: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        api_key, model, base_url = self._llm_config_from_session(session)
+        if not api_key:
+            return None
+
+        system_prompt = (
+            "你是 OpenTHU 移动端里的对话式校园助手。"
+            "用户可以闲聊、提问，也可以让你执行提醒、日历、校园信息、搜索、通知读取等任务。"
+            "请先判断用户这句话是否需要进入工具/skill 规划。"
+            "只有当用户明确要求你执行、查询、创建、设置、读取、打开、删除或安排某件事时，should_plan 才为 true。"
+            "普通寒暄、身份问题、能力咨询、开放聊天、常识性问答都应直接自然回复，should_plan 为 false。"
+            "返回严格 JSON：{\"should_plan\": boolean, \"reply\": \"自然语言回复\", \"confidence\": 0到1之间数字}。"
+            "不要返回 Markdown 代码块，不要暴露内部 JSON、skill 名称或执行记录。"
+            "当 should_plan 为 true 时，reply 用一句简短自然的话说明你会处理；具体结果之后由执行链路返回。"
+        )
+        compact_history = []
+        for item in history[-8:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "")).strip().lower()
+            text = str(item.get("text", "")).strip()
+            if role not in {"user", "assistant"} or not text:
+                continue
+            compact_history.append({"role": role, "content": text[:1000]})
+
+        try:
+            from openai import OpenAI
+
+            client = self._create_openai_client(OpenAI, api_key, base_url=base_url)
+            messages = [{"role": "system", "content": system_prompt}] + compact_history
+            messages.append({"role": "user", "content": user_input})
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=600,
+                temperature=0.4,
+            )
+            raw = (completion.choices[0].message.content or "").strip()
+            parsed = json.loads(self.llm._extract_json_text(raw))
+            if not isinstance(parsed, dict):
+                return None
+            should_plan = bool(parsed.get("should_plan", False))
+            reply = str(parsed.get("reply", "")).strip()
+            confidence = float(parsed.get("confidence", 0.7) or 0.7)
+            if not reply:
+                reply = "好的，我来处理。" if should_plan else self._fallback_chat_reply(user_input)
+            return {
+                "request_id": f"chat_{uuid4().hex[:12]}",
+                "code": "OK",
+                "message": "chat turn generated",
+                "data": {
+                    "mode": "task" if should_plan else "chat",
+                    "should_plan": should_plan,
+                    "reply": reply,
+                    "confidence": max(0.0, min(confidence, 1.0)),
+                    "source": "llm",
+                    "user_id": user_id,
+                },
+            }
+        except Exception as exc:
+            logger.warning("[agent.chat] LLM chat turn failed: %s", exc)
+            return None
+
+    def _classify_conversation_fallback(self, user_input: str) -> dict[str, Any]:
+        normalized = user_input.strip().lower()
+        structured = self.llm._fallback(user_input)
+        entities = set(structured.get("entities", []))
+        should_plan = bool(entities & TASK_ENTITIES)
+        if entities == {"general_task"}:
+            should_plan = self._looks_like_task_request(normalized)
+
+        return {
+            "mode": "task" if should_plan else "chat",
+            "should_plan": should_plan,
+            "reply": "好的，我来处理。" if should_plan else self._fallback_chat_reply(user_input),
+            "confidence": 0.72 if should_plan else 0.64,
+            "source": "rule",
+        }
+
+    def _looks_like_task_request(self, normalized_text: str) -> bool:
+        conversation_markers = [
+            "你能帮我做什么",
+            "可以帮我做什么",
+            "你能做什么",
+            "能干什么",
+            "讲个笑话",
+            "聊聊",
+            "随便聊",
+        ]
+        if any(marker in normalized_text for marker in conversation_markers):
+            return False
+        task_markers = [
+            "帮我",
+            "请帮",
+            "请你",
+            "麻烦",
+            "安排",
+            "创建",
+            "设置",
+            "提醒",
+            "查询",
+            "搜索",
+            "查找",
+            "读取",
+            "打开",
+            "加入",
+            "写入",
+            "删除",
+            "同步",
+            "总结",
+            "处理",
+            "plan",
+            "schedule",
+            "remind",
+            "search",
+            "open",
+            "create",
+            "set ",
+        ]
+        return any(marker in normalized_text for marker in task_markers)
+
+    def _fallback_chat_reply(self, user_input: str) -> str:
+        normalized = user_input.strip().lower()
+        greetings = {"hi", "hello", "hey", "你好", "嗨", "在吗", "早上好", "晚上好"}
+        if normalized in greetings or (len(normalized) <= 12 and any(item in normalized for item in greetings)):
+            return "我在。你可以随便和我聊，也可以直接告诉我要处理的事。"
+        if any(token in normalized for token in ["who are you", "what are you", "你是谁", "你是做什么的", "你是干嘛的"]):
+            return "我是 OpenTHU 助手，一个偏校园场景的对话式 Agent。你可以和我聊天，也可以让我帮你处理提醒、日历、校园活动、搜索和系统通知。"
+        if any(token in normalized for token in ["你能做什么", "能干什么", "help", "帮助", "怎么用"]):
+            return "你可以像聊天一样说需求，比如“明早八点提醒我交作业”“帮我看看近期校园活动”“搜索一下某个话题”。如果只是想聊两句，我也会直接回答。"
+        if "讲个笑话" in normalized:
+            return "可以。这个项目现在最像一个刚学会分辨“聊天”和“干活”的助手，已经懂得先问一句：这次是真的要执行，还是只是陪你聊聊。"
+        if any(token in normalized for token in ["谢谢", "thank"]):
+            return "不客气。我在这里，下一步你直接说就行。"
+        return "我听到了。这个分支现在会先把普通对话当作对话处理；如果你要我执行任务，直接用自然语言说出来就可以。"
 
     def _build_initial_state(
         self,
@@ -1524,8 +1730,9 @@ class OpenTHULangGraphAgent:
 
     def _llm_config_from_state(self, state: AgentState) -> tuple[str, str, str]:
         session = state.get("session", {})
-        if not isinstance(session, dict):
-            session = {}
+        return self._llm_config_from_session(session if isinstance(session, dict) else {})
+
+    def _llm_config_from_session(self, session: dict[str, Any]) -> tuple[str, str, str]:
         api_key = str(
             session.get("openai_api_key")
             or session.get("OPENAI_API_KEY")

@@ -193,8 +193,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val systemIntro =
       ChatMessage(
         id = "sys_${UUID.randomUUID().toString().take(8)}",
-        role = ChatRole.System,
-        text = "新会话已创建。你可以直接输入目标开始规划。",
+        role = ChatRole.Assistant,
+        text = "新会话开始了。你可以直接聊天，也可以用自然语言交代任务。",
       )
     conversations[id] =
       ConversationThread(

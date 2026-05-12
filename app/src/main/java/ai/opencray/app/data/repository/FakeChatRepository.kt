@@ -9,13 +9,8 @@ class FakeChatRepository : ChatRepository {
     listOf(
       ChatMessage(
         id = UUID.randomUUID().toString(),
-        role = ChatRole.System,
-        text = "OpenTHU runtime 已启动，Agent 框架与后续 skills 可以从这里接入。",
-      ),
-      ChatMessage(
-        id = UUID.randomUUID().toString(),
         role = ChatRole.Assistant,
-        text = "你可以直接输入目标，我会先记录到对话历史；后续接入大模型和 skills 后，这里会展示真实执行过程。",
+        text = "你好，我是 OpenTHU。你可以像聊天一样和我说话，也可以直接让我处理提醒、日历、校园活动、搜索或系统通知。",
       ),
     )
 
@@ -66,8 +61,8 @@ class FakeChatRepository : ChatRepository {
       listOf(
         ChatMessage(
           id = UUID.randomUUID().toString(),
-          role = ChatRole.System,
-          text = "对话历史已清空，可以开始新的任务。",
+          role = ChatRole.Assistant,
+          text = "新对话开始了。你可以随便聊，也可以直接说要我完成什么。",
         ),
       )
   }
