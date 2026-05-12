@@ -1,925 +1,1443 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/root"
+<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/drawer_layout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/app_background">
 
-    <ScrollView
+    <LinearLayout
         android:id="@+id/main"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="top"
-        android:clipToPadding="false">
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingStart="20dp"
-        android:paddingTop="24dp"
-        android:paddingEnd="20dp"
-        android:paddingBottom="92dp">
-
-        <TextView
-            android:id="@+id/title_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="@color/opencray_primary_dark"
-            android:textSize="34sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/subtitle_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/app_subtitle"
-            android:textColor="@color/opencray_muted"
-            android:textSize="16sp" />
-
-        <TextView
-            android:id="@+id/status_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:background="@drawable/panel_surface"
-            android:elevation="4dp"
-            android:padding="14dp"
-            android:textColor="@color/opencray_primary_dark"
-            android:textSize="16sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/transport_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textColor="@color/opencray_muted"
-            android:textSize="15sp" />
+        android:paddingStart="16dp"
+        android:paddingTop="12dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="12dp">
 
         <LinearLayout
-            android:id="@+id/top_tabs_legacy"
+            android:id="@+id/top_bar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:clipToPadding="false"
+            android:background="@drawable/chat_hero_surface"
+            android:elevation="6dp"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingBottom="4dp"
-            android:visibility="gone">
+            android:padding="16dp">
 
             <Button
-                android:id="@+id/chat_tab_legacy"
-                style="@style/OpenCray.TabButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/tab_chat" />
-
-            <Button
-                android:id="@+id/planning_tab_legacy"
-                style="@style/OpenCray.TabButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@string/tab_planning" />
-
-            <Button
-                android:id="@+id/settings_tab_legacy"
-                style="@style/OpenCray.TabButton"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@string/tab_settings" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/chat_panel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:background="@drawable/chat_shell"
-            android:elevation="10dp"
-            android:orientation="vertical">
+                android:id="@+id/drawer_toggle_button"
+                style="@style/OpenCray.SecondaryButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:minWidth="0dp"
+                android:text="|||"
+                android:textSize="20sp" />
 
             <LinearLayout
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingStart="18dp"
-                android:paddingTop="18dp"
-                android:paddingEnd="18dp">
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
 
                 <TextView
-                    android:layout_width="match_parent"
+                    android:id="@+id/page_title_text"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/chat_title"
-                    android:textColor="@color/opencray_ink"
-                    android:textSize="24sp"
+                    android:textColor="@color/white"
+                    android:textSize="20sp"
                     android:textStyle="bold" />
 
                 <TextView
-                    android:layout_width="match_parent"
+                    android:id="@+id/onboarding_text"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="4dp"
                     android:text="@string/chat_subtitle"
-                    android:textColor="@color/opencray_muted"
-                    android:textSize="14sp" />
+                    android:textColor="#F2FFFFFF"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <HorizontalScrollView
+            android:id="@+id/status_chip_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
 
                 <TextView
+                    android:id="@+id/status_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/chat_status_chip_surface"
+                    android:paddingStart="14dp"
+                    android:paddingTop="8dp"
+                    android:paddingEnd="14dp"
+                    android:paddingBottom="8dp"
+                    android:textColor="@color/opencray_primary_dark"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/transport_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/chat_status_chip_surface"
+                    android:paddingStart="14dp"
+                    android:paddingTop="8dp"
+                    android:paddingEnd="14dp"
+                    android:paddingBottom="8dp"
+                    android:textColor="@color/opencray_primary_dark"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <FrameLayout
+            android:id="@+id/page_container"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="12dp"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:id="@+id/chat_panel"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/chat_shell"
+                android:elevation="6dp"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <ScrollView
+                    android:id="@+id/chat_history_scroll"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/chat_history_surface"
+                    android:fillViewport="true"
+                    android:padding="12dp"
+                    android:scrollbarStyle="outsideInset">
+
+                    <LinearLayout
+                        android:id="@+id/chat_history_container"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+                </ScrollView>
+
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="@string/chat_conversation_list_title"
-                    android:textColor="@color/opencray_ink"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
+                    android:background="@drawable/chat_composer_surface"
+                    android:gravity="bottom"
+                    android:orientation="horizontal"
+                    android:padding="10dp">
 
-                <HorizontalScrollView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:scrollbars="none">
-
-                    <LinearLayout
-                        android:id="@+id/conversation_tabs_container"
-                        android:layout_width="wrap_content"
+                    <EditText
+                        android:id="@+id/chat_input"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal" />
-                </HorizontalScrollView>
+                        android:layout_weight="1"
+                        android:background="@drawable/chat_input_surface"
+                        android:gravity="top|start"
+                        android:hint="@string/chat_input_hint"
+                        android:minHeight="56dp"
+                        android:paddingStart="16dp"
+                        android:paddingTop="14dp"
+                        android:paddingEnd="16dp"
+                        android:paddingBottom="14dp"
+                        android:textColor="@color/opencray_ink"
+                        android:textColorHint="@color/opencray_muted"
+                        android:textSize="15sp" />
 
-                <Button
-                    android:id="@+id/new_conversation_button"
-                    style="@style/OpenCray.SecondaryButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/chat_new_conversation" />
+                    <Button
+                        android:id="@+id/chat_send_button"
+                        style="@style/OpenCray.PrimaryButton"
+                        android:layout_width="72dp"
+                        android:layout_height="56dp"
+                        android:layout_marginStart="10dp"
+                        android:minWidth="0dp"
+                        android:text="@string/chat_send" />
+                </LinearLayout>
             </LinearLayout>
 
             <ScrollView
-                android:id="@+id/chat_history_scroll"
+                android:id="@+id/planning_page"
                 android:layout_width="match_parent"
-                android:layout_height="300dp"
-                android:layout_marginStart="14dp"
-                android:layout_marginTop="16dp"
-                android:layout_marginEnd="14dp"
-                android:background="@drawable/chat_history_surface"
-                android:elevation="3dp"
+                android:layout_height="match_parent"
                 android:fillViewport="true"
-                android:overScrollMode="ifContentScrolls"
-                android:padding="12dp"
-                android:scrollbars="vertical">
+                android:scrollbars="vertical"
+                android:visibility="gone">
 
                 <LinearLayout
-                    android:id="@+id/chat_history_container"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical" />
+                    android:orientation="vertical"
+                    android:paddingBottom="8dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/chat_hero_surface"
+                        android:elevation="6dp"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="PLAN OVERVIEW"
+                            android:textColor="#E8FFFFFF"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="今日计划中心"
+                            android:textColor="@color/white"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/planning_snapshot_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="14dp"
+                            android:orientation="horizontal">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:background="@drawable/chat_status_chip_surface"
+                                android:orientation="vertical"
+                                android:padding="10dp">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="任务"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:id="@+id/planning_metric_tasks"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="4dp"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="20sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/chat_status_chip_surface"
+                                android:orientation="vertical"
+                                android:padding="10dp">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="动作"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:id="@+id/planning_metric_actions"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="4dp"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="20sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/chat_status_chip_surface"
+                                android:orientation="vertical"
+                                android:padding="10dp">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="提醒"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:id="@+id/planning_metric_safety"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="4dp"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="20sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/chat_status_chip_surface"
+                                android:orientation="vertical"
+                                android:padding="10dp">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="记忆"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:id="@+id/planning_metric_memory"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="4dp"
+                                    android:textColor="@color/opencray_primary_dark"
+                                    android:textSize="20sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/chat_section_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="当前焦点"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/planning_focus_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="14sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/context_panel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/panel_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="情境与线索"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/context_summary_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="14sp" />
+
+                        <LinearLayout
+                            android:id="@+id/planning_developer_context_section"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="开发者上下文"
+                                android:textColor="@color/opencray_ink"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/context_feed_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:textColor="@color/opencray_muted"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:background="@drawable/chat_section_surface"
+                            android:orientation="vertical"
+                            android:padding="14dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="课程与提醒"
+                                android:textColor="@color/opencray_ink"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/planning_schedule_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="10dp"
+                                android:textColor="@color/opencray_muted"
+                                android:textSize="13sp" />
+
+                            <TextView
+                                android:id="@+id/planning_alarm_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="12dp"
+                                android:textColor="@color/opencray_muted"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="12dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/chat_section_surface"
+                            android:orientation="vertical"
+                            android:padding="14dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="待办与节奏"
+                                android:textColor="@color/opencray_ink"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/planning_todo_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="10dp"
+                                android:textColor="@color/opencray_muted"
+                                android:textSize="13sp" />
+
+                            <TextView
+                                android:id="@+id/home_quick_actions_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="12dp"
+                                android:textColor="@color/opencray_ink"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/chat_section_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="执行流程"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <LinearLayout
+                            android:id="@+id/planning_developer_flow_section"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="内部执行流程"
+                                android:textColor="@color/opencray_ink"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/task_flow_text"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:textColor="@color/opencray_muted"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/actions_panel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/panel_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="候选动作与执行"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <Button
+                            android:id="@+id/planning_dev_toggle_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="显示开发者信息" />
+
+                        <TextView
+                            android:id="@+id/action_summary_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:id="@+id/action_feed_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="13sp"
+                            android:visibility="gone" />
+
+                        <Button
+                            android:id="@+id/run_agent_button"
+                            style="@style/OpenCray.PrimaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/run_agent_button" />
+
+                        <Button
+                            android:id="@+id/action_primary_button"
+                            style="@style/OpenCray.PrimaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/action_primary" />
+
+                        <Button
+                            android:id="@+id/action_secondary_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/action_secondary" />
+
+                        <Button
+                            android:id="@+id/action_tertiary_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/action_tertiary" />
+
+                        <Button
+                            android:id="@+id/approve_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/approve_button" />
+                    </LinearLayout>
+                </LinearLayout>
             </ScrollView>
+
+            <ScrollView
+                android:id="@+id/settings_page"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:scrollbars="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:paddingBottom="8dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/chat_hero_surface"
+                        android:elevation="6dp"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="SETTINGS HUB"
+                            android:textColor="#E8FFFFFF"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="设置中心"
+                            android:textColor="@color/white"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/settings_privacy_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:textColor="@color/white"
+                            android:textSize="14sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:id="@+id/safety_panel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/panel_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="运行反馈"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/safety_feed_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/events_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:textColor="@color/opencray_muted"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/chat_section_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="能力与隐私"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <CheckBox
+                            android:id="@+id/capability_notification_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/capability_notification"
+                            android:textColor="@color/opencray_ink" />
+
+                        <CheckBox
+                            android:id="@+id/capability_safety_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/capability_safety"
+                            android:textColor="@color/opencray_ink" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/panel_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="连接与模型"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/host_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/host_description" />
+
+                        <EditText
+                            android:id="@+id/host_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/host_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/port_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/port_description" />
+
+                        <EditText
+                            android:id="@+id/port_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/port_hint"
+                            android:inputType="number"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <CheckBox
+                            android:id="@+id/tls_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/tls_label"
+                            android:textColor="@color/opencray_ink" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_llm_model_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_llm_model_description" />
+
+                        <EditText
+                            android:id="@+id/setting_llm_model_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_llm_model_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_llm_base_url_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_llm_base_url_description" />
+
+                        <EditText
+                            android:id="@+id/setting_llm_base_url_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_llm_base_url_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_openai_key_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_openai_key_description" />
+
+                        <EditText
+                            android:id="@+id/setting_openai_key_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_openai_key_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_user_id_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_user_id_description" />
+
+                        <EditText
+                            android:id="@+id/setting_user_id_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_user_id_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <Button
+                            android:id="@+id/connect_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="@string/connect_button" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/chat_section_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="校园与搜索"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_webvpn_cookie_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_webvpn_cookie_description" />
+
+                        <EditText
+                            android:id="@+id/setting_webvpn_cookie_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_webvpn_cookie_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_webvpn_csrf_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_webvpn_csrf_description" />
+
+                        <EditText
+                            android:id="@+id/setting_webvpn_csrf_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_webvpn_csrf_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_campus_file_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_campus_file_description" />
+
+                        <EditText
+                            android:id="@+id/setting_campus_file_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_campus_file_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_search_provider_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_search_provider_description" />
+
+                        <EditText
+                            android:id="@+id/setting_search_provider_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_search_provider_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_search_endpoint_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_search_endpoint_description" />
+
+                        <EditText
+                            android:id="@+id/setting_search_endpoint_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_search_endpoint_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_search_api_key_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_search_api_key_description" />
+
+                        <EditText
+                            android:id="@+id/setting_search_api_key_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_search_api_key_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_search_ttl_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_search_ttl_description" />
+
+                        <EditText
+                            android:id="@+id/setting_search_ttl_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_search_ttl_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/chat_section_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="记忆策略"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_memory_file_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_memory_file_description" />
+
+                        <EditText
+                            android:id="@+id/setting_memory_file_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_memory_file_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_memory_long_ttl_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_memory_long_ttl_description" />
+
+                        <EditText
+                            android:id="@+id/setting_memory_long_ttl_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_memory_long_ttl_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_memory_mid_ttl_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_memory_mid_ttl_description" />
+
+                        <EditText
+                            android:id="@+id/setting_memory_mid_ttl_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_memory_mid_ttl_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_memory_short_ttl_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_memory_short_ttl_description" />
+
+                        <EditText
+                            android:id="@+id/setting_memory_short_ttl_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_memory_short_ttl_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_memory_half_life_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_memory_half_life_description" />
+
+                        <EditText
+                            android:id="@+id/setting_memory_half_life_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_memory_half_life_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:background="@drawable/chat_section_surface"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="设备与系统"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/preference_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/preference_description" />
+
+                        <EditText
+                            android:id="@+id/preference_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/preference_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <Button
+                                android:id="@+id/preference_add_button"
+                                style="@style/OpenCray.SecondaryButton"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="@string/preference_add" />
+
+                            <Button
+                                android:id="@+id/preference_delete_1"
+                                style="@style/OpenCray.SecondaryButton"
+                                android:layout_width="48dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:minWidth="0dp"
+                                android:text="X" />
+
+                            <Button
+                                android:id="@+id/preference_delete_2"
+                                style="@style/OpenCray.SecondaryButton"
+                                android:layout_width="48dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:minWidth="0dp"
+                                android:text="X" />
+
+                            <Button
+                                android:id="@+id/preference_delete_3"
+                                style="@style/OpenCray.SecondaryButton"
+                                android:layout_width="48dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:minWidth="0dp"
+                                android:text="X" />
+                        </LinearLayout>
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_adb_bin_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_adb_bin_description" />
+
+                        <EditText
+                            android:id="@+id/setting_adb_bin_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_adb_bin_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_adb_serial_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_adb_serial_description" />
+
+                        <EditText
+                            android:id="@+id/setting_adb_serial_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_adb_serial_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_timezone_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_timezone_description" />
+
+                        <EditText
+                            android:id="@+id/setting_timezone_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_timezone_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/save_settings_button"
+                            style="@style/OpenCray.PrimaryButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/settings_saved" />
+
+                        <Button
+                            android:id="@+id/test_settings_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:text="@string/settings_connection_test" />
+                    </LinearLayout>
+                </LinearLayout>
+            </ScrollView>
+        </FrameLayout>
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="320dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@color/opencray_card"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="@color/opencray_ink"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/app_subtitle"
+                android:textColor="@color/opencray_muted"
+                android:textSize="13sp" />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="14dp"
-                android:layout_marginTop="14dp"
-                android:layout_marginEnd="14dp"
-                android:background="@drawable/chat_input_surface"
-                android:elevation="8dp"
-                android:orientation="horizontal"
-                android:paddingStart="14dp"
-                android:paddingTop="10dp"
-                android:paddingEnd="10dp"
-                android:paddingBottom="10dp">
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
 
-                <EditText
-                    android:id="@+id/chat_input"
+                <Button
+                    android:id="@+id/chat_tab"
+                    style="@style/OpenCray.TabButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:background="@android:color/transparent"
-                    android:hint="@string/chat_input_hint"
-                    android:inputType="textMultiLine"
-                    android:maxLines="4"
-                    android:minLines="1"
-                    android:padding="0dp"
-                    android:textColor="@color/opencray_ink"
-                    android:textColorHint="@color/opencray_muted" />
+                    android:text="@string/tab_chat" />
 
                 <Button
-                    android:id="@+id/chat_send_button"
-                    style="@style/OpenCray.PrimaryButton"
+                    android:id="@+id/planning_tab"
+                    style="@style/OpenCray.TabButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/tab_planning" />
+
+                <Button
+                    android:id="@+id/settings_tab"
+                    style="@style/OpenCray.TabButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/tab_settings" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/conversation_section"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/chat_section_surface"
+                android:clipChildren="true"
+                android:clipToPadding="true"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
-                    android:minWidth="0dp"
-                    android:minHeight="0dp"
-                    android:paddingStart="16dp"
-                    android:paddingTop="8dp"
-                    android:paddingEnd="16dp"
-                    android:paddingBottom="8dp"
-                    android:text="@string/chat_send"
-                    android:textAllCaps="false"
-                    android:textColor="@color/white" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="18dp"
-                android:layout_marginTop="16dp"
-                android:layout_marginEnd="18dp"
-                android:orientation="vertical">
-
-                <Button
-                    android:id="@+id/quick_skills_toggle"
-                    style="@style/OpenCray.SecondaryButton"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:padding="0dp"
-                    android:text="▦"
-                    android:textSize="22sp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/quick_skills_container"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="18dp"
-                    android:layout_marginTop="8dp"
-                    android:layout_marginEnd="18dp"
-                    android:text="@string/quick_skills_subtitle"
-                    android:textColor="@color/opencray_muted"
-                    android:textSize="12sp" />
-
-                <ScrollView
-                    android:id="@+id/quick_skills_scroll"
-                    android:layout_width="match_parent"
-                    android:layout_height="220dp"
-                    android:layout_marginStart="14dp"
-                    android:layout_marginTop="8dp"
-                    android:layout_marginEnd="14dp"
-                    android:layout_marginBottom="14dp"
-                    android:background="@drawable/chat_history_surface"
-                    android:clipChildren="true"
-                    android:clipToPadding="true"
-                    android:fillViewport="false"
-                    android:overScrollMode="ifContentScrolls"
-                    android:padding="8dp"
-                    android:scrollbars="vertical">
-
-                <GridLayout
-                    android:id="@+id/quick_skills_grid"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:columnCount="3"
-                    android:clipChildren="true"
-                    android:clipToPadding="true"
-                    android:padding="2dp"
-                    android:paddingBottom="10dp"
-                    android:useDefaultMargins="false">
-
-                    <Button
-                        android:id="@+id/skill_card_1"
-                        style="@style/OpenCray.SkillCard"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_columnWeight="1"
-                        android:layout_margin="5dp"
-                        android:text="@string/skill_placeholder_1" />
-
-                    <Button
-                        android:id="@+id/skill_card_2"
-                        style="@style/OpenCray.SkillCard"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_columnWeight="1"
-                        android:layout_margin="5dp"
-                        android:text="@string/skill_placeholder_2" />
-
-                    <Button
-                        android:id="@+id/skill_card_3"
-                        style="@style/OpenCray.SkillCard"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_columnWeight="1"
-                        android:layout_margin="5dp"
-                        android:text="@string/skill_placeholder_3" />
-
-                    <Button
-                        android:id="@+id/skill_card_4"
-                        style="@style/OpenCray.SkillCard"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_columnWeight="1"
-                        android:layout_margin="5dp"
-                        android:text="@string/skill_placeholder_4" />
-                </GridLayout>
-                </ScrollView>
-            </LinearLayout>
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/context_panel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/home_title"
-                android:textColor="@color/opencray_ink"
-                android:textSize="20sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/onboarding_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/context_summary_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/home_feed_label"
-                android:textColor="@color/opencray_ink"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/context_feed_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/home_quick_actions_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/actions_panel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/actions_title"
-                android:textColor="@color/opencray_ink"
-                android:textSize="20sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/planning_snapshot_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/planning_schedule_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/planning_alarm_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/planning_todo_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/task_flow_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <Button
-                    android:id="@+id/run_agent_button"
-                    style="@style/OpenCray.SecondaryButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/run_agent_button" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <EditText
-                    android:id="@+id/host_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/host_hint"
-                    android:inputType="textUri"
-                    android:paddingStart="12dp"
-                    android:paddingTop="10dp"
-                    android:paddingEnd="12dp"
-                    android:paddingBottom="10dp"
+                    android:text="@string/chat_conversation_list_title"
                     android:textColor="@color/opencray_ink"
-                    android:textColorHint="@color/opencray_muted" />
-
-                <EditText
-                    android:id="@+id/port_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/port_hint"
-                    android:inputType="number"
-                    android:paddingStart="12dp"
-                    android:paddingTop="10dp"
-                    android:paddingEnd="12dp"
-                    android:paddingBottom="10dp"
-                    android:textColor="@color/opencray_ink"
-                    android:textColorHint="@color/opencray_muted" />
-
-                <CheckBox
-                    android:id="@+id/tls_toggle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/tls_label" />
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
 
                 <Button
-                    android:id="@+id/connect_button"
+                    android:id="@+id/new_conversation_button"
                     style="@style/OpenCray.PrimaryButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
-                    android:text="@string/connect_button" />
-            </LinearLayout>
+                    android:layout_marginTop="10dp"
+                    android:text="@string/chat_new_conversation" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/capability_label"
-                android:textColor="@color/opencray_ink"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <CheckBox
-                    android:id="@+id/capability_notification_toggle"
+                <ScrollView
+                    android:id="@+id/conversation_list_scroll"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/capability_notification" />
+                    android:layout_height="240dp"
+                    android:layout_marginTop="12dp"
+                    android:clipChildren="true"
+                    android:clipToPadding="true"
+                    android:fillViewport="true"
+                    android:overScrollMode="never"
+                    android:scrollbars="vertical">
 
-                <CheckBox
-                    android:id="@+id/capability_safety_toggle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/capability_safety" />
-            </LinearLayout>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/action_feed_label"
-                android:textColor="@color/opencray_ink"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/action_feed_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <Button
-                android:id="@+id/action_primary_button"
-                style="@style/OpenCray.PrimaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/action_primary" />
-
-            <Button
-                android:id="@+id/action_secondary_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/action_secondary" />
-
-            <Button
-                android:id="@+id/action_tertiary_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/action_tertiary" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/safety_panel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:orientation="vertical"
-            android:visibility="gone">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/safety_title"
-                android:textColor="@color/opencray_ink"
-                android:textSize="20sp"
-                android:textStyle="bold" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_runtime_section"
-                    android:textColor="@color/opencray_primary_dark"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <EditText
-                    android:id="@+id/setting_openai_key_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_openai_key_hint"
-                    android:inputType="textPassword"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_llm_model_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_llm_model_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_llm_base_url_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_llm_base_url_hint"
-                    android:inputType="textUri"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_user_id_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_user_id_hint"
-                    android:padding="10dp" />
+                    <LinearLayout
+                        android:id="@+id/conversation_tabs_container"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:clipChildren="true"
+                        android:clipToPadding="true"
+                        android:orientation="vertical" />
+                </ScrollView>
             </LinearLayout>
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/chat_section_surface"
                 android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_skill_section"
-                    android:textColor="@color/opencray_primary_dark"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <EditText
-                    android:id="@+id/setting_webvpn_cookie_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_webvpn_cookie_hint"
-                    android:inputType="textPassword"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_webvpn_csrf_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_webvpn_csrf_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_campus_file_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_campus_file_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_search_provider_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_search_provider_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_search_endpoint_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_search_endpoint_hint"
-                    android:inputType="textUri"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_search_api_key_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_search_api_key_hint"
-                    android:inputType="textPassword"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_search_ttl_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_search_ttl_hint"
-                    android:inputType="number"
-                    android:padding="10dp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_memory_section"
-                    android:textColor="@color/opencray_primary_dark"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <EditText
-                    android:id="@+id/setting_memory_file_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_memory_file_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_memory_long_ttl_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_memory_long_ttl_hint"
-                    android:inputType="number"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_memory_mid_ttl_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_memory_mid_ttl_hint"
-                    android:inputType="number"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_memory_short_ttl_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_memory_short_ttl_hint"
-                    android:inputType="number"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_memory_half_life_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_memory_half_life_hint"
-                    android:inputType="numberDecimal"
-                    android:padding="10dp" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/settings_device_section"
-                    android:textColor="@color/opencray_primary_dark"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <EditText
-                    android:id="@+id/setting_adb_bin_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_adb_bin_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_adb_serial_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_adb_serial_hint"
-                    android:padding="10dp" />
-
-                <EditText
-                    android:id="@+id/setting_timezone_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/input_field_surface"
-                    android:hint="@string/setting_timezone_hint"
-                    android:padding="10dp" />
-            </LinearLayout>
-
-            <Button
-                android:id="@+id/save_settings_button"
-                style="@style/OpenCray.PrimaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/connect_button" />
-
-            <Button
-                android:id="@+id/test_settings_button"
-                style="@style/OpenCray.SecondaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/settings_connection_test" />
-
-            <TextView
-                android:id="@+id/settings_privacy_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <LinearLayout
-                android:id="@+id/preference_panel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/panel_surface"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/preference_title"
-                    android:textColor="@color/opencray_primary_dark"
-                    android:textSize="18sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/preference_subtitle"
-                    android:textColor="@color/opencray_muted"
-                    android:textSize="13sp" />
+                android:padding="14dp">
 
                 <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/quick_skills_title"
+                        android:textColor="@color/opencray_ink"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/quick_skills_toggle"
+                        style="@style/OpenCray.SecondaryButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:minWidth="0dp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/quick_skills_container"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
@@ -928,204 +1446,52 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:paddingTop="8dp"
-                        android:paddingBottom="8dp">
+                        android:orientation="horizontal">
 
-                        <TextView
+                        <Button
+                            android:id="@+id/skill_card_1"
+                            style="@style/OpenCray.SkillCard"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="• 你更偏好白天的校园活动，晚间活动仅在强相关时提醒。"
-                            android:textColor="@color/opencray_ink"
-                            android:textSize="14sp" />
+                            android:text="@string/skill_placeholder_1" />
 
                         <Button
-                            android:id="@+id/preference_delete_1"
-                            style="@style/OpenCray.SecondaryButton"
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:layout_marginStart="8dp"
-                            android:minWidth="0dp"
-                            android:padding="0dp"
-                            android:text="×" />
+                            android:id="@+id/skill_card_2"
+                            style="@style/OpenCray.SkillCard"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:text="@string/skill_placeholder_2" />
                     </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:paddingTop="8dp"
-                        android:paddingBottom="8dp">
+                        android:layout_marginTop="10dp"
+                        android:orientation="horizontal">
 
-                        <TextView
+                        <Button
+                            android:id="@+id/skill_card_3"
+                            style="@style/OpenCray.SkillCard"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="• DDL、考试和课程调整属于高优先级提醒。"
-                            android:textColor="@color/opencray_ink"
-                            android:textSize="14sp" />
+                            android:text="@string/skill_placeholder_3" />
 
                         <Button
-                            android:id="@+id/preference_delete_2"
-                            style="@style/OpenCray.SecondaryButton"
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:layout_marginStart="8dp"
-                            android:minWidth="0dp"
-                            android:padding="0dp"
-                            android:text="×" />
-                    </LinearLayout>
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal"
-                        android:paddingTop="8dp"
-                        android:paddingBottom="8dp">
-
-                        <TextView
+                            android:id="@+id/skill_card_4"
+                            style="@style/OpenCray.SkillCard"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
                             android:layout_weight="1"
-                            android:text="• 推荐讲座时优先考虑 AI、系统、移动开发相关主题。"
-                            android:textColor="@color/opencray_ink"
-                            android:textSize="14sp" />
-
-                        <Button
-                            android:id="@+id/preference_delete_3"
-                            style="@style/OpenCray.SecondaryButton"
-                            android:layout_width="40dp"
-                            android:layout_height="40dp"
-                            android:layout_marginStart="8dp"
-                            android:minWidth="0dp"
-                            android:padding="0dp"
-                            android:text="×" />
+                            android:text="@string/skill_placeholder_4" />
                     </LinearLayout>
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/chat_input_surface"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingStart="12dp"
-                    android:paddingTop="8dp"
-                    android:paddingEnd="8dp"
-                    android:paddingBottom="8dp">
-
-                    <EditText
-                        android:id="@+id/preference_input"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:background="@android:color/transparent"
-                        android:hint="@string/preference_hint"
-                        android:inputType="text"
-                        android:maxLines="2"
-                        android:minLines="1"
-                        android:padding="0dp"
-                        android:textColor="@color/opencray_ink"
-                        android:textColorHint="@color/opencray_muted" />
-
-                    <Button
-                        android:id="@+id/preference_add_button"
-                        style="@style/OpenCray.PrimaryButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:minWidth="0dp"
-                        android:paddingStart="12dp"
-                        android:paddingEnd="12dp"
-                        android:text="@string/preference_add" />
                 </LinearLayout>
             </LinearLayout>
-
-            <TextView
-                android:id="@+id/safety_feed_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
-
-            <Button
-                android:id="@+id/approve_button"
-                style="@style/OpenCray.PrimaryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="@string/approve_button" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:text="@string/events_label"
-                android:textColor="@color/opencray_ink"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/events_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:layout_marginBottom="24dp"
-                android:background="@drawable/panel_surface"
-                android:padding="16dp"
-                android:textColor="@color/opencray_ink"
-                android:textSize="15sp" />
         </LinearLayout>
-
-    </LinearLayout>
     </ScrollView>
 
-    <LinearLayout
-        android:id="@+id/bottom_tabs"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="@drawable/panel_surface"
-        android:elevation="16dp"
-        android:orientation="horizontal"
-        android:paddingStart="12dp"
-        android:paddingTop="10dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="10dp">
-
-        <Button
-            android:id="@+id/chat_tab"
-            style="@style/OpenCray.TabButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/tab_chat" />
-
-        <Button
-            android:id="@+id/planning_tab"
-            style="@style/OpenCray.TabButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="@string/tab_planning" />
-
-        <Button
-            android:id="@+id/settings_tab"
-            style="@style/OpenCray.TabButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="@string/tab_settings" />
-    </LinearLayout>
-
-</FrameLayout>
+</androidx.drawerlayout.widget.DrawerLayout>
