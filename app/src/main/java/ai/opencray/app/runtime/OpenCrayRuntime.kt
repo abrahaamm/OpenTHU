@@ -31,6 +31,8 @@ import org.json.JSONObject
 import java.io.File
 import kotlin.concurrent.thread
 import java.util.UUID
+import kotlin.math.min
+import java.util.Locale
 
 /**
  * Delegate that allows the runtime to request Android runtime permissions from an Activity.
@@ -101,6 +103,24 @@ class OpenCrayRuntime(
     skillId: String,
     args: Map<String, String> = emptyMap(),
   ) {
+    // Prefer the same plan/execute pipeline as chat so quick skills are genuinely usable.
+    val quickGoal =
+      when (skillId) {
+        "get_campus_activities" -> "请获取最近校园活动并给出摘要"
+        "read_notifications" -> "请读取当前未读通知并总结"
+        "create_reminder" -> "请创建提醒事项"
+        "create_calendar_event" -> "请创建一个日历事项并处理冲突"
+        "set_alarm" -> "请设置一个闹钟提醒"
+        "search" -> "请搜索相关信息并总结"
+        else -> null
+      }
+    if (quickGoal != null) {
+      if (planGoal(quickGoal)) {
+        runActions()
+      }
+      return
+    }
+
     val argLabel =
       if (args.isEmpty()) {
         "{}"
@@ -245,16 +265,64 @@ class OpenCrayRuntime(
     runActions()
   }
 
-  fun planGoal(goal: String) {
+  fun planGoal(goal: String): Boolean {
     val normalizedGoal = goal.trim()
-    if (normalizedGoal.isEmpty()) return
+    if (normalizedGoal.isEmpty()) return false
 
     chatRepository.sendMessage(normalizedGoal)
+    if (isSmallTalk(normalizedGoal)) {
+      streamAssistant(replySmallTalk(normalizedGoal))
+      return false
+    }
+    streamAssistant("收到，我来帮你处理。")
 
     if (gatewayRegistered) {
       planGoalViaGateway(normalizedGoal)
-    } else {
-      planGoalLocally(normalizedGoal)
+      return false
+    }
+
+    planGoalLocally(normalizedGoal)
+    return true
+  }
+
+  private fun isSmallTalk(text: String): Boolean {
+    val normalized = text.trim().lowercase(Locale.getDefault())
+    val greetings = setOf("hi", "hello", "hey", "你好", "嗨", "在吗", "早上好", "晚上好")
+    val identityQueries = setOf("who are you", "what are you", "你是谁", "你是做什么的", "你是干嘛的")
+    if (normalized in greetings) return true
+    if (identityQueries.any { normalized.contains(it) }) return true
+    return normalized.length <= 12 && greetings.any { normalized.contains(it) }
+  }
+
+  private fun replySmallTalk(text: String): String {
+    val normalized = text.trim().lowercase(Locale.getDefault())
+    return when {
+      normalized.contains("hello") || normalized.contains("hi") || normalized.contains("hey") ->
+        "Hello！我在这儿。你想让我帮你处理什么任务？"
+      normalized.contains("who are you") || normalized.contains("what are you") || normalized.contains("你是谁") ->
+        "我是你的 OpenTHU 助手，能帮你处理校园信息、提醒、日历和通知相关任务。你可以直接告诉我目标。"
+      else -> "我在，随时可以开始。你可以直接说你的目标，我会一步步帮你完成。"
+    }
+  }
+
+  private fun streamAssistant(
+    text: String,
+    chunkSize: Int = 12,
+    intervalMs: Long = 35L,
+  ) {
+    if (text.isBlank()) return
+    val messageId = chatRepository.appendMessage(ChatRole.Assistant, "…")
+    if (messageId.isBlank()) return
+    val builder = StringBuilder()
+    var index = 0
+    while (index < text.length) {
+      val next = min(text.length, index + chunkSize)
+      builder.append(text.substring(index, next))
+      chatRepository.updateMessage(messageId, builder.toString())
+      index = next
+      if (index < text.length) {
+        Thread.sleep(intervalMs)
+      }
     }
   }
 
@@ -276,11 +344,15 @@ class OpenCrayRuntime(
       "get_current_time",
       "set_alarm",
       "get_campus_activities",
+      "search",
       "create_calendar_event",
       "detect_calendar_conflicts",
       "delete_calendar_event",
       "open_url",
       "read_notifications",
+      "create_reminder",
+      "show_summary",
+      "send_notification",
     )
 
   private fun currentGatewayConfig(): GatewayConfig {
@@ -290,6 +362,42 @@ class OpenCrayRuntime(
       port = current.port,
       tlsEnabled = current.tlsEnabled,
     )
+  }
+
+  private fun buildGatewaySession(): Map<String, Any?> {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    val cookie = pref.getString("webvpn_cookie", "").orEmpty().trim()
+    val csrf = pref.getString("webvpn_csrf", "").orEmpty().trim()
+    val openAiKey = pref.getString("openai_api_key", "").orEmpty().trim()
+    val model = pref.getString("llm_model", "").orEmpty().trim()
+    val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
+    val userId = pref.getString("user_id", "").orEmpty().trim()
+    val campusFile = pref.getString("campus_file", "").orEmpty().trim()
+    val searchProvider = pref.getString("search_provider", "").orEmpty().trim()
+    val searchEndpoint = pref.getString("search_endpoint", "").orEmpty().trim()
+    val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
+    val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
+
+    val session = linkedMapOf<String, Any?>()
+    if (cookie.isNotEmpty()) {
+      session["cookie"] = cookie
+      session["webvpn_cookie"] = cookie
+      session["info_cookie"] = cookie
+    }
+    if (csrf.isNotEmpty()) {
+      session["csrf"] = csrf
+      session["csrf_token"] = csrf
+    }
+    if (openAiKey.isNotEmpty()) session["openai_api_key"] = openAiKey
+    if (model.isNotEmpty()) session["llm_model"] = model
+    if (baseUrl.isNotEmpty()) session["llm_base_url"] = baseUrl
+    if (userId.isNotEmpty()) session["user_id"] = userId
+    if (campusFile.isNotEmpty()) session["campus_file"] = campusFile
+    if (searchProvider.isNotEmpty()) session["search_provider"] = searchProvider
+    if (searchEndpoint.isNotEmpty()) session["search_endpoint"] = searchEndpoint
+    if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
+    if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
+    return session
   }
 
   private fun planGoalViaGateway(goal: String) {
@@ -302,6 +410,7 @@ class OpenCrayRuntime(
           deviceId = deviceId,
           goal = goal,
           approveSensitive = true,
+          session = buildGatewaySession(),
         )
       if (!result.success || result.data == null) {
         gatewayRegistered = false
@@ -310,9 +419,11 @@ class OpenCrayRuntime(
         runtimeRepository.appendEvent("Gateway plan failed: $errorMsg")
         chatRepository.appendMessage(ChatRole.System, "服务端规划失败，回落到本地规划。\n\n[排错信息]\n原因：$errorMsg")
         planGoalLocally(goal)
+        runActionsLocally(actionIds = null, submitGatewayResult = false)
         return@thread
       }
       applyGatewayPlan(goal = goal, data = result.data)
+      runGatewayDispatchLoop()
     }
   }
 
@@ -370,10 +481,12 @@ class OpenCrayRuntime(
         recentEvents = listOf("Gateway planned task ${task.id}.") + current.recentEvents,
       ),
     )
-    chatRepository.appendMessage(
-      ChatRole.Assistant,
-      "服务端规划完成：${approvedActions.size} 个可执行动作，${blockedActions.size} 个被拦截动作。",
-    )
+    val blockedCount = blockedActions.size
+    if (blockedCount > 0) {
+      streamAssistant("我已经规划好了，当前有 ${approvedActions.size} 个动作可直接执行，另有 $blockedCount 个动作需要你确认。")
+    } else {
+      streamAssistant("我已经规划好了，开始执行。")
+    }
   }
 
   private fun planGoalLocally(goal: String) {
@@ -441,10 +554,12 @@ class OpenCrayRuntime(
       ),
     )
 
-    chatRepository.appendMessage(
-      ChatRole.Assistant,
-      "已完成任务规划：${actionsWithReviewStatus.size} 个动作，${safetyRecords.count { it.status == "Awaiting approval" }} 个需确认。",
-    )
+    val pendingCount = safetyRecords.count { it.status == "Awaiting approval" }
+    if (pendingCount > 0) {
+      streamAssistant("我已经规划完成，接下来有 $pendingCount 个动作需要你确认后继续。")
+    } else {
+      streamAssistant("我已经规划完成，正在继续执行。")
+    }
   }
 
   private fun runGatewayDispatchLoop() {
@@ -661,12 +776,11 @@ class OpenCrayRuntime(
       ),
     )
 
-    chatRepository.appendMessage(
-      ChatRole.System,
+    streamAssistant(
       if (completed) {
-        "任务执行完成，可在 Safety 面板查看审计轨迹。"
+        "任务已经完成。需要的话我可以继续帮你做下一步。"
       } else {
-        "任务部分完成，仍有待确认或待执行动作。"
+        "这一步已经处理了一部分，剩下的我会继续跟进。"
       },
     )
   }
@@ -728,12 +842,20 @@ class OpenCrayRuntime(
       submitGatewayResultAsync(taskId = task.id, action = action, report = report)
     }
 
-    // append to chat
-    val statusText = if (report.success) "成功" else "失败"
-    chatRepository.appendMessage(
-      ChatRole.System,
-      "动作 '${action.title}' 执行$statusText：\n${report.message}"
-    )
+    val userFacingMessage =
+      when {
+        needsConflictResolution ->
+          "我发现这个日程和现有安排有冲突。你可以选择：跳过创建、共存，或删除冲突事项后再创建。"
+        report.success && action.id.substringBefore("#") == "show_summary" ->
+          report.message
+        report.success ->
+          "已完成：${action.title}"
+        report.message.contains("permission", ignoreCase = true) ->
+          "这个操作需要系统权限。请先授权后我会继续。"
+        else ->
+          "这个操作没有成功，我已经记录原因并会尝试给你替代方案。"
+      }
+    streamAssistant(userFacingMessage)
   }
 
   /**

@@ -62,6 +62,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   private fun buildUiState(): MainUiState {
+    val runtimeMessages = runtime.chatMessages()
+    if (runtimeMessages.isNotEmpty() && conversations[selectedConversationId]?.messages != runtimeMessages) {
+      upsertCurrentConversation(runtimeMessages)
+    }
     val snapshot = runtime.snapshot()
     return MainUiState(
       currentDestination = selectedDestination,
@@ -75,7 +79,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       tasks = snapshot.tasks,
       memoryRecords = snapshot.memoryRecords,
       auditTrail = snapshot.auditTrail,
-      chatMessages = currentConversationMessages(),
+      chatMessages = runtimeMessages,
       conversationSummaries = conversationSummaries(),
       selectedConversationId = selectedConversationId,
       pendingConflict = snapshot.pendingConflict,
@@ -103,9 +107,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun sendChatMessage(text: String) {
     val normalized = text.trim()
     if (normalized.isEmpty()) return
-    runtime.planGoal(normalized)
+    val planned = runtime.planGoal(normalized)
+    if (planned) {
+      runtime.runActions()
+    }
     upsertCurrentConversation(runtime.chatMessages())
-    selectedDestination = AppDestination.Planning
+    selectedDestination = AppDestination.Chat
   }
 
   /**

@@ -31,17 +31,34 @@ class FakeChatRepository : ChatRepository {
   override fun appendMessage(
     role: ChatRole,
     text: String,
-  ) {
+  ): String {
     val trimmed = text.trim()
-    if (trimmed.isEmpty()) return
+    if (trimmed.isEmpty()) return ""
 
+    val messageId = UUID.randomUUID().toString()
     messages =
       messages +
         ChatMessage(
-          id = UUID.randomUUID().toString(),
+          id = messageId,
           role = role,
           text = trimmed,
         )
+    return messageId
+  }
+
+  override fun updateMessage(
+    messageId: String,
+    text: String,
+  ) {
+    if (messageId.isBlank()) return
+    messages =
+      messages.map { message ->
+        if (message.id == messageId) {
+          message.copy(text = text)
+        } else {
+          message
+        }
+      }
   }
 
   override fun clearMessages() {

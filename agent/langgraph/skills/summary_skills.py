@@ -66,6 +66,30 @@ class SendNotificationSkill(SkillHandler):
         )
 
 
+class CreateReminderSkill(SkillHandler):
+    def invoke(
+        self,
+        invocation: SkillInvocation,
+        session: dict[str, Any],
+        state: dict[str, Any],
+    ) -> SkillResult:
+        args = dict(invocation.args or {})
+        return SkillResult(
+            skill_name=invocation.skill_name,
+            request_id=invocation.request_id,
+            code="OK",
+            data={
+                "reminder_id": f"rem_{uuid4().hex[:10]}",
+                "status": "queued",
+                "title": str(args.get("title", "OpenTHU 提醒")).strip(),
+                "due_time": str(args.get("due_time", "")).strip(),
+            },
+            from_cache=False,
+            fetched_at=_utc_now(),
+            source="local_reminder",
+        )
+
+
 class OpenUrlSkill(SkillHandler):
     def invoke(
         self,

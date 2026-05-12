@@ -80,16 +80,24 @@ class RequirementLLM:
         self.last_mode = "fallback"
         self.last_error = ""
 
-    def normalize(self, user_input: str) -> dict[str, Any]:
-        openai_key = os.getenv("OPENAI_API_KEY")
+    def normalize(
+        self,
+        user_input: str,
+        api_key: str = "",
+        model: str = "",
+        base_url: str = "",
+    ) -> dict[str, Any]:
+        openai_key = (api_key or os.getenv("OPENAI_API_KEY", "")).strip()
         if not openai_key:
             return self._fallback(user_input)
+        resolved_model = (model or self.model).strip()
+        resolved_base_url = (base_url or self.base_url).strip()
 
         try:
             from openai import OpenAI
 
-            if self.base_url:
-                client = OpenAI(api_key=openai_key, base_url=self.base_url)
+            if resolved_base_url:
+                client = OpenAI(api_key=openai_key, base_url=resolved_base_url)
             else:
                 client = OpenAI(api_key=openai_key)
             system_prompt = (
@@ -97,10 +105,10 @@ class RequirementLLM:
                 "objective, entities, constraints, success_criteria, sensitivity. "
                 "Use concise, execution-oriented values. Return JSON only."
             )
-            if not self.base_url:
+            if not resolved_base_url:
                 try:
                     response = client.responses.create(
-                        model=self.model,
+                        model=resolved_model,
                         input=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_input},
@@ -114,7 +122,7 @@ class RequirementLLM:
                 except Exception:
                     pass
             completion = client.chat.completions.create(
-                model=self.model,
+                model=resolved_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_input},
@@ -151,8 +159,24 @@ class RequirementLLM:
             entities.append("assignments")
         if any(token in lower for token in ["课程", "课表", "上课", "course", "schedule"]):
             entities.append("courses")
-        if any(token in lower for token in ["通知", "公告", "notice", "消息", "门户"]):
+        system_notification_intent = any(
+            token in lower
+            for token in [
+                "未读通知",
+                "系统通知",
+                "手机通知",
+                "通知栏",
+                "读取通知",
+                "读通知",
+                "read notifications",
+                "unread notification",
+                "unread notifications",
+            ]
+        )
+        if any(token in lower for token in ["通知", "公告", "notice", "消息", "门户"]) and not system_notification_intent:
             entities.append("notices")
+        if system_notification_intent:
+            entities.append("system_notifications")
         if any(token in lower for token in ["文件", "课件", "资料", "file"]):
             entities.append("files")
         if any(token in lower for token in ["活动", "讲座", "资讯", "校园", "activity", "news"]):
@@ -408,7 +432,13 @@ class OpenTHULangGraphAgent:
             state.get("task_id", ""),
             state["user_input"][:100],
         )
-        raw_prompt = self.llm.normalize(state["user_input"])
+        api_key, model, base_url = self._llm_config_from_state(state)
+        raw_prompt = self.llm.normalize(
+            state["user_input"],
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
         standardized, warnings = self._coerce_structured_prompt(
             raw_prompt,
             fallback_text=state["user_input"],
@@ -904,7 +934,7 @@ class OpenTHULangGraphAgent:
         state: AgentState,
         structured_prompt: StructuredPrompt,
     ) -> list[dict[str, Any]]:
-        openai_key = os.getenv("OPENAI_API_KEY")
+        openai_key, llm_model, llm_base_url = self._llm_config_from_state(state)
         if not openai_key:
             logger.debug("[llm.planner] OPENAI_API_KEY not set, skipping LLM planning")
             return []
@@ -927,18 +957,18 @@ class OpenTHULangGraphAgent:
         try:
             from openai import OpenAI
 
-            client = self._create_openai_client(OpenAI, openai_key)
+            client = self._create_openai_client(OpenAI, openai_key, base_url=llm_base_url)
             user_content = json.dumps(payload, ensure_ascii=False)
             logger.debug(
                 "[llm.planner] task_id=%s calling model=%s entities=%s",
                 state.get("task_id", ""),
-                self.llm.model,
+                llm_model,
                 structured_prompt.get("entities", []),
             )
-            if not self.llm.base_url:
+            if not llm_base_url:
                 try:
                     response = client.responses.create(
-                        model=self.llm.model,
+                        model=llm_model,
                         input=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_content},
@@ -951,7 +981,7 @@ class OpenTHULangGraphAgent:
                 except Exception as e:
                     logger.debug("[llm.planner] responses API failed (%s), falling back to chat.completions", e)
                     completion = client.chat.completions.create(
-                        model=self.llm.model,
+                        model=llm_model,
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_content},
@@ -963,7 +993,7 @@ class OpenTHULangGraphAgent:
                     logger.debug("[llm.planner] chat.completions succeeded task_id=%s", state.get("task_id", ""))
             else:
                 completion = client.chat.completions.create(
-                    model=self.llm.model,
+                    model=llm_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content},
@@ -1174,6 +1204,21 @@ class OpenTHULangGraphAgent:
                     "body": objective[:80],
                 },
                 "向用户发送本地通知",
+            )
+        if "system_notifications" in entities:
+            append_skill(
+                "read_notifications",
+                {},
+                "读取当前未读系统通知",
+            )
+            append_skill(
+                "show_summary",
+                {
+                    "title": "系统通知摘要",
+                    "content": "已读取当前系统通知并准备展示。",
+                    "format": "plain",
+                },
+                "汇总系统通知读取结果",
             )
 
         extracted_url = self._extract_url(objective)
@@ -1477,9 +1522,28 @@ class OpenTHULangGraphAgent:
             stripped = "\n".join(lines).strip()
         return stripped
 
-    def _create_openai_client(self, openai_cls: Any, api_key: str) -> Any:
-        if self.llm.base_url:
-            return openai_cls(api_key=api_key, base_url=self.llm.base_url)
+    def _llm_config_from_state(self, state: AgentState) -> tuple[str, str, str]:
+        session = state.get("session", {})
+        if not isinstance(session, dict):
+            session = {}
+        api_key = str(
+            session.get("openai_api_key")
+            or session.get("OPENAI_API_KEY")
+            or os.getenv("OPENAI_API_KEY", "")
+        ).strip()
+        model = str(session.get("llm_model") or self.llm.model).strip()
+        base_url = str(session.get("llm_base_url") or self.llm.base_url).strip()
+        return api_key, model, base_url
+
+    def _create_openai_client(
+        self,
+        openai_cls: Any,
+        api_key: str,
+        base_url: str = "",
+    ) -> Any:
+        resolved_base_url = base_url.strip()
+        if resolved_base_url:
+            return openai_cls(api_key=api_key, base_url=resolved_base_url)
         return openai_cls(api_key=api_key)
 
     def _append_trace(

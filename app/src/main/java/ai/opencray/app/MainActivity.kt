@@ -3,6 +3,8 @@ package ai.opencray.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -55,6 +57,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var actionsPanel: LinearLayout
   private lateinit var safetyPanel: LinearLayout
   private lateinit var chatPanel: LinearLayout
+  private lateinit var mainScroll: ScrollView
   private lateinit var chatHistoryScroll: ScrollView
   private lateinit var chatHistoryContainer: LinearLayout
   private lateinit var conversationTabsContainer: LinearLayout
@@ -70,6 +73,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var skillCard2: Button
   private lateinit var skillCard3: Button
   private lateinit var skillCard4: Button
+  private lateinit var quickSkillsToggle: Button
+  private lateinit var quickSkillsContainer: LinearLayout
   private lateinit var chatTab: Button
   private lateinit var planningTab: Button
   private lateinit var settingsTab: Button
@@ -102,6 +107,14 @@ class MainActivity : AppCompatActivity() {
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneInput: EditText
+  private val uiRefreshHandler = Handler(Looper.getMainLooper())
+  private val uiRefreshTicker =
+    object : Runnable {
+      override fun run() {
+        render()
+        uiRefreshHandler.postDelayed(this, 150L)
+      }
+    }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -128,6 +141,12 @@ class MainActivity : AppCompatActivity() {
     decorateUi()
     bindActions()
     render()
+    uiRefreshHandler.post(uiRefreshTicker)
+  }
+
+  override fun onDestroy() {
+    uiRefreshHandler.removeCallbacks(uiRefreshTicker)
+    super.onDestroy()
   }
 
   private fun bindViews() {
@@ -149,6 +168,7 @@ class MainActivity : AppCompatActivity() {
     actionsPanel = findViewById(R.id.actions_panel)
     safetyPanel = findViewById(R.id.safety_panel)
     chatPanel = findViewById(R.id.chat_panel)
+    mainScroll = findViewById(R.id.main)
     chatHistoryScroll = findViewById(R.id.chat_history_scroll)
     chatHistoryContainer = findViewById(R.id.chat_history_container)
     chatInput = findViewById(R.id.chat_input)
@@ -162,6 +182,8 @@ class MainActivity : AppCompatActivity() {
     skillCard2 = findViewById(R.id.skill_card_2)
     skillCard3 = findViewById(R.id.skill_card_3)
     skillCard4 = findViewById(R.id.skill_card_4)
+    quickSkillsToggle = findViewById(R.id.quick_skills_toggle)
+    quickSkillsContainer = findViewById(R.id.quick_skills_container)
     chatTab = findViewById(R.id.chat_tab)
     planningTab = findViewById(R.id.planning_tab)
     settingsTab = findViewById(R.id.settings_tab)
@@ -271,8 +293,43 @@ class MainActivity : AppCompatActivity() {
     chatHistoryScroll.clipChildren = true
     chatHistoryContainer.clipToPadding = true
     chatHistoryContainer.clipChildren = true
-    findViewById<ScrollView>(R.id.quick_skills_scroll).clipToPadding = true
-    findViewById<ScrollView>(R.id.quick_skills_scroll).clipChildren = true
+    val quickSkillsScroll = findViewById<ScrollView>(R.id.quick_skills_scroll)
+    quickSkillsScroll.clipToPadding = true
+    quickSkillsScroll.clipChildren = true
+
+    // Nested ScrollView fix: keep touch focus inside inner scroll areas so emulator
+    // gestures do not get hijacked by the outer page ScrollView.
+    installNestedScrollLock(chatHistoryScroll)
+    installNestedScrollLock(quickSkillsScroll)
+    chatPanel.setOnTouchListener { view, event ->
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN,
+        MotionEvent.ACTION_MOVE,
+        -> view.parent?.requestDisallowInterceptTouchEvent(true)
+        MotionEvent.ACTION_UP,
+        MotionEvent.ACTION_CANCEL,
+        -> view.parent?.requestDisallowInterceptTouchEvent(false)
+      }
+      false
+    }
+  }
+
+  private fun installNestedScrollLock(innerScroll: ScrollView) {
+    innerScroll.setOnTouchListener { view, event ->
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN,
+        MotionEvent.ACTION_MOVE,
+        -> {
+          view.parent?.requestDisallowInterceptTouchEvent(true)
+        }
+        MotionEvent.ACTION_UP,
+        MotionEvent.ACTION_CANCEL,
+        -> {
+          view.parent?.requestDisallowInterceptTouchEvent(false)
+        }
+      }
+      false
+    }
   }
 
   private fun bindActions() {
@@ -304,6 +361,10 @@ class MainActivity : AppCompatActivity() {
     bindSkillPlaceholder(skillCard2, "get_campus_activities")
     bindSkillPlaceholder(skillCard3, "create_calendar_event")
     bindSkillPlaceholder(skillCard4, "read_notifications")
+    quickSkillsToggle.setOnClickListener {
+      quickSkillsContainer.visibility =
+        if (quickSkillsContainer.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+    }
 
     val preferencePlaceholderListener = View.OnClickListener {
       Toast.makeText(this, getString(R.string.preference_waiting), Toast.LENGTH_SHORT).show()
@@ -614,6 +675,9 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun renderChatHistory(messages: List<ChatMessage>) {
+    // Keep auto-stick-to-bottom behavior only when user is already at bottom.
+    // If user has scrolled up to read history, do not force jump back.
+    val shouldStickToBottom = !chatHistoryScroll.canScrollVertically(1)
     chatHistoryContainer.removeAllViews()
 
     val renderedMessages =
@@ -631,8 +695,10 @@ class MainActivity : AppCompatActivity() {
       chatHistoryContainer.addView(createMessageBubble(message))
     }
 
-    chatHistoryScroll.post {
-      chatHistoryScroll.fullScroll(View.FOCUS_DOWN)
+    if (shouldStickToBottom) {
+      chatHistoryScroll.post {
+        chatHistoryScroll.fullScroll(View.FOCUS_DOWN)
+      }
     }
   }
 

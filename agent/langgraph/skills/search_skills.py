@@ -123,7 +123,7 @@ class SearchSkill(SkillHandler):
             warnings.append(f"Scope `{scope}` is not implemented yet; using web search.")
 
         try:
-            provider = _build_provider()
+            provider = _build_provider(session=session)
             results, supplemental, search_from_cache = search_with_scene(
                 provider=provider,
                 query=query,
@@ -362,23 +362,53 @@ class BraveSearchProvider(SearchProvider):
         return results, False
 
 
-def _build_provider() -> SearchProvider:
-    provider = os.getenv("OPENTHU_SEARCH_PROVIDER", "duckduckgo").strip().lower() or "duckduckgo"
+def _session_or_env(
+    session: dict[str, Any] | None,
+    session_key: str,
+    env_key: str,
+    default: str = "",
+) -> str:
+    if isinstance(session, dict):
+        raw = session.get(session_key)
+        if raw is not None:
+            value = str(raw).strip()
+            if value:
+                return value
+    return os.getenv(env_key, default).strip()
+
+
+def _build_provider(session: dict[str, Any] | None = None) -> SearchProvider:
+    provider = _session_or_env(
+        session,
+        "search_provider",
+        "OPENTHU_SEARCH_PROVIDER",
+        "duckduckgo",
+    ).lower() or "duckduckgo"
     if provider == "mock":
         return MockSearchProvider()
     if provider == "duckduckgo":
-        endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "https://duckduckgo.com/html/").strip()
+        endpoint = _session_or_env(
+            session,
+            "search_endpoint",
+            "OPENTHU_SEARCH_ENDPOINT",
+            "https://duckduckgo.com/html/",
+        )
         return DuckDuckGoSearchProvider(endpoint)
     if provider == "searxng":
-        endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "").strip()
+        endpoint = _session_or_env(session, "search_endpoint", "OPENTHU_SEARCH_ENDPOINT", "")
         if not endpoint:
             raise SearchProviderError("OPENTHU_SEARCH_ENDPOINT is required for searxng provider")
         return SearxngSearchProvider(endpoint)
     if provider == "brave":
-        api_key = os.getenv("OPENTHU_SEARCH_API_KEY", "").strip()
+        api_key = _session_or_env(session, "search_api_key", "OPENTHU_SEARCH_API_KEY", "")
         if not api_key:
             raise SearchProviderError("OPENTHU_SEARCH_API_KEY is required for brave provider")
-        endpoint = os.getenv("OPENTHU_SEARCH_ENDPOINT", "https://api.search.brave.com/res/v1/web/search").strip()
+        endpoint = _session_or_env(
+            session,
+            "search_endpoint",
+            "OPENTHU_SEARCH_ENDPOINT",
+            "https://api.search.brave.com/res/v1/web/search",
+        )
         return BraveSearchProvider(api_key, endpoint)
     raise SearchProviderError(f"Unsupported search provider `{provider}`")
 

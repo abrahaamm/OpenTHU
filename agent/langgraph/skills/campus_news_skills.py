@@ -69,8 +69,15 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _load_configured_activities() -> tuple[list[dict[str, Any]], str]:
-    raw_path = os.getenv("OPENTHU_CAMPUS_ACTIVITIES_FILE", "").strip()
+def _load_configured_activities(session: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    raw_path = ""
+    for key in ("campus_file", "campus_activities_file"):
+        value = session.get(key)
+        if value is not None and str(value).strip():
+            raw_path = str(value).strip()
+            break
+    if not raw_path:
+        raw_path = os.getenv("OPENTHU_CAMPUS_ACTIVITIES_FILE", "").strip()
     if not raw_path:
         return [], ""
 
@@ -187,7 +194,7 @@ class CampusActivitiesSkill(SkillHandler):
         warnings.extend(info_warnings)
 
         try:
-            configured_activities, configured_source = _load_configured_activities()
+            configured_activities, configured_source = _load_configured_activities(session)
             if configured_source:
                 sources.append({"type": "configured_file", "path": configured_source, "status": "ok", "count": len(configured_activities)})
         except Exception as exc:
