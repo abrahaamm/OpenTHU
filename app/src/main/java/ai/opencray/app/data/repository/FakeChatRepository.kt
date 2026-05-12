@@ -6,17 +6,46 @@ import ai.opencray.app.feature.chat.AgentEvent
 import java.util.UUID
 
 class FakeChatRepository : ChatRepository {
-  private var messages =
-    listOf(
-      ChatMessage(
-        id = UUID.randomUUID().toString(),
-        role = ChatRole.Assistant,
-        text = "你好，我是 OpenTHU。你可以像聊天一样和我说话，也可以直接让我处理提醒、日历、校园活动、搜索或系统通知。",
-      ),
+  private var activeConversationId = DEFAULT_CONVERSATION_ID
+  private var conversations =
+    linkedMapOf(
+      DEFAULT_CONVERSATION_ID to
+        listOf(
+          ChatMessage(
+            id = UUID.randomUUID().toString(),
+            role = ChatRole.Assistant,
+            text = "你好，我是 OpenTHU。你可以像聊天一样和我说话，也可以直接让我处理提醒、日历、校园活动、搜索或系统通知。",
+          ),
+        ),
     )
 
-  override fun getMessages(): List<ChatMessage> = messages
+  @Synchronized
+  override fun getActiveConversationId(): String = activeConversationId
 
+  @Synchronized
+  override fun getMessages(): List<ChatMessage> = conversations[activeConversationId].orEmpty()
+
+  @Synchronized
+  override fun getMessages(conversationId: String): List<ChatMessage> = conversations[conversationId].orEmpty()
+
+  @Synchronized
+  override fun createConversation(
+    conversationId: String,
+    initialMessages: List<ChatMessage>,
+  ) {
+    if (conversationId.isBlank()) return
+    conversations[conversationId] = initialMessages
+    activeConversationId = conversationId
+  }
+
+  @Synchronized
+  override fun selectConversation(conversationId: String): Boolean {
+    if (!conversations.containsKey(conversationId)) return false
+    activeConversationId = conversationId
+    return true
+  }
+
+  @Synchronized
   override fun sendMessage(text: String) {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return
@@ -24,6 +53,7 @@ class FakeChatRepository : ChatRepository {
     appendMessage(ChatRole.User, trimmed)
   }
 
+  @Synchronized
   override fun appendMessage(
     role: ChatRole,
     text: String,
@@ -32,7 +62,8 @@ class FakeChatRepository : ChatRepository {
     if (trimmed.isEmpty()) return ""
 
     val messageId = UUID.randomUUID().toString()
-    messages =
+    val messages = conversations[activeConversationId].orEmpty()
+    conversations[activeConversationId] =
       messages +
         ChatMessage(
           id = messageId,
@@ -42,13 +73,13 @@ class FakeChatRepository : ChatRepository {
     return messageId
   }
 
+  @Synchronized
   override fun updateMessage(
     messageId: String,
     text: String,
   ) {
     if (messageId.isBlank()) return
-    messages =
-      messages.map { message ->
+    conversations = mapConversationMessages { message ->
         if (message.id == messageId) {
           message.copy(text = text)
         } else {
@@ -57,13 +88,13 @@ class FakeChatRepository : ChatRepository {
       }
   }
 
+  @Synchronized
   override fun appendEvent(
     messageId: String,
     event: AgentEvent,
   ) {
     if (messageId.isBlank()) return
-    messages =
-      messages.map { message ->
+    conversations = mapConversationMessages { message ->
         if (message.id == messageId) {
           message.copy(events = message.events + event)
         } else {
@@ -72,14 +103,14 @@ class FakeChatRepository : ChatRepository {
       }
   }
 
+  @Synchronized
   override fun updateEventStatus(
     eventId: String,
     status: String,
     content: String?,
   ) {
     if (eventId.isBlank()) return
-    messages =
-      messages.map { message ->
+    conversations = mapConversationMessages { message ->
         val updatedEvents =
           message.events.map { event ->
             if (event.id == eventId) {
@@ -99,8 +130,9 @@ class FakeChatRepository : ChatRepository {
       }
   }
 
+  @Synchronized
   override fun clearMessages() {
-    messages =
+    conversations[activeConversationId] =
       listOf(
         ChatMessage(
           id = UUID.randomUUID().toString(),
@@ -108,5 +140,17 @@ class FakeChatRepository : ChatRepository {
           text = "新对话开始了。你可以随便聊，也可以直接说要我完成什么。",
         ),
       )
+  }
+
+  private fun mapConversationMessages(transform: (ChatMessage) -> ChatMessage): LinkedHashMap<String, List<ChatMessage>> {
+    val updated = linkedMapOf<String, List<ChatMessage>>()
+    conversations.forEach { (conversationId, messages) ->
+      updated[conversationId] = messages.map(transform)
+    }
+    return updated
+  }
+
+  companion object {
+    const val DEFAULT_CONVERSATION_ID = "conv_default"
   }
 }

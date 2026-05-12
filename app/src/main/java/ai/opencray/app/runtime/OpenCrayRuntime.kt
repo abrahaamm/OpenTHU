@@ -75,6 +75,17 @@ class OpenCrayRuntime(
 
   fun chatMessages(): List<ChatMessage> = chatRepository.getMessages()
 
+  fun activeConversationId(): String = chatRepository.getActiveConversationId()
+
+  fun createConversation(
+    conversationId: String,
+    initialMessages: List<ChatMessage>,
+  ) {
+    chatRepository.createConversation(conversationId, initialMessages)
+  }
+
+  fun selectConversation(conversationId: String): Boolean = chatRepository.selectConversation(conversationId)
+
   /**
    * Set a delegate so the runtime can request calendar permissions from the Activity context.
    * Call this from MainActivity.onCreate / onStart.
