@@ -260,7 +260,10 @@ class AgentCoreStore:
                         device_id,
                     )
                     logger.debug(
-                        "[dispatch] skill_args=%s",
+                        "[dispatch] task_id=%s request_id=%s skill_name=%s args=%s",
+                        task_doc.get("task_id", ""),
+                        request_id,
+                        skill_name,
                         json.dumps(skill.get("args", {}), ensure_ascii=False),
                     )
                     return {
@@ -415,6 +418,18 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             user_id=payload.user_id,
             goal=payload.goal,
         )
+        approved_skills = task_doc.get("approved_skills", [])
+        if isinstance(approved_skills, list):
+            for item in approved_skills:
+                if not isinstance(item, dict):
+                    continue
+                logger.debug(
+                    "[plan] task_id=%s request_id=%s skill_name=%s args=%s",
+                    task_doc["task_id"],
+                    item.get("request_id", ""),
+                    item.get("skill_name", ""),
+                    json.dumps(item.get("args", {}), ensure_ascii=False),
+                )
         logger.info(
             "[api] plan complete task_id=%s task_status=%s approved=%d blocked=%d",
             task_doc["task_id"],
@@ -456,6 +471,13 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             next_item.get("request_id", ""),
             next_item.get("skill_invocation", {}).get("skill_name", "unknown"),
             device_id,
+        )
+        logger.debug(
+            "[api] dispatch args task_id=%s request_id=%s skill_name=%s args=%s",
+            next_item.get("task_id", ""),
+            next_item.get("request_id", ""),
+            next_item.get("skill_invocation", {}).get("skill_name", "unknown"),
+            json.dumps(next_item.get("skill_invocation", {}).get("args", {}), ensure_ascii=False),
         )
         return {
             "code": "OK",

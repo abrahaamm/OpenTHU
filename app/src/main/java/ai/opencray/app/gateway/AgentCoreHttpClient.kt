@@ -72,7 +72,13 @@ class AgentCoreHttpClient {
         .put("app_version", appVersion)
         .put("capabilities", JSONArray(capabilities))
 
-    val result = requestJson(config, "POST", "/api/v1/devices/register", payload)
+    val result =
+      requestJson(
+        config = config,
+        method = "POST",
+        path = "/api/v1/devices/register",
+        payload = payload,
+      )
     return if (result.success) {
       GatewayResult(success = true, code = result.code, message = result.message, data = Unit)
     } else {
@@ -95,7 +101,15 @@ class AgentCoreHttpClient {
         .put("approve_sensitive", approveSensitive)
         .put("session", JSONObject())
 
-    val result = requestJson(config, "POST", "/api/v1/agent/tasks/plan", payload)
+    val result =
+      requestJson(
+        config = config,
+        method = "POST",
+        path = "/api/v1/agent/tasks/plan",
+        payload = payload,
+        // LLM planning can take tens of seconds.
+        readTimeoutMs = 90_000,
+      )
     if (!result.success || result.data == null) {
       return GatewayResult(success = false, code = result.code, message = result.message, data = null)
     }
@@ -141,7 +155,13 @@ class AgentCoreHttpClient {
     config: GatewayConfig,
     deviceId: String,
   ): GatewayResult<DispatchSkillInvocation?> {
-    val result = requestJson(config, "GET", "/api/v1/agent/tasks/next?device_id=$deviceId", null)
+    val result =
+      requestJson(
+        config = config,
+        method = "GET",
+        path = "/api/v1/agent/tasks/next?device_id=$deviceId",
+        payload = null,
+      )
     if (!result.success || result.data == null) {
       return GatewayResult(success = false, code = result.code, message = result.message, data = null)
     }
@@ -195,7 +215,13 @@ class AgentCoreHttpClient {
         .put("source", "android_app")
         .put("from_cache", false)
 
-    val result = requestJson(config, "POST", "/api/v1/agent/tasks/$taskId/result", payload)
+    val result =
+      requestJson(
+        config = config,
+        method = "POST",
+        path = "/api/v1/agent/tasks/$taskId/result",
+        payload = payload,
+      )
     if (!result.success || result.data == null) {
       return GatewayResult(success = false, code = result.code, message = result.message, data = null)
     }
@@ -246,13 +272,15 @@ class AgentCoreHttpClient {
     method: String,
     path: String,
     payload: JSONObject?,
+    connectTimeoutMs: Int = 8_000,
+    readTimeoutMs: Int = 12_000,
   ): GatewayResult<JSONObject> {
     val protocol = if (config.tlsEnabled) "https" else "http"
     val url = URL("$protocol://${config.host}:${config.port}$path")
     val connection = (url.openConnection() as HttpURLConnection).apply {
       requestMethod = method
-      connectTimeout = 8_000
-      readTimeout = 12_000
+      connectTimeout = connectTimeoutMs
+      readTimeout = readTimeoutMs
       useCaches = false
       setRequestProperty("Accept", "application/json")
       setRequestProperty("Connection", "close")

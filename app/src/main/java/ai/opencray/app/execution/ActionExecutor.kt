@@ -121,14 +121,7 @@ class ActionExecutor(
     val cookie = auth.cookie
     val csrf = auth.csrf
     val courseIds = parseCsvOrJsonArray(action.params["course_ids"])
-    if (courseIds.isEmpty()) {
-      return ActionExecutionReport(
-        success = false,
-        message = "course_ids is required for homework crawl.",
-        recoverable = false,
-        data = mapOf("reason" to "missing_course_ids"),
-      )
-    }
+    val effectiveCourseIds = if (courseIds.isEmpty()) listOf("") else courseIds
 
     val records = mutableListOf<HomeworkRecord>()
     val endpointTypes = if (unsubmittedOnly) listOf("WJ") else listOf("WJ", "YJWG", "YPG")
@@ -140,13 +133,14 @@ class ActionExecutor(
       )
 
     return runCatching {
-      courseIds.forEach { courseId ->
+      effectiveCourseIds.forEach { courseId ->
         endpointTypes.forEach { endpointType ->
           val endpoint = endpointMap[endpointType].orEmpty()
+          val form = if (courseId.isBlank()) mapOf("wlkcid" to "") else mapOf("wlkcid" to courseId)
           val raw =
             postForm(
               url = "$baseUrl$endpoint",
-              form = mapOf("wlkcid" to courseId),
+              form = form,
               cookie = cookie,
               csrfToken = csrf,
             )
@@ -168,6 +162,7 @@ class ActionExecutor(
             "count" to deduped.size,
             "homeworks" to deduped.map { it.toDataMap() },
             "course_ids" to courseIds,
+            "course_scope" to if (courseIds.isEmpty()) "all_courses_inferred" else "selected_courses",
           ),
       )
     }.getOrElse { throwable ->

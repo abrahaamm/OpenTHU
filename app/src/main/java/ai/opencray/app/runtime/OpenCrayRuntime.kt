@@ -115,14 +115,14 @@ class OpenCrayRuntime(
         gatewayRegistered = true
         runtimeRepository.updateConnectionStatus("Connected to $host:$port")
         runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
-        chatRepository.appendMessage(ChatRole.System, "Agent-Core 杩炴帴鎴愬姛锛屽悗缁皢璧版湇鍔＄浠诲姟鍒嗗彂銆?)
+        chatRepository.appendMessage(ChatRole.System, "Agent-Core gateway connected. Device registration succeeded.")
       } else {
         gatewayRegistered = false
         runtimeRepository.updateConnectionStatus("Gateway connection failed")
         runtimeRepository.appendEvent("Gateway register failed: ${result.code} ${result.message}")
         chatRepository.appendMessage(
           ChatRole.System,
-          "Agent-Core 杩炴帴澶辫触锛?{result.code}锛夛紝灏嗙户缁娇鐢ㄦ湰鍦伴摼璺€?,
+          "Agent-Core gateway connection failed: ${result.code}. Switched to local planning fallback.",
         )
       }
     }
@@ -208,7 +208,7 @@ class OpenCrayRuntime(
 
     chatRepository.sendMessage(normalizedGoal)
 
-    if (gatewayRegistered) {
+    if (gatewayRegistered || hasGatewayEndpointConfigured()) {
       planGoalViaGateway(normalizedGoal)
     } else {
       planGoalLocally(normalizedGoal)
@@ -251,9 +251,42 @@ class OpenCrayRuntime(
     )
   }
 
+  private fun hasGatewayEndpointConfigured(): Boolean {
+    val config = currentGatewayConfig()
+    return config.host.isNotBlank() && config.port > 0
+  }
+
   private fun planGoalViaGateway(goal: String) {
     runtimeRepository.updateConnectionStatus("Planning on Agent-Core server ...")
     thread(name = "opencray-gateway-plan", isDaemon = true) {
+      if (!gatewayRegistered) {
+        runtimeRepository.appendEvent("Gateway not registered yet. Auto-registering before planning.")
+        val registerResult =
+          gatewayClient.registerDevice(
+            config = currentGatewayConfig(),
+            userId = "android_user",
+            deviceId = deviceId,
+            capabilities = supportedGatewayCapabilities(),
+          )
+        if (registerResult.success) {
+          gatewayRegistered = true
+          runtimeRepository.appendEvent("Gateway auto-register succeeded for device_id=$deviceId")
+        } else {
+          gatewayRegistered = false
+          runtimeRepository.updateConnectionStatus("Gateway planning failed")
+          runtimeRepository.appendEvent("Gateway auto-register failed: ${registerResult.code} ${registerResult.message}")
+          appendAuditEntry(
+            taskId = "",
+            actionId = "gateway:auto_register",
+            stage = "plan_remote_error",
+            message = "Gateway auto-register failed: ${registerResult.code} ${registerResult.message}",
+          )
+          chatRepository.appendMessage(ChatRole.System, "Gateway planning failed. Falling back to local planner.")
+          planGoalLocally(goal)
+          return@thread
+        }
+      }
+
       val result =
         gatewayClient.planTask(
           config = currentGatewayConfig(),
@@ -266,7 +299,13 @@ class OpenCrayRuntime(
         gatewayRegistered = false
         runtimeRepository.updateConnectionStatus("Gateway planning failed")
         runtimeRepository.appendEvent("Gateway plan failed: ${result.code} ${result.message}")
-        chatRepository.appendMessage(ChatRole.System, "鏈嶅姟绔鍒掑け璐ワ紝鍥炶惤鍒版湰鍦拌鍒掋€?)
+        appendAuditEntry(
+          taskId = "",
+          actionId = "gateway:plan",
+          stage = "plan_remote_error",
+          message = "Gateway plan failed: ${result.code} ${result.message}",
+        )
+        chatRepository.appendMessage(ChatRole.System, "Gateway planning failed. Falling back to local planner.")
         planGoalLocally(goal)
         return@thread
       }
@@ -282,7 +321,7 @@ class OpenCrayRuntime(
     val current = snapshot()
     val approvedActions = data.approvedSkills.map { it.toSystemAction(status = "approved") }
     val blockedActions = data.blockedSkills.map { it.toSystemAction(status = "pending_approval") }
-    val allActions = (approvedActions + blockedActions).ifEmpty { current.systemActions }
+    val allActions = approvedActions + blockedActions
     val safetyRecords =
       buildList {
         addAll(approvedActions.map { it.toSafetyRecord(status = "Approved") })
@@ -305,6 +344,16 @@ class OpenCrayRuntime(
         summary = "Gateway planned ${approvedActions.size} approved, ${blockedActions.size} blocked actions.",
       )
     val memory = memoryManager.updateFromGoal(current.memoryRecords, goal)
+    val plannedSkillNames = allActions.map { it.id }
+    val planSummaryAudit =
+      AuditEntry(
+        id = UUID.randomUUID().toString(),
+        taskId = task.id,
+        actionId = "task:${task.id}",
+        stage = "plan_remote_summary",
+        message = "Server plan received task_id=${task.id} status=${task.status} skills=${plannedSkillNames.joinToString(",")}.",
+        timestampEpochMs = now,
+      )
     val audit =
       allActions.map { action ->
         AuditEntry(
@@ -324,14 +373,25 @@ class OpenCrayRuntime(
         safetyRecords = safetyRecords + current.safetyRecords,
         tasks = listOf(task) + current.tasks.filterNot { it.id == task.id }.take(9),
         memoryRecords = memory,
-        auditTrail = audit + current.auditTrail.take(99),
-        recentEvents = listOf("Gateway planned task ${task.id}.") + current.recentEvents,
+        auditTrail = listOf(planSummaryAudit) + audit + current.auditTrail.take(99),
+        recentEvents = listOf("Gateway planned task ${task.id}: ${plannedSkillNames.joinToString(",")}") + current.recentEvents,
       ),
     )
     chatRepository.appendMessage(
       ChatRole.Assistant,
-      "鏈嶅姟绔鍒掑畬鎴愶細${approvedActions.size} 涓彲鎵ц鍔ㄤ綔锛?{blockedActions.size} 涓鎷︽埅鍔ㄤ綔銆?,
+      "Server plan received: ${approvedActions.size} approved action(s), ${blockedActions.size} blocked action(s).",
     )
+    if (allActions.isEmpty()) {
+      appendAuditEntry(
+        taskId = task.id,
+        actionId = "gateway:plan",
+        stage = "plan_remote_warning",
+        message = "Server plan received but no executable skills were present.",
+      )
+    }
+
+    // Keep execution manual: user triggers dispatch via "Run Agent".
+    runtimeRepository.appendEvent("Gateway plan ready. Waiting for manual execution trigger.")
   }
 
   private fun planGoalLocally(goal: String) {
@@ -401,7 +461,7 @@ class OpenCrayRuntime(
 
     chatRepository.appendMessage(
       ChatRole.Assistant,
-      "宸插畬鎴愪换鍔¤鍒掞細${actionsWithReviewStatus.size} 涓姩浣滐紝${safetyRecords.count { it.status == "Awaiting approval" }} 涓渶纭銆?,
+      "Goal planned locally with ${actionsWithReviewStatus.size} action(s); pending approvals: ${safetyRecords.count { it.status == "Awaiting approval" }}.",
     )
   }
 
@@ -622,9 +682,9 @@ class OpenCrayRuntime(
     chatRepository.appendMessage(
       ChatRole.System,
       if (completed) {
-        "浠诲姟鎵ц瀹屾垚锛屽彲鍦?Safety 闈㈡澘鏌ョ湅瀹¤杞ㄨ抗銆?
+        "Task execution completed. Safety and audit records updated."
       } else {
-        "浠诲姟閮ㄥ垎瀹屾垚锛屼粛鏈夊緟纭鎴栧緟鎵ц鍔ㄤ綔銆?
+        "Task execution in progress. Some actions are still pending or approval-gated."
       },
     )
   }
@@ -831,6 +891,29 @@ class OpenCrayRuntime(
     }
 
     return "SKILL_EXECUTION_FAILED"
+  }
+
+  private fun appendAuditEntry(
+    taskId: String,
+    actionId: String,
+    stage: String,
+    message: String,
+  ) {
+    val current = snapshot()
+    val entry =
+      AuditEntry(
+        id = UUID.randomUUID().toString(),
+        taskId = taskId,
+        actionId = actionId,
+        stage = stage,
+        message = message,
+        timestampEpochMs = System.currentTimeMillis(),
+      )
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        auditTrail = listOf(entry) + current.auditTrail.take(149),
+      ),
+    )
   }
 
   private fun upsertAction(
