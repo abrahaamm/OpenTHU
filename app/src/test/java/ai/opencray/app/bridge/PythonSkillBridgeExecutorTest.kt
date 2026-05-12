@@ -308,4 +308,41 @@ class PythonSkillBridgeExecutorTest {
     assertEquals("failed", data.getString("status"))
     assertEquals("missing_auth", data.getString("reason"))
   }
+
+  @Test
+  fun mapsGetHomeworkCookieResultToCookieReady() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = true,
+          message = "Homework cookie loaded from provided cookies.",
+          recoverable = false,
+          data =
+            mapOf(
+              "status" to "cookie_ready",
+              "cookie_source" to "server_provided",
+              "has_csrf" to true,
+            ),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_cookie_1")
+        .put("skill_name", "get_homework_cookie")
+        .put(
+          "args",
+          JSONObject()
+            .put("student_id", "2023000000")
+            .put("password", "encrypted_password")
+            .put("cookies", "_ga=1; JSESSIONID=abc; XSRF-TOKEN=xyz"),
+        )
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("OK", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("cookie_ready", data.getString("status"))
+    assertEquals("server_provided", data.getString("cookie_source"))
+    assertTrue(data.getBoolean("has_csrf"))
+  }
 }

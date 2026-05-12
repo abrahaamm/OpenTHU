@@ -170,6 +170,24 @@ def build_default_registry() -> SkillRegistry:
             args_schema={"course_ids": "list[string]"},
         ),
         SkillSpec(
+            "get_homework_cookie",
+            "Acquire Learn session cookie using student credentials or use provided cookies",
+            "auth",
+            "high",
+            True,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "student_id": {"type": "string"},
+                    "password": {"type": "string"},
+                    "cookies": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
             "crawl_course_homeworks",
             "Crawl all homework records for selected courses",
             "data",

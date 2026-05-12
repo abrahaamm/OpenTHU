@@ -69,12 +69,15 @@ private data class HomeworkRecord(
 class ActionExecutor(
   private val appContext: Context,
 ) {
+  @Volatile private var cachedHomeworkAuth: HomeworkAuth? = null
+
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     val actionId = action.id.substringBefore("#")
     return when (actionId) {
       "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
+      "get_homework_cookie" -> executeGetHomeworkCookie(action)
       "crawl_course_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = false)
       "crawl_unsubmitted_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = true)
       "preview_homework_attachments" -> executePreviewHomeworkAttachments(action)
@@ -101,6 +104,79 @@ class ActionExecutor(
           message = "No-op fallback executed for ${action.id}.",
           recoverable = false,
         )
+    }
+  }
+
+  private fun executeGetHomeworkCookie(action: SystemAction): ActionExecutionReport {
+    val providedCookies = readActionString(action, "cookies")
+    val baseUrl = readActionString(action, "learn_base_url").ifBlank { "https://learn.tsinghua.edu.cn" }
+    val providedCsrf = readActionString(action, "csrf_token")
+    if (providedCookies.isNotBlank()) {
+      val normalizedCookie = normalizeCookieHeader(providedCookies)
+      if (normalizedCookie.isBlank()) {
+        return ActionExecutionReport(
+          success = false,
+          message = "Invalid cookies input.",
+          recoverable = false,
+          data = mapOf("reason" to "invalid_cookies"),
+        )
+      }
+      val csrf = providedCsrf.ifBlank { extractCookieValue(normalizedCookie, "XSRF-TOKEN") }
+      cachedHomeworkAuth =
+        HomeworkAuth(
+          ok = true,
+          message = "ok",
+          baseUrl = baseUrl,
+          cookie = normalizedCookie,
+          csrf = csrf,
+        )
+      return ActionExecutionReport(
+        success = true,
+        message = "Homework cookie loaded from provided cookies.",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "cookie_ready",
+            "cookie_source" to "server_provided",
+            "has_csrf" to csrf.isNotBlank(),
+            "cookie_names" to cookieNames(normalizedCookie),
+          ),
+      )
+    }
+
+    val studentId = readActionString(action, "student_id")
+    val password = readActionString(action, "password")
+    if (studentId.isBlank() || password.isBlank()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "student_id/password are required when cookies is empty.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_credentials"),
+      )
+    }
+
+    val fetched = fetchHomeworkAuthByCredential(studentId = studentId, password = password, baseUrl = baseUrl)
+    return if (fetched.ok) {
+      cachedHomeworkAuth = fetched
+      ActionExecutionReport(
+        success = true,
+        message = "Homework cookie acquired by credential login.",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "cookie_ready",
+            "cookie_source" to "credential_login",
+            "has_csrf" to fetched.csrf.isNotBlank(),
+            "cookie_names" to cookieNames(fetched.cookie),
+          ),
+      )
+    } else {
+      ActionExecutionReport(
+        success = false,
+        message = fetched.message,
+        recoverable = false,
+        data = mapOf("reason" to "auth_failed"),
+      )
     }
   }
 
@@ -136,7 +212,14 @@ class ActionExecutor(
       effectiveCourseIds.forEach { courseId ->
         endpointTypes.forEach { endpointType ->
           val endpoint = endpointMap[endpointType].orEmpty()
-          val form = if (courseId.isBlank()) mapOf("wlkcid" to "") else mapOf("wlkcid" to courseId)
+          val aoData =
+            JSONArray()
+              .put(
+                JSONObject()
+                  .put("name", "wlkcid")
+                  .put("value", courseId),
+              ).toString()
+          val form = mapOf("aoData" to aoData)
           val raw =
             postForm(
               url = "$baseUrl$endpoint",
@@ -151,18 +234,21 @@ class ActionExecutor(
       }
 
       val deduped = records.distinctBy { "${it.homeworkId}::${it.studentHomeworkId}" }.sortedBy { it.deadline }
+      val filtered = filterHomeworkRecords(deduped)
       val status = if (unsubmittedOnly) "unsubmitted_crawled" else "crawled"
       ActionExecutionReport(
         success = true,
-        message = "Homework crawl completed: ${deduped.size} item(s).",
+        message = "Homework crawl completed: ${filtered.size} item(s).",
         recoverable = false,
         data =
           mapOf(
             "status" to status,
-            "count" to deduped.size,
-            "homeworks" to deduped.map { it.toDataMap() },
+            "count" to filtered.size,
+            "homeworks" to filtered.map { it.toDataMap() },
+            "count_before_filter" to deduped.size,
             "course_ids" to courseIds,
             "course_scope" to if (courseIds.isEmpty()) "all_courses_inferred" else "selected_courses",
+            "filters_applied" to listOf("exclude_title_contains_补交", "exclude_deadline_passed_if_epoch_ms"),
           ),
       )
     }.getOrElse { throwable ->
@@ -937,25 +1023,281 @@ class ActionExecutor(
   )
 
   private fun resolveHomeworkAuth(action: SystemAction): HomeworkAuth {
-    val cookieFromParams = action.params["session_cookie"].orEmpty().trim()
-    val cookieFromPayload = action.payload?.get("session_cookie")?.toString()?.trim().orEmpty()
-    val cookie = cookieFromParams.ifEmpty { cookieFromPayload }
+    val cookieFromParams = readActionString(action, "session_cookie")
+    val cookieFromPayload = readActionString(action, "cookies")
+    val cachedCookie = cachedHomeworkAuth?.cookie.orEmpty()
+    val cookie = normalizeCookieHeader(cookieFromParams.ifEmpty { cookieFromPayload }.ifEmpty { cachedCookie })
     val baseUrl =
-      action.params["learn_base_url"]?.trim().orEmpty().ifEmpty {
-        action.payload?.get("learn_base_url")?.toString()?.trim().orEmpty()
-      }.ifEmpty { "https://learn.tsinghua.edu.cn" }
+      readActionString(action, "learn_base_url").ifEmpty {
+        cachedHomeworkAuth?.baseUrl.orEmpty()
+      }.ifEmpty {
+        "https://learn.tsinghua.edu.cn"
+      }
     val csrf =
-      action.params["csrf_token"]?.trim().orEmpty().ifEmpty {
-        action.payload?.get("csrf_token")?.toString()?.trim().orEmpty()
+      readActionString(action, "csrf_token").ifEmpty {
+        extractCookieValue(cookie, "XSRF-TOKEN")
+      }.ifEmpty {
+        cachedHomeworkAuth?.csrf.orEmpty()
       }
     if (cookie.isEmpty()) {
       return HomeworkAuth(
         ok = false,
-        message = "Missing session_cookie for homework action. Please pass an authenticated Learn cookie.",
+        message = "Missing homework cookie. Execute get_homework_cookie first or pass cookies/session_cookie.",
       )
     }
     return HomeworkAuth(ok = true, message = "ok", baseUrl = baseUrl, cookie = cookie, csrf = csrf)
   }
+
+  private fun fetchHomeworkAuthByCredential(
+    studentId: String,
+    password: String,
+    baseUrl: String,
+  ): HomeworkAuth {
+    val idBase = "https://id.tsinghua.edu.cn"
+    val cookieJar = mutableMapOf<String, MutableMap<String, String>>()
+    return runCatching {
+      val loginPage = httpGet("$idBase/do/off/ui/auth/login", hostCookieHeader = "")
+      captureSetCookies("id.tsinghua.edu.cn", loginPage.headers["Set-Cookie"], cookieJar)
+
+      val loginCheckUrl = extractLoginCheckUrl(loginPage.body, idBase)
+      val hiddenInputs = extractHiddenInputs(loginPage.body)
+      val form = linkedMapOf<String, String>()
+      hiddenInputs.forEach { (k, v) ->
+        if (k !in setOf("username", "password", "_eventId")) {
+          form[k] = v
+        }
+      }
+      form["username"] = studentId
+      form["password"] = password
+      form["_eventId"] = "submit"
+
+      val postLogin =
+        httpPostForm(
+          loginCheckUrl,
+          form,
+          hostCookieHeader = cookieHeaderForHost("id.tsinghua.edu.cn", cookieJar),
+        )
+      captureSetCookies("id.tsinghua.edu.cn", postLogin.headers["Set-Cookie"], cookieJar)
+
+      var redirectUrl = postLogin.location
+      var currentUrl = loginCheckUrl
+      repeat(8) {
+        if (redirectUrl.isBlank()) return@repeat
+        val resolved = resolveRedirectUrl(currentUrl, redirectUrl)
+        val host = URL(resolved).host
+        val hop =
+          httpGet(
+            resolved,
+            hostCookieHeader = cookieHeaderForHost(host, cookieJar),
+          )
+        captureSetCookies(host, hop.headers["Set-Cookie"], cookieJar)
+        currentUrl = resolved
+        redirectUrl = hop.location
+      }
+
+      val learnHost = URL(baseUrl).host
+      val learnCookie = cookieHeaderForHost(learnHost, cookieJar)
+      val fallbackIdCookie = cookieHeaderForHost("id.tsinghua.edu.cn", cookieJar)
+      val resolvedCookie = normalizeCookieHeader(learnCookie.ifBlank { fallbackIdCookie })
+      if (resolvedCookie.isBlank()) {
+        HomeworkAuth(
+          ok = false,
+          message = "Login did not return cookies. Check student_id/password or upstream auth flow.",
+        )
+      } else {
+        HomeworkAuth(
+          ok = true,
+          message = "ok",
+          baseUrl = baseUrl,
+          cookie = resolvedCookie,
+          csrf = extractCookieValue(resolvedCookie, "XSRF-TOKEN"),
+        )
+      }
+    }.getOrElse { throwable ->
+      HomeworkAuth(
+        ok = false,
+        message = "Acquire cookie by credential failed: ${throwable.message ?: "unknown"}",
+      )
+    }
+  }
+
+  private data class SimpleHttpResponse(
+    val statusCode: Int,
+    val body: String,
+    val headers: Map<String, List<String>>,
+    val location: String,
+  )
+
+  private fun httpGet(
+    url: String,
+    hostCookieHeader: String,
+  ): SimpleHttpResponse {
+    val conn = (URL(url).openConnection() as HttpURLConnection)
+    conn.instanceFollowRedirects = false
+    conn.requestMethod = "GET"
+    conn.connectTimeout = 12_000
+    conn.readTimeout = 18_000
+    if (hostCookieHeader.isNotBlank()) {
+      conn.setRequestProperty("Cookie", hostCookieHeader)
+    }
+    conn.setRequestProperty("User-Agent", "OpenTHU-Android/1.0")
+    val code = conn.responseCode
+    val stream = if (code in 200..399) conn.inputStream else conn.errorStream
+    val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+    val headers = mutableMapOf<String, List<String>>()
+    conn.headerFields.forEach { (rawKey, rawValue) ->
+      val key = rawKey?.trim().orEmpty()
+      if (key.isNotEmpty()) {
+        headers[key] = rawValue ?: emptyList()
+      }
+    }
+    val location = conn.getHeaderField("Location").orEmpty()
+    conn.disconnect()
+    return SimpleHttpResponse(code, body, headers, location)
+  }
+
+  private fun httpPostForm(
+    url: String,
+    form: Map<String, String>,
+    hostCookieHeader: String,
+  ): SimpleHttpResponse {
+    val body =
+      form.entries.joinToString("&") { (key, value) ->
+        "${urlEncode(key)}=${urlEncode(value)}"
+      }
+    val conn = (URL(url).openConnection() as HttpURLConnection)
+    conn.instanceFollowRedirects = false
+    conn.requestMethod = "POST"
+    conn.connectTimeout = 12_000
+    conn.readTimeout = 18_000
+    conn.doOutput = true
+    conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+    conn.setRequestProperty("User-Agent", "OpenTHU-Android/1.0")
+    if (hostCookieHeader.isNotBlank()) {
+      conn.setRequestProperty("Cookie", hostCookieHeader)
+    }
+    conn.outputStream.use { os ->
+      os.write(body.toByteArray(StandardCharsets.UTF_8))
+    }
+    val code = conn.responseCode
+    val stream = if (code in 200..399) conn.inputStream else conn.errorStream
+    val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+    val headers = mutableMapOf<String, List<String>>()
+    conn.headerFields.forEach { (rawKey, rawValue) ->
+      val key = rawKey?.trim().orEmpty()
+      if (key.isNotEmpty()) {
+        headers[key] = rawValue ?: emptyList()
+      }
+    }
+    val location = conn.getHeaderField("Location").orEmpty()
+    conn.disconnect()
+    return SimpleHttpResponse(code, raw, headers, location)
+  }
+
+  private fun captureSetCookies(
+    host: String,
+    setCookieHeaders: List<String>?,
+    cookieJar: MutableMap<String, MutableMap<String, String>>,
+  ) {
+    if (setCookieHeaders.isNullOrEmpty()) return
+    val hostCookies = cookieJar.getOrPut(host) { linkedMapOf() }
+    setCookieHeaders.forEach { header ->
+      val firstPart = header.substringBefore(';').trim()
+      val split = firstPart.indexOf('=')
+      if (split <= 0) return@forEach
+      val name = firstPart.substring(0, split).trim()
+      val value = firstPart.substring(split + 1).trim()
+      if (name.isNotBlank()) {
+        hostCookies[name] = value
+      }
+    }
+  }
+
+  private fun cookieHeaderForHost(
+    host: String,
+    cookieJar: Map<String, Map<String, String>>,
+  ): String =
+    cookieJar[host]
+      ?.entries
+      ?.joinToString("; ") { (k, v) -> "$k=$v" }
+      .orEmpty()
+
+  private fun resolveRedirectUrl(
+    baseUrl: String,
+    location: String,
+  ): String = URL(URL(baseUrl), location).toString()
+
+  private fun extractLoginCheckUrl(
+    html: String,
+    idBase: String,
+  ): String {
+    val matched =
+      Regex("""<form[^>]*action=["']([^"']*?/do/off/ui/auth/login/check[^"']*)["']""", RegexOption.IGNORE_CASE)
+        .find(html)
+        ?.groupValues
+        ?.getOrNull(1)
+        .orEmpty()
+    if (matched.isBlank()) {
+      return "$idBase/do/off/ui/auth/login/check"
+    }
+    return if (matched.startsWith("http://") || matched.startsWith("https://")) {
+      matched
+    } else {
+      resolveRedirectUrl(idBase, matched)
+    }
+  }
+
+  private fun extractHiddenInputs(html: String): Map<String, String> {
+    val result = linkedMapOf<String, String>()
+    val inputRegex = Regex("""<input[^>]*type=["']hidden["'][^>]*>""", setOf(RegexOption.IGNORE_CASE))
+    val nameRegex = Regex("""name=["']([^"']+)["']""", setOf(RegexOption.IGNORE_CASE))
+    val valueRegex = Regex("""value=["']([^"']*)["']""", setOf(RegexOption.IGNORE_CASE))
+    inputRegex.findAll(html).forEach { match ->
+      val tag = match.value
+      val name = nameRegex.find(tag)?.groupValues?.getOrNull(1).orEmpty().trim()
+      val value = valueRegex.find(tag)?.groupValues?.getOrNull(1).orEmpty()
+      if (name.isNotBlank()) {
+        result[name] = value
+      }
+    }
+    return result
+  }
+
+  private fun readActionString(
+    action: SystemAction,
+    key: String,
+  ): String {
+    val fromParams = action.params[key]?.trim().orEmpty()
+    if (fromParams.isNotBlank()) return fromParams
+    return action.payload?.get(key)?.toString()?.trim().orEmpty()
+  }
+
+  private fun normalizeCookieHeader(raw: String): String {
+    if (raw.isBlank()) return ""
+    return raw
+      .split(';')
+      .map { it.trim() }
+      .filter { token -> token.contains('=') }
+      .joinToString("; ")
+  }
+
+  private fun extractCookieValue(
+    cookieHeader: String,
+    cookieName: String,
+  ): String {
+    val prefix = "$cookieName="
+    return cookieHeader.split(';')
+      .map { it.trim() }
+      .firstOrNull { it.startsWith(prefix) }
+      ?.substringAfter('=')
+      ?.trim()
+      .orEmpty()
+  }
+
+  private fun cookieNames(cookieHeader: String): List<String> =
+    cookieHeader.split(';')
+      .map { it.trim().substringBefore('=').trim() }
+      .filter { it.isNotBlank() }
 
   private fun postForm(
     url: String,
@@ -974,6 +1316,15 @@ class ActionExecutor(
     conn.doOutput = true
     conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
     conn.setRequestProperty("Cookie", cookie)
+    conn.setRequestProperty(
+      "User-Agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    )
+    conn.setRequestProperty("Referer", "https://learn.tsinghua.edu.cn/f/wlxt/kczy/zy/student/index")
+    conn.setRequestProperty("Origin", "https://learn.tsinghua.edu.cn")
+    if (csrfToken.isNotBlank()) {
+      conn.setRequestProperty("X-XSRF-TOKEN", csrfToken)
+    }
     conn.outputStream.use { os ->
       val bytes = body.toByteArray(StandardCharsets.UTF_8)
       os.write(bytes)
@@ -1077,6 +1428,20 @@ class ActionExecutor(
       }.getOrElse { emptyList() }
     }
     return text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+  }
+
+  private fun filterHomeworkRecords(rows: List<HomeworkRecord>): List<HomeworkRecord> {
+    val nowMs = System.currentTimeMillis()
+    return rows.filter { row ->
+      if (row.title.contains("补交")) {
+        return@filter false
+      }
+      val deadlineMs = row.deadline.trim().toLongOrNull()
+      if (deadlineMs != null && deadlineMs < nowMs) {
+        return@filter false
+      }
+      true
+    }
   }
 
   private fun extractHomeworkRecords(

@@ -234,6 +234,7 @@ class OpenCrayRuntime(
       "create_calendar_event",
       "detect_calendar_conflicts",
       "delete_calendar_event",
+      "get_homework_cookie",
       "crawl_course_homeworks",
       "crawl_unsubmitted_homeworks",
       "preview_homework_attachments",
@@ -875,6 +876,9 @@ class OpenCrayRuntime(
 
     if (
       reason == "missing_auth" ||
+      reason == "missing_credentials" ||
+      reason == "invalid_cookies" ||
+      reason == "auth_failed" ||
       reason == "missing_homework_id" ||
       reason == "missing_course_ids" ||
       reason == "missing_submission_content" ||

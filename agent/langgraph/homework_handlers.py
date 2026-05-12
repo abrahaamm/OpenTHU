@@ -216,6 +216,15 @@ class CrawlCourseHomeworksHandler(_BaseHomeworkHandler):
         return self._dispatch_to_bridge(invocation, state)
 
 
+class GetHomeworkCookieHandler(_BaseHomeworkHandler):
+    def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
+        args = invocation.args
+        invocation.args["student_id"] = str(args.get("student_id", "")).strip()
+        invocation.args["password"] = str(args.get("password", "")).strip()
+        invocation.args["cookies"] = str(args.get("cookies", "")).strip()
+        return self._dispatch_to_bridge(invocation, state)
+
+
 class CrawlUnsubmittedHomeworksHandler(_BaseHomeworkHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         args = invocation.args
@@ -322,6 +331,7 @@ class PreviewHomeworkAttachmentsHandler(_BaseHomeworkHandler):
 
 def register_homework_handlers(registry: Any, bridge: HomeworkSkillBridge | None = None) -> None:
     resolved_bridge = bridge or _resolve_default_bridge()
+    registry.register_handler("get_homework_cookie", GetHomeworkCookieHandler(resolved_bridge))
     registry.register_handler("crawl_course_homeworks", CrawlCourseHomeworksHandler(resolved_bridge))
     registry.register_handler("crawl_unsubmitted_homeworks", CrawlUnsubmittedHomeworksHandler(resolved_bridge))
     registry.register_handler("upload_homework_attachment", UploadHomeworkAttachmentHandler(resolved_bridge))

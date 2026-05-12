@@ -82,6 +82,9 @@ class PythonSkillBridgeExecutor(
       return "APPROVAL_REQUIRED"
     }
     if (reason == "missing_auth" ||
+      reason == "missing_credentials" ||
+      reason == "invalid_cookies" ||
+      reason == "auth_failed" ||
       reason == "missing_homework_id" ||
       reason == "missing_course_ids" ||
       reason == "missing_submission_content" ||
@@ -178,6 +181,12 @@ class PythonSkillBridgeExecutor(
         val data = JSONObject()
           .put("status", status)
           .put("high_risk", true)
+          .put("message", message)
+        putReportData(data, report)
+      }
+      "get_homework_cookie" -> {
+        val data = JSONObject()
+          .put("status", if (report.success) "cookie_ready" else "failed")
           .put("message", message)
         putReportData(data, report)
       }
