@@ -26,6 +26,9 @@ import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SystemAction
+import ai.opencray.app.feature.chat.AgentEvent
+import ai.opencray.app.feature.chat.AgentEventOption
+import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
 //import ai.opencray.app.system.AppLaunchController
@@ -702,7 +705,44 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
-  private fun createMessageBubble(message: ChatMessage): TextView {
+  private fun createMessageBubble(message: ChatMessage): View {
+    val isUser = message.role == ChatRole.User
+    val visibleEvents =
+      message.events.filterNot { event ->
+        event.type == AgentEventType.AssistantDelta || event.type == AgentEventType.AssistantFinal
+      }
+
+    if (visibleEvents.isEmpty()) {
+      return createMessageTextBubble(message)
+    }
+
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      layoutParams =
+        LinearLayout.LayoutParams(
+          (resources.displayMetrics.widthPixels * 0.72f).toInt(),
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          setMargins(dp(4), dp(6), dp(4), dp(6))
+          gravity = if (isUser) Gravity.END else Gravity.START
+        }
+
+      addView(
+        createMessageTextBubble(message).apply {
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+        },
+      )
+      visibleEvents.forEach { event ->
+        addView(createEventCard(event))
+      }
+    }
+  }
+
+  private fun createMessageTextBubble(message: ChatMessage): TextView {
     val isUser = message.role == ChatRole.User
     val label =
       when (message.role) {
@@ -739,6 +779,141 @@ class MainActivity : AppCompatActivity() {
           setMargins(dp(4), dp(6), dp(4), dp(6))
           gravity = if (isUser) Gravity.END else Gravity.START
         }
+    }
+  }
+
+  private fun createEventCard(event: AgentEvent): View {
+    val label =
+      when (event.type) {
+        AgentEventType.ToolCall -> if (event.status == "queued") "等待执行" else "正在调用"
+        AgentEventType.ToolResult -> "执行完成"
+        AgentEventType.ConfirmationRequired ->
+          when (event.status) {
+            "submitting" -> "正在提交"
+            "approved" -> "已允许"
+            "rejected" -> "已拒绝"
+            "failed" -> "提交失败"
+            else -> "需要确认"
+          }
+        AgentEventType.PermissionRequired -> "需要权限"
+        AgentEventType.Error -> "执行异常"
+        AgentEventType.Unknown -> "状态更新"
+        AgentEventType.AssistantDelta,
+        AgentEventType.AssistantFinal,
+        -> "回复"
+      }
+    val title =
+      listOf(label, event.title, event.skillName)
+        .filter { it.isNotBlank() }
+        .distinct()
+        .joinToString(" · ")
+    val body =
+      buildString {
+        if (event.content.isNotBlank()) {
+          append(event.content)
+        }
+        if (event.options.isNotEmpty() && event.type != AgentEventType.ConfirmationRequired) {
+          if (isNotBlank()) append("\n")
+          append("选项：")
+          append(event.options.joinToString(" / ") { option -> option.label.ifBlank { option.value } })
+        }
+      }.ifBlank { event.status.ifBlank { "处理中" } }
+
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(12), dp(8), dp(12), dp(8))
+      setBackgroundResource(R.drawable.skill_card_surface)
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.MATCH_PARENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          topMargin = dp(6)
+        }
+
+      addView(
+        TextView(this@MainActivity).apply {
+          text = title
+          textSize = 12f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_primary_dark))
+        },
+      )
+      addView(
+        TextView(this@MainActivity).apply {
+          text = body
+          textSize = 12f
+          setLineSpacing(2f, 1.0f)
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+        },
+      )
+      if (
+        event.type == AgentEventType.ConfirmationRequired &&
+        (event.status.isBlank() || event.status == "pending") &&
+        event.taskId.isNotBlank() &&
+        event.requestId.isNotBlank()
+      ) {
+        addView(createDecisionButtonRow(event))
+      }
+    }
+  }
+
+  private fun createDecisionButtonRow(event: AgentEvent): View {
+    val options =
+      event.options.ifEmpty {
+        listOf(
+          AgentEventOption("允许", "approve"),
+          AgentEventOption("拒绝", "reject"),
+        )
+      }
+    return LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.END
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.MATCH_PARENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          topMargin = dp(8)
+        }
+
+      options.forEach { option ->
+        val value = option.value.ifBlank { option.label }
+        val normalizedValue = value.lowercase()
+        val button =
+          Button(this@MainActivity).apply {
+            text = option.label.ifBlank { value }
+            textSize = 12f
+            setAllCaps(false)
+            minHeight = dp(32)
+            minimumHeight = dp(32)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setBackgroundResource(
+              if (normalizedValue == "approve" || normalizedValue == "approved") {
+                R.drawable.button_primary_selector
+              } else {
+                R.drawable.button_secondary_selector
+              },
+            )
+            setOnClickListener {
+              viewModel.submitAgentDecision(
+                taskId = event.taskId,
+                requestId = event.requestId,
+                eventId = event.id,
+                decision = value,
+              )
+              render()
+            }
+          }
+        addView(
+          button,
+          LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+          ).apply {
+            leftMargin = dp(8)
+          },
+        )
+      }
     }
   }
 

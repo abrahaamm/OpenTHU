@@ -43,11 +43,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       }
   }
 
-  private fun currentConversationMessages(): List<ChatMessage> {
-    val selected = conversations[selectedConversationId]
-    return selected?.messages ?: emptyList()
-  }
-
   private fun upsertCurrentConversation(messages: List<ChatMessage>) {
     val existing = conversations[selectedConversationId]
     val titleSeed = messages.firstOrNull { it.role == ChatRole.User }?.text?.take(18) ?: "新对话"
@@ -62,6 +57,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   private fun buildUiState(): MainUiState {
+    selectedConversationId = runtime.activeConversationId()
     val runtimeMessages = runtime.chatMessages()
     if (runtimeMessages.isNotEmpty() && conversations[selectedConversationId]?.messages != runtimeMessages) {
       upsertCurrentConversation(runtimeMessages)
@@ -88,6 +84,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   init {
     runtime.boot()
+    selectedConversationId = runtime.activeConversationId()
     val bootMessages = runtime.chatMessages()
     conversations[selectedConversationId] =
       ConversationThread(
@@ -175,6 +172,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = AppDestination.Planning
   }
 
+  fun submitAgentDecision(
+    taskId: String,
+    requestId: String,
+    eventId: String,
+    decision: String,
+  ) {
+    runtime.submitAgentDecision(
+      taskId = taskId,
+      requestId = requestId,
+      eventId = eventId,
+      decision = decision,
+    )
+    selectedDestination = AppDestination.Chat
+  }
+
   fun setCalendarPermissionDelegate(delegate: CalendarPermissionDelegate?) {
     runtime.setCalendarPermissionDelegate(delegate)
   }
@@ -193,8 +205,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val systemIntro =
       ChatMessage(
         id = "sys_${UUID.randomUUID().toString().take(8)}",
-        role = ChatRole.System,
-        text = "新会话已创建。你可以直接输入目标开始规划。",
+        role = ChatRole.Assistant,
+        text = "新会话开始了。你可以直接聊天，也可以用自然语言交代任务。",
       )
     conversations[id] =
       ConversationThread(
@@ -203,12 +215,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         messages = listOf(systemIntro),
         updatedAtEpochMs = now,
       )
+    runtime.createConversation(id, listOf(systemIntro))
     selectedConversationId = id
     selectedDestination = AppDestination.Chat
   }
 
   fun selectConversation(conversationId: String) {
-    if (conversations.containsKey(conversationId)) {
+    if (conversations.containsKey(conversationId) && runtime.selectConversation(conversationId)) {
       selectedConversationId = conversationId
       selectedDestination = AppDestination.Chat
     }

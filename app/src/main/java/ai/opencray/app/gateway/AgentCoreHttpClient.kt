@@ -56,6 +56,33 @@ data class SubmitResultData(
   val receivedResultCount: Int,
 )
 
+data class SkillDecisionData(
+  val taskId: String,
+  val taskStatus: String,
+  val requestId: String,
+  val decision: String,
+)
+
+data class ChatTurnData(
+  val shouldPlan: Boolean,
+  val reply: String,
+  val mode: String,
+  val confidence: Double,
+  val source: String,
+)
+
+data class AgentStreamEvent(
+  val eventId: String,
+  val type: String,
+  val title: String,
+  val content: String,
+  val taskId: String,
+  val requestId: String,
+  val skillName: String,
+  val status: String,
+  val options: List<Map<String, String>>,
+)
+
 class AgentCoreHttpClient {
   fun registerDevice(
     config: GatewayConfig,
@@ -134,6 +161,161 @@ class AgentCoreHttpClient {
           taskStatus = taskStatus,
           approvedSkills = approved,
           blockedSkills = blocked,
+        ),
+    )
+  }
+
+  fun chatTurn(
+    config: GatewayConfig,
+    userId: String,
+    deviceId: String,
+    message: String,
+    session: Map<String, Any?> = emptyMap(),
+    history: List<Map<String, String>> = emptyList(),
+  ): GatewayResult<ChatTurnData> {
+    val payload =
+      JSONObject()
+        .put("device_id", deviceId)
+        .put("user_id", userId)
+        .put("message", message)
+        .put("session", session.toJsonObject())
+        .put("history", history.map { it.toJsonObject() }.toJsonArray())
+
+    val result = requestJson(config, "POST", "/api/v1/agent/chat", payload)
+    if (!result.success || result.data == null) {
+      return GatewayResult(success = false, code = result.code, message = result.message, data = null)
+    }
+
+    val rootData = result.data.optJSONObject("data")
+      ?: return GatewayResult(success = false, code = "MALFORMED_RESPONSE", message = "Missing data in chat response", data = null)
+
+    return GatewayResult(
+      success = true,
+      code = result.code,
+      message = result.message,
+      data =
+        ChatTurnData(
+          shouldPlan = rootData.optBoolean("should_plan", false),
+          reply = rootData.optString("reply", ""),
+          mode = rootData.optString("mode", "chat"),
+          confidence = rootData.optDouble("confidence", 0.0),
+          source = rootData.optString("source", ""),
+        ),
+    )
+  }
+
+  fun streamAgentRun(
+    config: GatewayConfig,
+    userId: String,
+    deviceId: String,
+    message: String,
+    approveSensitive: Boolean = true,
+    session: Map<String, Any?> = emptyMap(),
+    history: List<Map<String, String>> = emptyList(),
+    onEvent: (AgentStreamEvent) -> Unit,
+  ): GatewayResult<Unit> {
+    val payload =
+      JSONObject()
+        .put("device_id", deviceId)
+        .put("user_id", userId)
+        .put("message", message)
+        .put("approve_sensitive", approveSensitive)
+        .put("session", session.toJsonObject())
+        .put("history", history.map { it.toJsonObject() }.toJsonArray())
+
+    val protocol = if (config.tlsEnabled) "https" else "http"
+    val url = URL("$protocol://${config.host}:${config.port}/api/v1/agent/runs/stream")
+    val connection = (url.openConnection() as HttpURLConnection).apply {
+      requestMethod = "POST"
+      connectTimeout = 10_000
+      readTimeout = 120_000
+      useCaches = false
+      doOutput = true
+      setRequestProperty("Accept", "application/x-ndjson")
+      setRequestProperty("Content-Type", "application/json; charset=utf-8")
+      setRequestProperty("Connection", "close")
+    }
+
+    return runCatching<GatewayResult<Unit>> {
+      OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
+        writer.write(payload.toString())
+      }
+
+      val status = connection.responseCode
+      val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+      if (status !in 200..299) {
+        val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
+        return@runCatching GatewayResult<Unit>(
+          success = false,
+          code = "HTTP_$status",
+          message = raw.ifBlank { "stream_http_error_$status" },
+          data = null,
+        )
+      }
+
+      val responseStream =
+        stream
+          ?: return@runCatching GatewayResult<Unit>(
+            success = false,
+            code = "EMPTY_STREAM",
+            message = "stream response body is empty",
+            data = null,
+          )
+
+      responseStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+        lines.forEach { line ->
+          val trimmed = line.trim()
+          if (trimmed.isEmpty()) return@forEach
+          val parsed = runCatching { JSONObject(trimmed) }.getOrNull() ?: return@forEach
+          onEvent(parsed.toAgentStreamEvent())
+        }
+      }
+      GatewayResult<Unit>(success = true, code = "OK", message = "stream completed", data = Unit)
+    }.getOrElse { throwable ->
+      GatewayResult<Unit>(
+        success = false,
+        code = "NETWORK_ERROR",
+        message = throwable.message ?: "stream_network_error",
+        data = null,
+      )
+    }.also {
+      connection.disconnect()
+    }
+  }
+
+  fun submitDecision(
+    config: GatewayConfig,
+    taskId: String,
+    deviceId: String,
+    requestId: String,
+    decision: String,
+    userId: String,
+  ): GatewayResult<SkillDecisionData> {
+    val payload =
+      JSONObject()
+        .put("device_id", deviceId)
+        .put("request_id", requestId)
+        .put("decision", decision)
+        .put("user_id", userId)
+
+    val result = requestJson(config, "POST", "/api/v1/agent/tasks/$taskId/decision", payload)
+    if (!result.success || result.data == null) {
+      return GatewayResult(success = false, code = result.code, message = result.message, data = null)
+    }
+
+    val rootData = result.data.optJSONObject("data")
+      ?: return GatewayResult(success = false, code = "MALFORMED_RESPONSE", message = "Missing decision data", data = null)
+
+    return GatewayResult(
+      success = true,
+      code = result.code,
+      message = result.message,
+      data =
+        SkillDecisionData(
+          taskId = rootData.optString("task_id", taskId),
+          taskStatus = rootData.optString("task_status", ""),
+          requestId = rootData.optString("request_id", requestId),
+          decision = rootData.optString("decision", decision),
         ),
     )
   }
@@ -317,6 +499,29 @@ private fun JSONArray.toList(): List<Any?> {
     list += toAny(opt(i))
   }
   return list
+}
+
+private fun JSONObject.toAgentStreamEvent(): AgentStreamEvent {
+  val rawOptions = optJSONArray("options")?.toList().orEmpty()
+  val options =
+    rawOptions.mapNotNull { item ->
+      val map = item as? Map<*, *> ?: return@mapNotNull null
+      val label = map["label"]?.toString().orEmpty()
+      val value = map["value"]?.toString().orEmpty()
+      if (label.isBlank() && value.isBlank()) return@mapNotNull null
+      mapOf("label" to label, "value" to value)
+    }
+  return AgentStreamEvent(
+    eventId = optString("event_id", ""),
+    type = optString("type", "unknown"),
+    title = optString("title", ""),
+    content = optString("content", ""),
+    taskId = optString("task_id", ""),
+    requestId = optString("request_id", ""),
+    skillName = optString("skill_name", ""),
+    status = optString("status", ""),
+    options = options,
+  )
 }
 
 private fun toAny(value: Any?): Any? =

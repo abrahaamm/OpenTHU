@@ -2,9 +2,21 @@ package ai.opencray.app.data.repository
 
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
+import ai.opencray.app.feature.chat.AgentEvent
 
 interface ChatRepository {
+  fun getActiveConversationId(): String
+
   fun getMessages(): List<ChatMessage>
+
+  fun getMessages(conversationId: String): List<ChatMessage>
+
+  fun createConversation(
+    conversationId: String,
+    initialMessages: List<ChatMessage>,
+  )
+
+  fun selectConversation(conversationId: String): Boolean
 
   fun sendMessage(text: String)
 
@@ -16,6 +28,17 @@ interface ChatRepository {
   fun updateMessage(
     messageId: String,
     text: String,
+  )
+
+  fun appendEvent(
+    messageId: String,
+    event: AgentEvent,
+  )
+
+  fun updateEventStatus(
+    eventId: String,
+    status: String,
+    content: String? = null,
   )
 
   fun clearMessages()
