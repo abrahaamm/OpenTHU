@@ -668,6 +668,8 @@ class OpenTHULangGraphAgent:
                     "这听起来不太轻松。我可以陪你捋一下，也可以只安静接住你现在的状态。",
                 ],
             )
+        if self._is_knowledge_scope_question(normalized):
+            return self._reply_knowledge_scope_question(user_input)
         if has_english:
             return self._stable_chat_choice(
                 normalized,
@@ -691,6 +693,35 @@ class OpenTHULangGraphAgent:
         if not replies:
             return ""
         return replies[sum(ord(char) for char in seed) % len(replies)]
+
+    def _is_knowledge_scope_question(self, normalized: str) -> bool:
+        markers = ["了解多少", "懂不懂", "懂多少", "知道多少", "熟悉吗", "会不会"]
+        return any(marker in normalized for marker in markers) or ("你" in normalized and "了解" in normalized)
+
+    def _reply_knowledge_scope_question(self, user_input: str) -> str:
+        topic = self._extract_knowledge_topic(user_input)
+        normalized_topic = topic.lower()
+        if any(token in normalized_topic for token in ["股票", "投资", "金融"]):
+            return (
+                "我了解一些股票和金融市场的基础：比如股票是什么、交易机制、财报指标、估值思路、"
+                "行业比较、风险控制，以及常见的基本面/技术面分析方法。也可以帮你读一段资讯或财报并整理重点。\n\n"
+                "但我不会替你做买卖决定，也不能保证收益。如果你愿意，我们可以从基础概念、选股逻辑，"
+                "或者某只股票的信息解读开始。"
+            )
+        return (
+            f"我对「{topic}」可以做基础解释、概念梳理、资料总结和学习路线整理。"
+            "如果你问的是实时信息或专业决策，我会尽量说明边界，并在需要时建议查证来源。\n\n"
+            "你可以直接问一个更具体的问题，我会接着讲。"
+        )
+
+    def _extract_knowledge_topic(self, user_input: str) -> str:
+        topic = user_input.strip()
+        for prefix in ["你对于", "你对", "关于", "对于", "你"]:
+            if topic.startswith(prefix):
+                topic = topic[len(prefix):]
+        for token in ["了解多少", "懂不懂", "懂多少", "知道多少", "熟悉吗", "会不会", "了解吗", "了解", "吗", "？", "?"]:
+            topic = topic.replace(token, "")
+        return topic.strip() or "这个话题"
 
     def _build_initial_state(
         self,

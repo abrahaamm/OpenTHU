@@ -702,6 +702,8 @@ class OpenCrayRuntime(
             "这听起来不太轻松。我可以陪你捋一下，也可以只安静接住你现在的状态。",
           ),
         )
+      isKnowledgeScopeQuestion(normalized) ->
+        replyKnowledgeScopeQuestion(text)
       hasEnglish ->
         pickLocalReply(
           normalized,
@@ -730,6 +732,35 @@ class OpenCrayRuntime(
   ): String {
     if (replies.isEmpty()) return ""
     return replies[Math.floorMod(seed.hashCode(), replies.size)]
+  }
+
+  private fun isKnowledgeScopeQuestion(normalized: String): Boolean =
+    listOf("了解多少", "懂不懂", "懂多少", "知道多少", "熟悉吗", "会不会").any { normalized.contains(it) } ||
+      (normalized.contains("你") && normalized.contains("了解"))
+
+  private fun replyKnowledgeScopeQuestion(text: String): String {
+    val topic = extractKnowledgeTopic(text)
+    val normalizedTopic = topic.lowercase(Locale.getDefault())
+    return if (
+      normalizedTopic.contains("股票") ||
+      normalizedTopic.contains("投资") ||
+      normalizedTopic.contains("金融")
+    ) {
+      "我了解一些股票和金融市场的基础：比如股票是什么、交易机制、财报指标、估值思路、行业比较、风险控制，以及常见的基本面/技术面分析方法。也可以帮你读一段资讯或财报并整理重点。\n\n但我不会替你做买卖决定，也不能保证收益。如果你愿意，我们可以从基础概念、选股逻辑，或者某只股票的信息解读开始。"
+    } else {
+      "我对「$topic」可以做基础解释、概念梳理、资料总结和学习路线整理。如果你问的是实时信息或专业决策，我会尽量说明边界，并在需要时建议查证来源。\n\n你可以直接问一个更具体的问题，我会接着讲。"
+    }
+  }
+
+  private fun extractKnowledgeTopic(text: String): String {
+    var topic = text.trim()
+    listOf("你对于", "你对", "关于", "对于", "你").forEach { prefix ->
+      topic = topic.removePrefix(prefix)
+    }
+    listOf("了解多少", "懂不懂", "懂多少", "知道多少", "熟悉吗", "会不会", "了解吗", "了解", "吗", "？", "?").forEach { token ->
+      topic = topic.replace(token, "")
+    }
+    return topic.trim().ifBlank { "这个话题" }
   }
 
   private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
