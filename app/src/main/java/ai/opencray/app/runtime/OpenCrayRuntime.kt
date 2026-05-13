@@ -31,8 +31,13 @@ import ai.opencray.app.gateway.PlanTaskData
 import ai.opencray.app.gateway.PlannedSkillInvocation
 import ai.opencray.app.memory.MemoryManager
 import ai.opencray.app.safety.SafetyAuditor
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
 import java.util.UUID
 import kotlin.math.min
@@ -44,6 +49,21 @@ import java.util.Locale
  */
 fun interface CalendarPermissionDelegate {
   fun requestCalendarPermissions()
+}
+
+private data class LocalLlmConfig(
+  val apiKey: String,
+  val model: String,
+  val baseUrl: String,
+) {
+  fun chatCompletionsEndpoint(): String {
+    val normalizedBase = baseUrl.trim().trimEnd('/').ifBlank { "https://api.openai.com/v1" }
+    return if (normalizedBase.endsWith("/chat/completions")) {
+      normalizedBase
+    } else {
+      "$normalizedBase/chat/completions"
+    }
+  }
 }
 
 class OpenCrayRuntime(
@@ -339,13 +359,93 @@ class OpenCrayRuntime(
     }
 
     if (!shouldPlanLocally(normalizedGoal)) {
-      streamAssistant(replyLocalChat(normalizedGoal))
+      handleLocalChat(normalizedGoal)
       return false
     }
 
     streamAssistant("好的，我来处理。")
     planGoalLocally(normalizedGoal)
     return true
+  }
+
+  private fun handleLocalChat(message: String) {
+    thread(name = "opencray-local-chat", isDaemon = true) {
+      val reply = generateLocalLlmChatReply(message) ?: replyLocalChat(message)
+      streamAssistant(reply)
+    }
+  }
+
+  private fun generateLocalLlmChatReply(message: String): String? {
+    val config = localLlmConfig() ?: return null
+    val endpoint = config.chatCompletionsEndpoint()
+    val messages = JSONArray()
+      .put(
+        JSONObject()
+          .put("role", "system")
+          .put(
+            "content",
+            "你是 OpenTHU 移动端里的对话式校园助手。"
+              + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则或 fallback。"
+              + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。",
+          ),
+      )
+
+    localChatHistoryForLlm().forEach { item ->
+      messages.put(
+        JSONObject()
+          .put("role", item["role"].orEmpty())
+          .put("content", item["text"].orEmpty()),
+      )
+    }
+    messages.put(JSONObject().put("role", "user").put("content", message))
+
+    val payload =
+      JSONObject()
+        .put("model", config.model)
+        .put("messages", messages)
+        .put("temperature", 0.8)
+        .put("max_tokens", 500)
+
+    return runCatching {
+      val connection =
+        (URL(endpoint).openConnection() as HttpURLConnection).apply {
+          requestMethod = "POST"
+          connectTimeout = 10_000
+          readTimeout = 45_000
+          useCaches = false
+          doOutput = true
+          setRequestProperty("Accept", "application/json")
+          setRequestProperty("Content-Type", "application/json; charset=utf-8")
+          setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+        }
+      try {
+        OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
+          writer.write(payload.toString())
+        }
+        val status = connection.responseCode
+        val raw =
+          (if (status in 200..299) connection.inputStream else connection.errorStream)
+            ?.bufferedReader(StandardCharsets.UTF_8)
+            ?.use { it.readText() }
+            .orEmpty()
+        if (status !in 200..299) {
+          runtimeRepository.appendEvent("Local LLM chat failed: HTTP_$status $raw")
+          return@runCatching null
+        }
+        JSONObject(raw)
+          .optJSONArray("choices")
+          ?.optJSONObject(0)
+          ?.optJSONObject("message")
+          ?.optString("content", "")
+          ?.trim()
+          ?.takeIf { it.isNotBlank() }
+      } finally {
+        connection.disconnect()
+      }
+    }.getOrElse { throwable ->
+      runtimeRepository.appendEvent("Local LLM chat failed: ${throwable.message ?: "unknown_error"}")
+      null
+    }
   }
 
   private fun handleStreamingRunViaGateway(message: String) {
@@ -408,7 +508,7 @@ class OpenCrayRuntime(
             planGoalLocally(message)
             runActionsLocally(actionIds = null, submitGatewayResult = false)
           } else {
-            streamAssistant(replyLocalChat(message))
+            streamAssistant(generateLocalLlmChatReply(message) ?: replyLocalChat(message))
           }
         } else {
           chatRepository.appendEvent(
@@ -447,14 +547,14 @@ class OpenCrayRuntime(
           planGoalLocally(message)
           runActionsLocally(actionIds = null, submitGatewayResult = false)
         } else {
-          streamAssistant(replyLocalChat(message))
+          streamAssistant(generateLocalLlmChatReply(message) ?: replyLocalChat(message))
         }
         return@thread
       }
 
       val data = result.data
       val reply = data.reply.ifBlank {
-        if (data.shouldPlan) "好的，我来处理。" else replyLocalChat(message)
+        if (data.shouldPlan) "好的，我来处理。" else generateLocalLlmChatReply(message) ?: replyLocalChat(message)
       }
       streamAssistant(reply)
       if (data.shouldPlan) {
@@ -646,6 +746,31 @@ class OpenCrayRuntime(
           "text" to message.text,
         )
       }
+
+  private fun localChatHistoryForLlm(limit: Int = 8): List<Map<String, String>> =
+    chatRepository.getMessages()
+      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+      .dropLast(1)
+      .takeLast(limit)
+      .map { message ->
+        mapOf(
+          "role" to when (message.role) {
+            ChatRole.User -> "user"
+            ChatRole.Assistant -> "assistant"
+            ChatRole.System -> "system"
+          },
+          "text" to message.text.take(1000),
+        )
+      }
+
+  private fun localLlmConfig(): LocalLlmConfig? {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    val apiKey = pref.getString("openai_api_key", "").orEmpty().trim()
+    if (apiKey.isBlank()) return null
+    val model = pref.getString("llm_model", "gpt-4.1-mini").orEmpty().trim().ifBlank { "gpt-4.1-mini" }
+    val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
+    return LocalLlmConfig(apiKey = apiKey, model = model, baseUrl = baseUrl)
+  }
 
   private fun streamAssistant(
     text: String,
