@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -340,6 +342,30 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  private fun EditText.syncToViewModel(onChanged: (String) -> Unit) {
+    addTextChangedListener(
+      object : TextWatcher {
+        override fun beforeTextChanged(
+          s: CharSequence?,
+          start: Int,
+          count: Int,
+          after: Int,
+        ) = Unit
+
+        override fun onTextChanged(
+          s: CharSequence?,
+          start: Int,
+          before: Int,
+          count: Int,
+        ) {
+          onChanged(s?.toString().orEmpty())
+        }
+
+        override fun afterTextChanged(s: Editable?) = Unit
+      },
+    )
+  }
+
   private fun bindActions() {
     drawerToggleButton.setOnClickListener {
       if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
@@ -471,6 +497,9 @@ class MainActivity : AppCompatActivity() {
       viewModel.toggleCapability("safety_guard", isChecked)
       render()
     }
+
+    hostInput.syncToViewModel { value -> viewModel.updateHost(value) }
+    portInput.syncToViewModel { value -> viewModel.updatePort(value) }
   }
 
   private fun render() {
@@ -518,8 +547,8 @@ class MainActivity : AppCompatActivity() {
     renderChatHistory(state.chatMessages)
     renderConversationTabs(state.conversationSummaries)
 
-    if (hostInput.text.toString() != state.host) hostInput.setText(state.host)
-    if (portInput.text.toString() != state.port) portInput.setText(state.port)
+    if (!hostInput.hasFocus() && hostInput.text.toString() != state.host) hostInput.setText(state.host)
+    if (!portInput.hasFocus() && portInput.text.toString() != state.port) portInput.setText(state.port)
     tlsToggle.isChecked = state.tlsEnabled
 
     contextSummaryView.text =
