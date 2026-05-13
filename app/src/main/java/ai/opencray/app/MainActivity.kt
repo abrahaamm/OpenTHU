@@ -17,22 +17,21 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
-import androidx.core.app.ActivityCompat
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.GravityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
-import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.AgentEvent
 import ai.opencray.app.feature.chat.AgentEventOption
 import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
-//import ai.opencray.app.system.AppLaunchController
-//import ai.opencray.app.system.CommonAppsRegistry
 
 class MainActivity : AppCompatActivity() {
   companion object {
@@ -42,6 +41,9 @@ class MainActivity : AppCompatActivity() {
   private lateinit var viewModel: MainViewModel
   private var pendingCalendarActionId: String? = null
 
+  private lateinit var drawerLayout: DrawerLayout
+  private lateinit var drawerToggleButton: Button
+  private lateinit var pageTitleView: TextView
   private lateinit var statusView: TextView
   private lateinit var transportView: TextView
   private lateinit var onboardingView: TextView
@@ -49,6 +51,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var contextFeedView: TextView
   private lateinit var homeQuickActionsView: TextView
   private lateinit var taskFlowView: TextView
+  private lateinit var actionSummaryView: TextView
   private lateinit var actionFeedView: TextView
   private lateinit var safetyFeedView: TextView
   private lateinit var settingsPrivacyView: TextView
@@ -60,9 +63,12 @@ class MainActivity : AppCompatActivity() {
   private lateinit var actionsPanel: LinearLayout
   private lateinit var safetyPanel: LinearLayout
   private lateinit var chatPanel: LinearLayout
-  private lateinit var mainScroll: ScrollView
+  private lateinit var planningPage: ScrollView
+  private lateinit var settingsPage: ScrollView
   private lateinit var chatHistoryScroll: ScrollView
   private lateinit var chatHistoryContainer: LinearLayout
+  private lateinit var conversationSection: LinearLayout
+  private lateinit var conversationListScroll: ScrollView
   private lateinit var conversationTabsContainer: LinearLayout
   private lateinit var newConversationButton: Button
   private lateinit var chatInput: EditText
@@ -91,6 +97,9 @@ class MainActivity : AppCompatActivity() {
   private lateinit var actionSecondaryButton: Button
   private lateinit var actionTertiaryButton: Button
   private lateinit var approveButton: Button
+  private lateinit var planningDeveloperContextSection: LinearLayout
+  private lateinit var planningDeveloperFlowSection: LinearLayout
+  private lateinit var planningDeveloperToggleButton: Button
   private lateinit var openAiKeyInput: EditText
   private lateinit var llmModelInput: EditText
   private lateinit var llmBaseUrlInput: EditText
@@ -110,6 +119,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneInput: EditText
+  private var showPlanningDeveloperInfo: Boolean = false
+
   private val uiRefreshHandler = Handler(Looper.getMainLooper())
   private val uiRefreshTicker =
     object : Runnable {
@@ -125,7 +136,6 @@ class MainActivity : AppCompatActivity() {
     setContentView(R.layout.activity_main)
     viewModel = ViewModelProvider(this)[MainViewModel::class.java]
 
-    // Allow the runtime (background threads) to request calendar permissions via the Activity.
     viewModel.setCalendarPermissionDelegate {
       ActivityCompat.requestPermissions(
         this,
@@ -153,6 +163,9 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun bindViews() {
+    drawerLayout = findViewById(R.id.drawer_layout)
+    drawerToggleButton = findViewById(R.id.drawer_toggle_button)
+    pageTitleView = findViewById(R.id.page_title_text)
     statusView = findViewById(R.id.status_text)
     transportView = findViewById(R.id.transport_text)
     onboardingView = findViewById(R.id.onboarding_text)
@@ -160,6 +173,7 @@ class MainActivity : AppCompatActivity() {
     contextFeedView = findViewById(R.id.context_feed_text)
     homeQuickActionsView = findViewById(R.id.home_quick_actions_text)
     taskFlowView = findViewById(R.id.task_flow_text)
+    actionSummaryView = findViewById(R.id.action_summary_text)
     actionFeedView = findViewById(R.id.action_feed_text)
     safetyFeedView = findViewById(R.id.safety_feed_text)
     settingsPrivacyView = findViewById(R.id.settings_privacy_text)
@@ -171,9 +185,14 @@ class MainActivity : AppCompatActivity() {
     actionsPanel = findViewById(R.id.actions_panel)
     safetyPanel = findViewById(R.id.safety_panel)
     chatPanel = findViewById(R.id.chat_panel)
-    mainScroll = findViewById(R.id.main)
+    planningPage = findViewById(R.id.planning_page)
+    settingsPage = findViewById(R.id.settings_page)
     chatHistoryScroll = findViewById(R.id.chat_history_scroll)
     chatHistoryContainer = findViewById(R.id.chat_history_container)
+    conversationSection = findViewById(R.id.conversation_section)
+    conversationListScroll = findViewById(R.id.conversation_list_scroll)
+    conversationTabsContainer = findViewById(R.id.conversation_tabs_container)
+    newConversationButton = findViewById(R.id.new_conversation_button)
     chatInput = findViewById(R.id.chat_input)
     chatSendButton = findViewById(R.id.chat_send_button)
     preferenceInput = findViewById(R.id.preference_input)
@@ -190,8 +209,6 @@ class MainActivity : AppCompatActivity() {
     chatTab = findViewById(R.id.chat_tab)
     planningTab = findViewById(R.id.planning_tab)
     settingsTab = findViewById(R.id.settings_tab)
-    conversationTabsContainer = findViewById(R.id.conversation_tabs_container)
-    newConversationButton = findViewById(R.id.new_conversation_button)
     notificationToggle = findViewById(R.id.capability_notification_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
     connectButton = findViewById(R.id.connect_button)
@@ -202,6 +219,9 @@ class MainActivity : AppCompatActivity() {
     actionSecondaryButton = findViewById(R.id.action_secondary_button)
     actionTertiaryButton = findViewById(R.id.action_tertiary_button)
     approveButton = findViewById(R.id.approve_button)
+    planningDeveloperContextSection = findViewById(R.id.planning_developer_context_section)
+    planningDeveloperFlowSection = findViewById(R.id.planning_developer_flow_section)
+    planningDeveloperToggleButton = findViewById(R.id.planning_dev_toggle_button)
     openAiKeyInput = findViewById(R.id.setting_openai_key_input)
     llmModelInput = findViewById(R.id.setting_llm_model_input)
     llmBaseUrlInput = findViewById(R.id.setting_llm_base_url_input)
@@ -225,7 +245,7 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun decorateUi() {
-    val root = findViewById<ViewGroup>(R.id.main)
+    val root = findViewById<ViewGroup>(R.id.drawer_layout)
     decorateButtons(root)
     elevatePanels(root)
     keepScrollableContentClipped()
@@ -296,15 +316,18 @@ class MainActivity : AppCompatActivity() {
     chatHistoryScroll.clipChildren = true
     chatHistoryContainer.clipToPadding = true
     chatHistoryContainer.clipChildren = true
-    val quickSkillsScroll = findViewById<ScrollView>(R.id.quick_skills_scroll)
-    quickSkillsScroll.clipToPadding = true
-    quickSkillsScroll.clipChildren = true
-
-    // Nested ScrollView fix: keep touch focus inside inner scroll areas so emulator
-    // gestures do not get hijacked by the outer page ScrollView.
+    conversationSection.clipToPadding = true
+    conversationSection.clipChildren = true
+    conversationListScroll.clipToPadding = true
+    conversationListScroll.clipChildren = true
+    conversationTabsContainer.clipToPadding = true
+    conversationTabsContainer.clipChildren = true
     installNestedScrollLock(chatHistoryScroll)
-    installNestedScrollLock(quickSkillsScroll)
-    chatPanel.setOnTouchListener { view, event ->
+    installNestedScrollLock(conversationListScroll)
+  }
+
+  private fun installNestedScrollLock(innerScroll: ScrollView) {
+    innerScroll.setOnTouchListener { view, event ->
       when (event.actionMasked) {
         MotionEvent.ACTION_DOWN,
         MotionEvent.ACTION_MOVE,
@@ -317,39 +340,33 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
-  private fun installNestedScrollLock(innerScroll: ScrollView) {
-    innerScroll.setOnTouchListener { view, event ->
-      when (event.actionMasked) {
-        MotionEvent.ACTION_DOWN,
-        MotionEvent.ACTION_MOVE,
-        -> {
-          view.parent?.requestDisallowInterceptTouchEvent(true)
-        }
-        MotionEvent.ACTION_UP,
-        MotionEvent.ACTION_CANCEL,
-        -> {
-          view.parent?.requestDisallowInterceptTouchEvent(false)
-        }
-      }
-      false
-    }
-  }
-
   private fun bindActions() {
+    drawerToggleButton.setOnClickListener {
+      if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
+        drawerLayout.closeDrawer(GravityCompat.START)
+      } else {
+        drawerLayout.openDrawer(GravityCompat.START)
+      }
+    }
+
     chatTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Chat)
+      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     planningTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Planning)
+      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     settingsTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Settings)
+      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     newConversationButton.setOnClickListener {
       viewModel.createConversation()
+      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
 
@@ -357,6 +374,7 @@ class MainActivity : AppCompatActivity() {
       val text = chatInput.text.toString()
       viewModel.sendChatMessage(text)
       chatInput.setText("")
+      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
 
@@ -367,6 +385,11 @@ class MainActivity : AppCompatActivity() {
     quickSkillsToggle.setOnClickListener {
       quickSkillsContainer.visibility =
         if (quickSkillsContainer.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+      syncQuickSkillsToggle()
+    }
+    planningDeveloperToggleButton.setOnClickListener {
+      showPlanningDeveloperInfo = !showPlanningDeveloperInfo
+      render()
     }
 
     val preferencePlaceholderListener = View.OnClickListener {
@@ -396,7 +419,12 @@ class MainActivity : AppCompatActivity() {
     }
     testSettingsButton.setOnClickListener {
       val warnings = buildSettingsWarnings()
-      val message = if (warnings.isEmpty()) getString(R.string.settings_health_ok) else "${getString(R.string.settings_health_warn)}: ${warnings.joinToString("；")}"
+      val message =
+        if (warnings.isEmpty()) {
+          getString(R.string.settings_health_ok)
+        } else {
+          "${getString(R.string.settings_health_warn)}：${warnings.joinToString("；")}"
+        }
       Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
@@ -410,7 +438,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.resolveConflict("skip_write")
         render()
       } else {
-        executeActionOrShowFeedback(0, "已模拟加入日历，等待日历 skill 接入")
+        executeActionOrShowFeedback(0, "已模拟加入日历，等待日历能力接入。")
       }
     }
     actionSecondaryButton.setOnClickListener {
@@ -418,7 +446,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.resolveConflict("coexist")
         render()
       } else {
-        executeActionOrShowFeedback(1, "已标记为稍后提醒")
+        executeActionOrShowFeedback(1, "已标记为稍后提醒。")
       }
     }
     actionTertiaryButton.setOnClickListener {
@@ -426,7 +454,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.resolveConflict("delete_conflicts")
         render()
       } else {
-        executeActionOrShowFeedback(2, "已忽略该建议，并保留可撤销记录")
+        executeActionOrShowFeedback(2, "已忽略该建议，并保留可撤销记录。")
       }
     }
 
@@ -447,19 +475,46 @@ class MainActivity : AppCompatActivity() {
 
   private fun render() {
     val state = viewModel.getUiState()
-
     val isPlanning = state.currentDestination == AppDestination.Planning
-    contextPanel.visibility = if (isPlanning) View.VISIBLE else View.GONE
-    chatPanel.visibility = if (state.currentDestination == AppDestination.Chat) View.VISIBLE else View.GONE
-    actionsPanel.visibility = if (isPlanning) View.VISIBLE else View.GONE
-    safetyPanel.visibility = if (state.currentDestination == AppDestination.Settings) View.VISIBLE else View.GONE
+    val isSettings = state.currentDestination == AppDestination.Settings
+    val isChat = state.currentDestination == AppDestination.Chat
+
+    chatPanel.visibility = if (isChat) View.VISIBLE else View.GONE
+    planningPage.visibility = if (isPlanning) View.VISIBLE else View.GONE
+    settingsPage.visibility = if (isSettings) View.VISIBLE else View.GONE
+    contextPanel.visibility = View.VISIBLE
+    actionsPanel.visibility = View.VISIBLE
+    safetyPanel.visibility = View.VISIBLE
 
     chatTab.isEnabled = state.currentDestination != AppDestination.Chat
     planningTab.isEnabled = state.currentDestination != AppDestination.Planning
     settingsTab.isEnabled = state.currentDestination != AppDestination.Settings
+    syncQuickSkillsToggle()
+    planningDeveloperContextSection.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
+    planningDeveloperFlowSection.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
+    actionFeedView.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
+    planningDeveloperToggleButton.text =
+      if (showPlanningDeveloperInfo) {
+        "隐藏开发者信息"
+      } else {
+        "显示开发者信息"
+      }
 
     statusView.text = "Agent 状态：${state.snapshot.connectionStatus}"
     transportView.text = "数据链路：${state.snapshot.transportLabel}"
+    pageTitleView.text =
+      when (state.currentDestination) {
+        AppDestination.Chat -> "Agent 对话"
+        AppDestination.Planning -> "规划中心"
+        AppDestination.Settings -> "设置中心"
+      }
+    onboardingView.text =
+      when (state.currentDestination) {
+        AppDestination.Chat -> "像 ChatGPT 一样自然地发起任务、提问和追踪执行结果。"
+        AppDestination.Planning -> "把线索、日程、待办和执行建议收拢成一个真正可读的计划工作台。"
+        AppDestination.Settings -> "管理能力开关、数据源、模型配置与运行参数。"
+      }
+
     renderChatHistory(state.chatMessages)
     renderConversationTabs(state.conversationSummaries)
 
@@ -467,152 +522,172 @@ class MainActivity : AppCompatActivity() {
     if (portInput.text.toString() != state.port) portInput.setText(state.port)
     tlsToggle.isChecked = state.tlsEnabled
 
-    onboardingView.text =
-      "${getString(R.string.onboarding_title)}\n${getString(R.string.onboarding_body)}"
-
     contextSummaryView.text =
       buildString {
         append("校园资讯\n")
-        append("• 教务通知：课程 DDL 与考试安排待同步\n")
-        append("• 校园活动：讲座、社团与志愿活动可按兴趣推荐\n")
-        append("• 课程/日程：${state.tasks.size} 个任务，${state.memoryRecords.size} 条记忆偏好\n")
-        append("• 待办：${state.systemActions.count { it.status != "executed" }} 个候选动作")
+        append("• 教务通知：课程 DDL 与考试安排会在这里汇总。\n")
+        append("• 校园活动：讲座、社团与志愿活动会按兴趣整理。\n")
+        append("• 课程与日程：当前共有 ${state.tasks.size} 个任务，${state.memoryRecords.size} 条记忆。\n")
+        append("• 待处理动作：${state.systemActions.count { it.status != "executed" }} 个。")
       }
 
     contextFeedView.text =
       buildString {
-        append("状态提示与推荐\n")
-        append("• 解析中：通知和校园网页会先进入结构化队列\n")
-        append("• 待确认：涉及日历、跨应用或高风险动作时展示原因\n")
-        append("• 已执行/失败/已回滚：结果会同步到进度页\n\n")
-        append(
-          state.contextSignals.joinToString(separator = "\n\n") { signal ->
-            "${signal.title}\n${signal.detail}\nSource: ${signal.source}"
-          },
-        )
+        append("规划说明\n")
+        append("• 新收到的通知和网页内容会先进入结构化解析。\n")
+        append("• 涉及日历或跨应用操作时，会先解释原因再等待确认。\n")
+        append("• 执行结果、失败记录和回滚入口都会同步到这里。")
 
-        val memoryPreview = state.memoryRecords.take(5)
-        if (memoryPreview.isNotEmpty()) {
-          append("\n\nMemory Preview\n")
+        if (state.contextSignals.isNotEmpty()) {
+          append("\n\n最近上下文\n")
           append(
-            memoryPreview.joinToString(separator = "\n") { memory ->
-              "[${memory.scope}] ${memory.key}: ${memory.value} (w=${memory.weight})"
+            state.contextSignals.take(6).joinToString(separator = "\n\n") { signal ->
+              "${signal.title}\n${signal.detail}\n来源：${signal.source}"
             },
           )
         }
       }
 
-    // --- Conflict resolution UI (overrides normal action feed + buttons) ---
-    val conflict = state.pendingConflict
-    if (conflict != null) {
-      actionFeedView.text = buildString {
-        append("===== 日历冲突，请选择处理策略 =====\n\n")
-        append(conflict.conflictMessage)
-        append("\n\n操作：\n")
-        append("  [跳过创建]     — 不写入日历，保留现有事项\n")
-        append("  [共存]         — 忽略冲突，直接写入\n")
-        append("  [删除冲突事项] — 删除冲突事项后再写入")
-      }
-      actionPrimaryButton.text = "跳过创建"
-      actionPrimaryButton.isEnabled = true
-      actionSecondaryButton.text = "共存"
-      actionSecondaryButton.isEnabled = true
-      actionTertiaryButton.text = "删除冲突事项"
-      actionTertiaryButton.isEnabled = true
-      return
-    }
-
     homeQuickActionsView.text =
       buildString {
-        append("${getString(R.string.home_quick_actions)}\n")
-        append("• 加入日历：把课程、活动、考试转为日程\n")
-        append("• 设置提醒：按强/中/弱优先级提醒\n")
-        append("• 忽略/稍后：降低打扰，保留可恢复记录\n")
-        append("• 偏好反馈：感兴趣、减少此类、不再推荐、修改后接受")
+        append("快捷动作建议\n")
+        append("• 把课程、活动、考试转成日历事项。\n")
+        append("• 为重要节点添加多层级提醒。\n")
+        append("• 对不需要的信息做稍后提醒或忽略处理。\n")
+        append("• 把你的偏好沉淀到记忆层，减少重复设置。")
       }
 
     taskFlowView.text =
       buildString {
         append("任务流转\n")
-        append("1. 通知/网页/课表输入 → 语义解析\n")
-        append("2. Planner 生成候选动作 → Policy Engine 审查\n")
-        append("3. 用户确认高风险动作 → 执行并展示结果\n")
-        append("4. 可撤销操作保留回滚入口，偏好反馈写入记忆层")
+        append("1. 输入目标、通知或网页内容。\n")
+        append("2. Planner 生成候选动作并进行策略审查。\n")
+        append("3. 高风险动作等待确认后执行。\n")
+        append("4. 结果回写到对话、规划和记忆模块。")
       }
 
     val planningSnapshotView = findViewById<TextView>(R.id.planning_snapshot_text)
+    val planningMetricTasksView = findViewById<TextView>(R.id.planning_metric_tasks)
+    val planningMetricActionsView = findViewById<TextView>(R.id.planning_metric_actions)
+    val planningMetricSafetyView = findViewById<TextView>(R.id.planning_metric_safety)
+    val planningMetricMemoryView = findViewById<TextView>(R.id.planning_metric_memory)
+    val planningFocusView = findViewById<TextView>(R.id.planning_focus_text)
     val planningScheduleView = findViewById<TextView>(R.id.planning_schedule_text)
     val planningAlarmView = findViewById<TextView>(R.id.planning_alarm_text)
     val planningTodoView = findViewById<TextView>(R.id.planning_todo_text)
 
-    planningSnapshotView.text = buildString {
-      append("${getString(R.string.planning_snapshot_title)}\n")
-      append("任务数量：${state.tasks.size}\n")
-      append("候选动作：${state.systemActions.size}\n")
-      append("安全记录：${state.safetyRecords.size}\n")
-      append("记忆条目：${state.memoryRecords.size}")
-    }
-
-    val scheduleHints =
-      state.contextSignals
-        .filter { it.title.contains("课程") || it.title.contains("课表") || it.detail.contains("课程") }
-        .take(5)
-        .joinToString("\n") { "• ${it.title}: ${it.detail.take(40)}" }
-        .ifBlank { "• 暂无已爬取课表数据，等待课程/校历 skill 返回。" }
-    planningScheduleView.text = "${getString(R.string.planning_schedule_title)}\n$scheduleHints"
-
-    val alarmHints =
-      state.systemActions
-        .filter { it.id.contains("alarm") || it.title.contains("提醒") || it.title.contains("闹钟") }
-        .take(5)
-        .joinToString("\n") { "• ${it.title} (${it.status})" }
-        .ifBlank { "• 暂无闹钟任务，可在规划动作中添加。"}
-    planningAlarmView.text = "${getString(R.string.planning_alarm_title)}\n$alarmHints"
-
-    val todoHints =
-      state.tasks
-        .take(6)
-        .joinToString("\n") { "• ${it.goal.take(36)} [${it.status}]" }
-        .ifBlank { "• 暂无待办任务，先在对话页提交目标。"}
-    planningTodoView.text = "${getString(R.string.planning_todo_title)}\n$todoHints"
-
-    actionFeedView.text =
-      state.systemActions.joinToString(separator = "\n\n") { action ->
-        val approval = if (action.requiresApproval) "Approval required" else "Auto/instant"
-        val result = action.lastResult ?: "Not executed yet"
-        "${action.title}\n${action.summary}\nRisk: ${action.riskLevel} · $approval · Status: ${action.status}\nConfidence: ${action.confidence}%\nReason: ${action.explain}\nLast result: $result"
+    planningSnapshotView.text =
+      buildString {
+        append("今天的工作台已经为你收拢了任务、动作、提醒与长期偏好。\n")
+        append("先看当前焦点，再决定是继续执行、补充计划，还是调整提醒节奏。")
       }
+    planningMetricTasksView.text = state.tasks.size.toString()
+    planningMetricActionsView.text = state.systemActions.size.toString()
+    planningMetricSafetyView.text = state.safetyRecords.size.toString()
+    planningMetricMemoryView.text = state.memoryRecords.size.toString()
+
+    planningFocusView.text =
+      when {
+        state.tasks.isNotEmpty() -> "优先关注：${state.tasks.first().goal.take(42)}"
+        state.systemActions.isNotEmpty() -> "优先关注：${state.systemActions.first().title}"
+        state.contextSignals.isNotEmpty() -> "优先关注：${state.contextSignals.first().title}"
+        else -> "当前还没有明确焦点，可以先回到对话页描述你的目标。"
+      }
+
+    planningScheduleView.text =
+      buildString {
+        append("课程线索\n")
+        val content =
+          state.contextSignals
+            .filter { it.title.contains("课程") || it.title.contains("课表") || it.detail.contains("课程") }
+            .take(5)
+            .joinToString("\n") { "• ${it.title}" }
+            .ifBlank { "• 暂无课程数据，等待课程或校历能力返回。" }
+        append(content)
+      }
+
+    planningAlarmView.text =
+      buildString {
+        append("提醒状态\n")
+        val content =
+          state.systemActions
+            .filter { it.id.contains("alarm") || it.title.contains("提醒") || it.title.contains("闹钟") }
+            .take(5)
+            .joinToString("\n") { "• ${it.title} · ${it.status}" }
+            .ifBlank { "• 暂无提醒任务，可从规划动作中添加。" }
+        append(content)
+      }
+
+    planningTodoView.text =
+      buildString {
+        append("待办摘要\n")
+        val content =
+          state.tasks
+            .take(6)
+            .joinToString("\n") { "• ${it.goal.take(30)} · ${it.status}" }
+            .ifBlank { "• 暂无待办任务，先在对话页提交目标。" }
+        append(content)
+      }
+
+    val conflict = state.pendingConflict
+    if (conflict != null) {
+      actionSummaryView.text = "当前有一个需要你立即决定的日历冲突。"
+      actionFeedView.text =
+        buildString {
+          append("检测到日历冲突，请选择处理策略。\n\n")
+          append(conflict.conflictMessage)
+          append("\n\n• 跳过创建：保留现有事项。\n")
+          append("• 共存：忽略冲突，直接写入。\n")
+          append("• 删除冲突事项：清理后再写入。")
+        }
+      actionPrimaryButton.text = "跳过创建"
+      actionSecondaryButton.text = "共存"
+      actionTertiaryButton.text = "删除冲突事项"
+      actionPrimaryButton.isEnabled = true
+      actionSecondaryButton.isEnabled = true
+      actionTertiaryButton.isEnabled = true
+    } else {
+      actionSummaryView.text =
+        when {
+          state.systemActions.isNotEmpty() -> "当前共有 ${state.systemActions.size} 个候选动作，优先查看第一个建议并决定是否执行。"
+          else -> "当前还没有候选动作。先在对话页描述目标，规划页会在这里生成建议。"
+        }
+      actionFeedView.text =
+        state.systemActions.joinToString(separator = "\n\n") { action ->
+          val approval = if (action.requiresApproval) "需要确认" else "可自动执行"
+          val result = action.lastResult ?: "尚未执行"
+          "${action.title}\n${action.summary}\n风险：${action.riskLevel} · $approval · 状态：${action.status}\n原因：${action.explain}\n结果：$result"
+        }.ifBlank { "当前还没有可执行动作。先在对话页描述你的目标，我们会在这里生成规划建议。" }
+
+      configureActionButton(actionPrimaryButton, state.systemActions, 0, "暂无动作 1")
+      configureActionButton(actionSecondaryButton, state.systemActions, 1, "暂无动作 2")
+      configureActionButton(actionTertiaryButton, state.systemActions, 2, "暂无动作 3")
+    }
 
     safetyFeedView.text =
       buildString {
-        append("安全审查与可解释记录\n")
-        append(
-          state.safetyRecords.take(12).joinToString(separator = "\n\n") { record ->
-            "${record.title}\n${record.detail}\nStatus: ${record.status}"
-          },
-        )
-
-        val auditPreview = state.auditTrail.take(12)
-        if (auditPreview.isNotEmpty()) {
-          append("\n\nAudit Trail\n")
-          append(
-            auditPreview.joinToString(separator = "\n") { entry ->
-              "[${entry.stage}] ${entry.actionId}: ${entry.message}"
-            },
-          )
-        }
+        append("安全审查与解释记录\n")
+        val content =
+          state.safetyRecords
+            .take(12)
+            .joinToString(separator = "\n\n") { record ->
+              "${record.title}\n${record.detail}\n状态：${record.status}"
+            }
+            .ifBlank { "暂无安全记录。" }
+        append(content)
       }
 
     settingsPrivacyView.text =
       buildString {
-        append("${getString(R.string.settings_title)}\n")
-        append("• 记忆开关：长期偏好 / 中期情境 / 短期交互\n")
-        append("• 数据源配置：校园官网、学院通知、课表、作业、考试\n")
-        append("• 权限管理：通知、日历、无障碍、悬浮窗按需开启\n")
-        append("• 风险提示：跨应用执行前必须展示用途、影响与回滚方式")
+        append("在这里统一管理 OpenTHU 的能力开关、连接方式、校园数据源、记忆策略与设备参数。\n")
+        append("建议先完成连接与模型配置，再按需补充校园与搜索、记忆策略和设备选项。")
       }
 
-    eventsView.text = state.snapshot.recentEvents.take(20).joinToString(separator = "\n• ", prefix = "• ")
+    eventsView.text =
+      state.snapshot.recentEvents
+        .take(20)
+        .joinToString(separator = "\n• ", prefix = "• ")
+        .ifBlank { "• 暂无最近事件。" }
 
     state.snapshot.capabilities.associateBy { it.id }.let { capabilities ->
       notificationToggle.setOnCheckedChangeListener(null)
@@ -630,38 +705,83 @@ class MainActivity : AppCompatActivity() {
         render()
       }
     }
-
-    configureActionButton(actionPrimaryButton, state.systemActions, 0, "No action #1")
-    configureActionButton(actionSecondaryButton, state.systemActions, 1, "No action #2")
-    configureActionButton(actionTertiaryButton, state.systemActions, 2, "No action #3")
   }
 
   private fun renderConversationTabs(conversations: List<ConversationSummary>) {
     conversationTabsContainer.removeAllViews()
     conversations.forEach { summary ->
-      val button = Button(this).apply {
-        text = summary.title
-        setAllCaps(false)
-        textSize = 12f
-        minHeight = dp(32)
-        minimumHeight = dp(32)
-        setPadding(dp(12), dp(6), dp(12), dp(6))
-        alpha = if (summary.selected) 1f else 0.78f
-        setBackgroundResource(if (summary.selected) R.drawable.button_primary_selector else R.drawable.button_secondary_selector)
-        setOnClickListener {
-          viewModel.selectConversation(summary.id)
-          render()
+      val row =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.VERTICAL
+          setPadding(dp(14), dp(12), dp(14), dp(12))
+          setBackgroundResource(
+            if (summary.selected) {
+              R.drawable.button_primary_selector
+            } else {
+              R.drawable.button_secondary_selector
+            },
+          )
+          isClickable = true
+          isFocusable = true
+          alpha = if (summary.selected) 1f else 0.92f
+          setOnClickListener {
+            viewModel.selectConversation(summary.id)
+            drawerLayout.closeDrawer(GravityCompat.START)
+            render()
+          }
         }
-      }
+
+      val titleView =
+        TextView(this).apply {
+          text = summary.title
+          textSize = 13f
+          setTextColor(
+            ContextCompat.getColor(
+              this@MainActivity,
+              if (summary.selected) R.color.white else R.color.opencray_ink,
+            ),
+          )
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+
+      val subtitleView =
+        TextView(this).apply {
+          text = summary.subtitle
+          textSize = 12f
+          maxLines = 1
+          ellipsize = android.text.TextUtils.TruncateAt.END
+          alpha = 0.9f
+          setTextColor(
+            ContextCompat.getColor(
+              this@MainActivity,
+              if (summary.selected) R.color.white else R.color.opencray_muted,
+            ),
+          )
+        }
+
+      row.addView(titleView)
+      row.addView(subtitleView)
+
       val params =
         LinearLayout.LayoutParams(
-          LinearLayout.LayoutParams.WRAP_CONTENT,
+          LinearLayout.LayoutParams.MATCH_PARENT,
           LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply {
-          rightMargin = dp(8)
+          bottomMargin = dp(8)
         }
-      conversationTabsContainer.addView(button, params)
+      conversationTabsContainer.addView(row, params)
     }
+  }
+
+  private fun syncQuickSkillsToggle() {
+    quickSkillsToggle.text =
+      getString(
+        if (quickSkillsContainer.visibility == View.VISIBLE) {
+          R.string.chat_quick_skills_toggle_collapse
+        } else {
+          R.string.chat_quick_skills_toggle_expand
+        },
+      )
   }
 
   private fun bindSkillPlaceholder(
@@ -673,13 +793,12 @@ class MainActivity : AppCompatActivity() {
       if (skillId.startsWith("placeholder_")) {
         Toast.makeText(this, getString(R.string.skills_waiting_to_join), Toast.LENGTH_SHORT).show()
       }
+      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
   }
 
   private fun renderChatHistory(messages: List<ChatMessage>) {
-    // Keep auto-stick-to-bottom behavior only when user is already at bottom.
-    // If user has scrolled up to read history, do not force jump back.
     val shouldStickToBottom = !chatHistoryScroll.canScrollVertically(1)
     chatHistoryContainer.removeAllViews()
 
@@ -699,9 +818,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     if (shouldStickToBottom) {
-      chatHistoryScroll.post {
-        chatHistoryScroll.fullScroll(View.FOCUS_DOWN)
-      }
+      chatHistoryScroll.post { chatHistoryScroll.fullScroll(View.FOCUS_DOWN) }
     }
   }
 
@@ -769,13 +886,11 @@ class MainActivity : AppCompatActivity() {
           ChatRole.System -> R.drawable.message_system_bubble
         },
       )
-
       layoutParams =
         LinearLayout.LayoutParams(
-          LinearLayout.LayoutParams.WRAP_CONTENT,
+          (resources.displayMetrics.widthPixels * 0.72f).toInt(),
           LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply {
-          width = (resources.displayMetrics.widthPixels * 0.72f).toInt()
           setMargins(dp(4), dp(6), dp(4), dp(6))
           gravity = if (isUser) Gravity.END else Gravity.START
         }
@@ -932,30 +1047,8 @@ class MainActivity : AppCompatActivity() {
       return
     }
 
-    button.text = "Execute: ${action.title}"
+    button.text = action.title
     button.isEnabled = true
-  }
-
-  private fun executeActionByIndex(index: Int) {
-    val action = viewModel.getUiState().systemActions.getOrNull(index)
-    if (action == null) {
-      Toast.makeText(this, "No action at slot ${index + 1}", Toast.LENGTH_SHORT).show()
-      return
-    }
-
-    if (requiresCalendarPermission(action) && !hasCalendarPermissions()) {
-      pendingCalendarActionId = action.id
-      ActivityCompat.requestPermissions(
-        this,
-        arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
-        CALENDAR_PERMISSION_REQUEST,
-      )
-      Toast.makeText(this, "请授予日历权限后重试。", Toast.LENGTH_SHORT).show()
-      return
-    }
-
-    viewModel.executeAction(action.id)
-    render()
   }
 
   private fun requiresCalendarPermission(action: SystemAction): Boolean =
@@ -994,13 +1087,9 @@ class MainActivity : AppCompatActivity() {
 
     viewModel.executeAction(action.id)
     Toast.makeText(this, "已提交：${action.title}", Toast.LENGTH_SHORT).show()
+    drawerLayout.openDrawer(GravityCompat.START)
     render()
   }
-
-  // Define commonAppsRegistry if it was lost in context handling or it should just be properly scoped
-  // The original feature/UI used commonAppsRegistry, let's ensure it can compile or comment it out if undefined
-  // For now I will leave it
-  // private fun refreshCommonApps() { ... }
 
   override fun onRequestPermissionsResult(
     requestCode: Int,
@@ -1077,7 +1166,8 @@ class MainActivity : AppCompatActivity() {
     val warnings = mutableListOf<String>()
     if (openAiKeyInput.text.toString().trim().isEmpty()) warnings += "缺少 OPENAI_API_KEY"
     if (webvpnCookieInput.text.toString().trim().isEmpty()) warnings += "缺少 WebVPN Cookie（校园资讯真实抓取会降级）"
-    if (searchProviderInput.text.toString().trim().equals("brave", ignoreCase = true) &&
+    if (
+      searchProviderInput.text.toString().trim().equals("brave", ignoreCase = true) &&
       searchApiKeyInput.text.toString().trim().isEmpty()
     ) {
       warnings += "Brave provider 缺少 API Key"

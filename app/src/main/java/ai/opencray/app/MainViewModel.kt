@@ -15,6 +15,10 @@ import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
 import ai.opencray.app.runtime.CalendarPermissionDelegate
 import ai.opencray.app.runtime.OpenCrayRuntime
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -24,23 +28,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private var selectedDestination: AppDestination = AppDestination.Chat
   private var selectedConversationId: String = "conv_default"
   private val conversations = linkedMapOf<String, ConversationThread>()
-  private var goalDraft: String = ""
   private var hostText: String = runtime.snapshot().host
   private var portText: String = runtime.snapshot().port.toString()
   private var tlsEnabled: Boolean = runtime.snapshot().tlsEnabled
+  private val dateFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
 
   private fun conversationSummaries(): List<ConversationSummary> {
     return conversations.values
       .sortedByDescending { it.updatedAtEpochMs }
-      .map {
+      .map { thread ->
+        val lastUserMessage =
+          thread.messages
+            .asReversed()
+            .firstOrNull { it.role == ChatRole.User }
+            ?.text
+            ?.trim()
+            ?.take(40)
+            ?.ifBlank { "暂未发送用户消息" }
+            ?: "暂未发送用户消息"
+
         ConversationSummary(
-          id = it.id,
-          title = it.title,
-          subtitle = it.messages.lastOrNull()?.text?.take(30) ?: "空会话",
-          updatedAtEpochMs = it.updatedAtEpochMs,
-          selected = it.id == selectedConversationId,
+          id = thread.id,
+          title = formatConversationDate(thread.updatedAtEpochMs),
+          subtitle = lastUserMessage,
+          updatedAtEpochMs = thread.updatedAtEpochMs,
+          selected = thread.id == selectedConversationId,
         )
       }
+  }
+
+  private fun formatConversationDate(timestamp: Long): String {
+    val date = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate()
+    val today = LocalDate.now()
+    return when (date) {
+      today -> "今天"
+      today.minusDays(1) -> "昨天"
+      else -> date.format(dateFormatter)
+    }
   }
 
   private fun upsertCurrentConversation(messages: List<ChatMessage>) {
@@ -112,10 +136,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = AppDestination.Chat
   }
 
-  /**
-   * Unified placeholder entry for future skills triggered from chat UI.
-   * Later skill implementations can replace the runtime internals without changing the page.
-   */
   fun invokeSkill(
     skillId: String,
     args: Map<String, String> = emptyMap(),
