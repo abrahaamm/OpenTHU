@@ -565,6 +565,9 @@ class OpenTHULangGraphAgent:
             "讲个笑话",
             "聊聊",
             "随便聊",
+            "how are you",
+            "你好吗",
+            "最近怎么样",
         ]
         if any(marker in normalized_text for marker in conversation_markers):
             return False
@@ -600,18 +603,94 @@ class OpenTHULangGraphAgent:
 
     def _fallback_chat_reply(self, user_input: str) -> str:
         normalized = user_input.strip().lower()
+        has_english = any("a" <= char <= "z" for char in normalized)
         greetings = {"hi", "hello", "hey", "你好", "嗨", "在吗", "早上好", "晚上好"}
+        if any(token in normalized for token in ["how are you", "how's it going", "你好吗", "最近怎么样"]):
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "我状态不错，正在努力从“任务机器”进化成更会聊天的助手。你呢，今天怎么样？",
+                    "我在，感觉还挺清醒的。更想问问你：今天过得顺吗？",
+                    "Doing alright. 我这边在线，也愿意先闲聊一会儿。How about you?",
+                ],
+            )
         if normalized in greetings or (len(normalized) <= 12 and any(item in normalized for item in greetings)):
-            return "我在。你可以随便和我聊，也可以直接告诉我要处理的事。"
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "Hi，我在。今天想先聊两句，还是让我帮你处理点什么？",
+                    "来了。你直接说就行，我会先按聊天接住，需要执行时再动工具。",
+                    "Hello。今天我不急着进入任务模式，先听你说。",
+                ],
+            )
         if any(token in normalized for token in ["who are you", "what are you", "你是谁", "你是做什么的", "你是干嘛的"]):
-            return "我是 OpenTHU 助手，一个偏校园场景的对话式 Agent。你可以和我聊天，也可以让我帮你处理提醒、日历、校园活动、搜索和系统通知。"
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "我是 OpenTHU 助手，一个偏校园场景的对话式 Agent。你可以把我当聊天入口，也可以让我处理提醒、日历、校园活动、搜索和通知。",
+                    "我是 OpenTHU。目标不是只给你执行记录，而是像正常助手一样先听懂你，再在需要时调用工具。",
+                    "你可以把我理解成校园移动端里的 Agent：平时能聊天，遇到明确任务时才会规划和请求确认。",
+                ],
+            )
         if any(token in normalized for token in ["你能做什么", "能干什么", "help", "帮助", "怎么用"]):
-            return "你可以像聊天一样说需求，比如“明早八点提醒我交作业”“帮我看看近期校园活动”“搜索一下某个话题”。如果只是想聊两句，我也会直接回答。"
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "你可以直接自然说，比如“明早八点提醒我交作业”“帮我看看近期校园活动”“搜索一下某个话题”。如果只是聊天，我也会按聊天回应。",
+                    "我主要能做两类事：陪你正常对话，以及在你明确提出任务时处理提醒、日历、活动、搜索和通知。",
+                    "你不用背命令。像和人说话一样描述目标就行；需要权限或确认的时候，我会在对话里问你。",
+                ],
+            )
         if "讲个笑话" in normalized:
-            return "可以。这个项目现在最像一个刚学会分辨“聊天”和“干活”的助手，已经懂得先问一句：这次是真的要执行，还是只是陪你聊聊。"
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "可以。一个 Agent 最怕什么？用户说“随便聊聊”，它立刻生成了三步执行计划。",
+                    "讲一个项目里的冷笑话：以前我听到 hello，也想进入任务规划。现在至少知道先打招呼了。",
+                    "可以。我的成长路线大概是：先别把所有话都当需求，然后再学会不要把所有回应都写成工作总结。",
+                ],
+            )
         if any(token in normalized for token in ["谢谢", "thank"]):
-            return "不客气。我在这里，下一步你直接说就行。"
-        return "我听到了。这个分支现在会先把普通对话当作对话处理；如果你要我执行任务，直接用自然语言说出来就可以。"
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "不客气。你继续说，我跟着。",
+                    "没事，我在。",
+                    "当然。需要继续聊或者接着处理任务，都可以。",
+                ],
+            )
+        if any(token in normalized for token in ["累", "烦", "焦虑", "难受", "不开心", "emo"]):
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "听起来今天有点消耗。要不先别急着解决问题，你可以把发生了什么慢慢说给我听。",
+                    "我听见了。你不用马上整理成一个清楚的问题，先把感觉说出来也可以。",
+                    "这听起来不太轻松。我可以陪你捋一下，也可以只安静接住你现在的状态。",
+                ],
+            )
+        if has_english:
+            return self._stable_chat_choice(
+                normalized,
+                [
+                    "I’m here. We can chat normally; if you want me to do something, just say it naturally.",
+                    "Got you. I’ll treat this as a regular conversation unless you ask me to take an action.",
+                    "I’m listening. What’s on your mind?",
+                ],
+            )
+        return self._stable_chat_choice(
+            normalized,
+            [
+                "我在听。你可以继续往下说一点，我会按聊天接住。",
+                "嗯，我明白你的意思。你想顺着这个话题聊，还是让我帮你整理一下？",
+                "收到。这个我先不当成任务，只当作普通聊天。你可以接着说。",
+                "可以，我们就按聊天来。你想从哪里开始？",
+            ],
+        )
+
+    def _stable_chat_choice(self, seed: str, replies: list[str]) -> str:
+        if not replies:
+            return ""
+        return replies[sum(ord(char) for char in seed) % len(replies)]
 
     def _build_initial_state(
         self,
