@@ -198,44 +198,6 @@ class SearchProvider:
         raise NotImplementedError
 
 
-class MockSearchProvider(SearchProvider):
-    name = "mock"
-
-    def search(
-        self,
-        *,
-        query: str,
-        max_results: int,
-        domains: list[str],
-        freshness_days: int,
-        language: str,
-    ) -> tuple[list[WebSearchResult], bool]:
-        records = [
-            WebSearchResult(
-                title="清华大学近期 AI 讲座与学术活动",
-                url="https://www.tsinghua.edu.cn/mock/ai-lecture",
-                snippet="包含人工智能、大模型、机器学习相关讲座的时间、地点与报名方式。",
-                source="mock",
-                score=0.91,
-            ),
-            WebSearchResult(
-                title="OpenTHU Agent-Core 搜索 Skill 设计说明",
-                url="https://github.com/thu-info-community/thu-info-app",
-                snippet="搜索引擎检索、网页正文抽取、轻量 RAG 召回和带引用总结。",
-                source="mock",
-                score=0.72,
-            ),
-            WebSearchResult(
-                title="校园资讯与活动信息整合",
-                url="https://info.tsinghua.edu.cn/mock/campus",
-                snippet="校园动态、报名活动、论坛与招聘通知的统一检索入口。",
-                source="mock",
-                score=0.65,
-            ),
-        ]
-        return records[:max_results], True
-
-
 class SearxngSearchProvider(SearchProvider):
     name = "searxng"
 
@@ -385,7 +347,7 @@ def _build_provider(session: dict[str, Any] | None = None) -> SearchProvider:
         "duckduckgo",
     ).lower() or "duckduckgo"
     if provider == "mock":
-        return MockSearchProvider()
+        raise SearchProviderError("Mock search provider has been removed; configure duckduckgo, searxng, or brave.")
     if provider == "duckduckgo":
         endpoint = _session_or_env(
             session,
@@ -551,17 +513,6 @@ def _unwrap_duckduckgo_redirect(url: str) -> str:
 def fetch_documents(results: list[WebSearchResult], warnings: list[str]) -> list[WebDocument]:
     documents: list[WebDocument] = []
     for result in results:
-        if result.source == "mock":
-            documents.append(
-                WebDocument(
-                    title=result.title,
-                    url=result.url,
-                    text=f"{result.title}\n{result.snippet}",
-                    snippet=result.snippet,
-                    source=result.source,
-                )
-            )
-            continue
         cached = _read_cache(_cache_key("document", result.url))
         if cached:
             documents.append(WebDocument(**cached))

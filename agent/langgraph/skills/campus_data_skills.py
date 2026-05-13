@@ -24,37 +24,19 @@ class CampusActivitiesSkill(SkillHandler):
         session: dict[str, Any],
         state: dict[str, Any],
     ) -> SkillResult:
-        query = str(invocation.args.get("query", "")).strip()
-        activities = [
-            {
-                "activity_id": "src_tsinghua_news",
-                "title": "清华大学新闻网",
-                "url": "https://news.tsinghua.edu.cn/",
-                "source": "official",
-            },
-            {
-                "activity_id": "src_tsinghua_events",
-                "title": "清华大学校园活动入口",
-                "url": "https://www.tsinghua.edu.cn/",
-                "source": "official",
-            },
-        ]
-        message = "Returned official activity entry points."
-        if query:
-            message = f"Returned activity sources for query: {query}"
         return SkillResult(
             skill_name=invocation.skill_name,
             request_id=invocation.request_id,
-            code="OK",
+            code="NOT_CONFIGURED",
             data={
-                "status": "ok",
-                "message": message,
-                "query": query,
-                "activities": activities,
+                "status": "not_configured",
+                "message": "Campus activities adapter is not configured.",
+                "query": str(invocation.args.get("query", "")).strip(),
+                "activities": [],
             },
-            from_cache=True,
+            from_cache=False,
             fetched_at=_utc_now(),
-            source="campus_data_fallback",
+            source="campus_data_unavailable",
         )
 
 
@@ -74,40 +56,27 @@ class SearchSkill(SkillHandler):
                 data={"status": "invalid_param", "message": "`query` is required"},
                 from_cache=False,
                 fetched_at=_utc_now(),
-                source="campus_data_fallback",
+                source="campus_data_unavailable",
             )
-        results = [
-            {
-                "title": "清华大学官网",
-                "url": "https://www.tsinghua.edu.cn/",
-                "snippet": "校园通知、活动与综合信息入口",
-                "source": "official",
-            },
-            {
-                "title": "清华大学新闻网",
-                "url": "https://news.tsinghua.edu.cn/",
-                "snippet": "校园新闻与活动报道",
-                "source": "official",
-            },
-        ]
         return SkillResult(
             skill_name=invocation.skill_name,
             request_id=invocation.request_id,
-            code="OK",
+            code="NOT_CONFIGURED",
             data={
-                "status": "ok",
+                "status": "not_configured",
+                "message": "Search provider is not configured.",
                 "query": query,
-                "results": results,
-                "summary": f"Found {len(results)} official entries for '{query}'.",
+                "results": [],
+                "summary": "",
             },
-            from_cache=True,
+            from_cache=False,
             fetched_at=_utc_now(),
-            source="campus_data_fallback",
+            source="campus_data_unavailable",
         )
 
 
 class StaticCampusDataSkill(SkillHandler):
-    """Graceful fallback for campus data skills that do not have upstream adapters yet."""
+    """Report missing upstream adapters without returning synthetic data."""
 
     def __init__(
         self,
@@ -126,29 +95,20 @@ class StaticCampusDataSkill(SkillHandler):
         session: dict[str, Any],
         state: dict[str, Any],
     ) -> SkillResult:
-        has_session = bool(
-            session.get("cookie")
-            or session.get("webvpn_cookie")
-            or session.get("info_cookie")
-        )
         return SkillResult(
             skill_name=invocation.skill_name,
             request_id=invocation.request_id,
-            code="OK",
+            code="NOT_CONFIGURED",
             data={
-                "status": "empty",
+                "status": "not_configured",
                 "message": self.message,
                 self.collection_key: [],
                 "args": invocation.args,
-                "warnings": [
-                    "Authenticated upstream campus adapter is not configured yet."
-                    if has_session
-                    else "No WebVPN/INFO session cookie was provided."
-                ],
+                "warnings": ["Authenticated upstream campus adapter is not configured."],
             },
-            from_cache=True,
+            from_cache=False,
             fetched_at=_utc_now(),
-            source="campus_data_fallback",
+            source="campus_data_unavailable",
         )
 
 

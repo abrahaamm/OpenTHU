@@ -5,8 +5,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import ai.opencray.app.agent.ActionPlanner
-import ai.opencray.app.agent.TaskReplanner
 import ai.opencray.app.bridge.PythonSkillBridgeExecutor
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.data.repository.ChatRepository
@@ -30,7 +28,6 @@ import ai.opencray.app.gateway.GatewayConfig
 import ai.opencray.app.gateway.PlanTaskData
 import ai.opencray.app.gateway.PlannedSkillInvocation
 import ai.opencray.app.memory.MemoryManager
-import ai.opencray.app.safety.SafetyAuditor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -72,10 +69,7 @@ class OpenCrayRuntime(
   private val chatRepository: ChatRepository,
 ) {
   private val appContext: Context = appContext.applicationContext
-  private val actionPlanner = ActionPlanner()
-  private val safetyAuditor = SafetyAuditor()
   private val memoryManager = MemoryManager()
-  private val taskReplanner = TaskReplanner()
   private val actionExecutor = ActionExecutor(this.appContext)
   private val pythonSkillBridgeExecutor = PythonSkillBridgeExecutor(actionExecutor)
   private val gatewayClient = AgentCoreHttpClient()
@@ -363,14 +357,13 @@ class OpenCrayRuntime(
       return false
     }
 
-    streamAssistant("好的，我来处理。")
-    planGoalLocally(normalizedGoal)
-    return true
+    streamAssistant(agentCoreUnavailableMessage())
+    return false
   }
 
   private fun handleLocalChat(message: String) {
     thread(name = "opencray-local-chat", isDaemon = true) {
-      val reply = generateLocalLlmChatReply(message) ?: replyLocalChat(message)
+      val reply = generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage()
       streamAssistant(reply)
     }
   }
@@ -385,7 +378,7 @@ class OpenCrayRuntime(
           .put(
             "content",
             "你是 OpenTHU 移动端里的对话式校园助手。"
-              + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则或 fallback。"
+              + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。"
               + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。",
           ),
       )
@@ -504,11 +497,9 @@ class OpenCrayRuntime(
         runtimeRepository.appendEvent("Gateway stream failed: ${result.code} ${result.message}")
         if (assistantMessageId.isBlank()) {
           if (shouldPlanLocally(message)) {
-            streamAssistant("我先按本地能力处理。")
-            planGoalLocally(message)
-            runActionsLocally(actionIds = null, submitGatewayResult = false)
+            streamAssistant(agentCoreUnavailableMessage())
           } else {
-            streamAssistant(generateLocalLlmChatReply(message) ?: replyLocalChat(message))
+            streamAssistant(generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage())
           }
         } else {
           chatRepository.appendEvent(
@@ -543,18 +534,16 @@ class OpenCrayRuntime(
       if (!result.success || result.data == null) {
         runtimeRepository.appendEvent("Gateway chat failed: ${result.code} ${result.message}")
         if (shouldPlanLocally(message)) {
-          streamAssistant("我先按本地能力处理。")
-          planGoalLocally(message)
-          runActionsLocally(actionIds = null, submitGatewayResult = false)
+          streamAssistant(agentCoreUnavailableMessage())
         } else {
-          streamAssistant(generateLocalLlmChatReply(message) ?: replyLocalChat(message))
+          streamAssistant(generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage())
         }
         return@thread
       }
 
       val data = result.data
       val reply = data.reply.ifBlank {
-        if (data.shouldPlan) "好的，我来处理。" else generateLocalLlmChatReply(message) ?: replyLocalChat(message)
+        if (data.shouldPlan) "好的，我来处理。" else generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage()
       }
       streamAssistant(reply)
       if (data.shouldPlan) {
@@ -635,133 +624,15 @@ class OpenCrayRuntime(
     return taskMarkers.any { normalized.contains(it) }
   }
 
-  private fun replyLocalChat(text: String): String {
-    val normalized = text.trim().lowercase(Locale.getDefault())
-    val hasEnglish = normalized.any { it in 'a'..'z' }
-    return when {
-      normalized.contains("how are you") || normalized.contains("how's it going") || normalized.contains("你好吗") || normalized.contains("最近怎么样") ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "我状态不错，正在努力从“任务机器”进化成更会聊天的助手。你呢，今天怎么样？",
-            "我在，感觉还挺清醒的。更想问问你：今天过得顺吗？",
-            "Doing alright. 我这边在线，也愿意先闲聊一会儿。How about you?",
-          ),
-        )
-      normalized.contains("hello") || normalized.contains("hi") || normalized.contains("hey") || normalized == "你好" || normalized == "嗨" ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "Hi，我在。今天想先聊两句，还是让我帮你处理点什么？",
-            "来了。你直接说就行，我会先按聊天接住，需要执行时再动工具。",
-            "Hello。今天我不急着进入任务模式，先听你说。",
-          ),
-        )
-      normalized.contains("who are you") || normalized.contains("what are you") || normalized.contains("你是谁") ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "我是 OpenTHU 助手，一个偏校园场景的对话式 Agent。你可以把我当聊天入口，也可以让我处理提醒、日历、校园活动、搜索和通知。",
-            "我是 OpenTHU。目标不是只给你执行记录，而是像正常助手一样先听懂你，再在需要时调用工具。",
-            "你可以把我理解成校园移动端里的 Agent：平时能聊天，遇到明确任务时才会规划和请求确认。",
-          ),
-        )
-      normalized.contains("你能做什么") || normalized.contains("能干什么") || normalized.contains("help") || normalized.contains("帮助") ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "你可以直接自然说，比如“明早八点提醒我交作业”“帮我看看近期校园活动”“搜索一下某个话题”。如果只是聊天，我也会按聊天回应。",
-            "我主要能做两类事：陪你正常对话，以及在你明确提出任务时处理提醒、日历、活动、搜索和通知。",
-            "你不用背命令。像和人说话一样描述目标就行；需要权限或确认的时候，我会在对话里问你。",
-          ),
-        )
-      normalized.contains("讲个笑话") ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "可以。一个 Agent 最怕什么？用户说“随便聊聊”，它立刻生成了三步执行计划。",
-            "讲一个项目里的冷笑话：以前我听到 hello，也想进入任务规划。现在至少知道先打招呼了。",
-            "可以。我的成长路线大概是：先别把所有话都当需求，然后再学会不要把所有回应都写成工作总结。",
-          ),
-        )
-      normalized.contains("谢谢") || normalized.contains("thank") ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "不客气。你继续说，我跟着。",
-            "没事，我在。",
-            "当然。需要继续聊或者接着处理任务，都可以。",
-          ),
-        )
-      listOf("累", "烦", "焦虑", "难受", "不开心", "emo").any { normalized.contains(it) } ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "听起来今天有点消耗。要不先别急着解决问题，你可以把发生了什么慢慢说给我听。",
-            "我听见了。你不用马上整理成一个清楚的问题，先把感觉说出来也可以。",
-            "这听起来不太轻松。我可以陪你捋一下，也可以只安静接住你现在的状态。",
-          ),
-        )
-      isKnowledgeScopeQuestion(normalized) ->
-        replyKnowledgeScopeQuestion(text)
-      hasEnglish ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "I’m here. We can chat normally; if you want me to do something, just say it naturally.",
-            "Got you. I’ll treat this as a regular conversation unless you ask me to take an action.",
-            "I’m listening. What’s on your mind?",
-          ),
-        )
-      else ->
-        pickLocalReply(
-          normalized,
-          listOf(
-            "我在听。你可以继续往下说一点，我会按聊天接住。",
-            "嗯，我明白你的意思。你想顺着这个话题聊，还是让我帮你整理一下？",
-            "收到。这个我先不当成任务，只当作普通聊天。你可以接着说。",
-            "可以，我们就按聊天来。你想从哪里开始？",
-          ),
-        )
-    }
-  }
-
-  private fun pickLocalReply(
-    seed: String,
-    replies: List<String>,
-  ): String {
-    if (replies.isEmpty()) return ""
-    return replies[Math.floorMod(seed.hashCode(), replies.size)]
-  }
-
-  private fun isKnowledgeScopeQuestion(normalized: String): Boolean =
-    listOf("了解多少", "懂不懂", "懂多少", "知道多少", "熟悉吗", "会不会").any { normalized.contains(it) } ||
-      (normalized.contains("你") && normalized.contains("了解"))
-
-  private fun replyKnowledgeScopeQuestion(text: String): String {
-    val topic = extractKnowledgeTopic(text)
-    val normalizedTopic = topic.lowercase(Locale.getDefault())
-    return if (
-      normalizedTopic.contains("股票") ||
-      normalizedTopic.contains("投资") ||
-      normalizedTopic.contains("金融")
-    ) {
-      "我了解一些股票和金融市场的基础：比如股票是什么、交易机制、财报指标、估值思路、行业比较、风险控制，以及常见的基本面/技术面分析方法。也可以帮你读一段资讯或财报并整理重点。\n\n但我不会替你做买卖决定，也不能保证收益。如果你愿意，我们可以从基础概念、选股逻辑，或者某只股票的信息解读开始。"
+  private fun localLlmUnavailableMessage(): String =
+    if (localLlmConfig() == null) {
+      "模型没有配置好。请先在设置里填写模型 API Key、模型名称和 Base URL，然后我才能进行对话。"
     } else {
-      "我对「$topic」可以做基础解释、概念梳理、资料总结和学习路线整理。如果你问的是实时信息或专业决策，我会尽量说明边界，并在需要时建议查证来源。\n\n你可以直接问一个更具体的问题，我会接着讲。"
+      "模型服务当前不可用。请检查 Base URL、模型名称、API Key 或网络连接后再试。"
     }
-  }
 
-  private fun extractKnowledgeTopic(text: String): String {
-    var topic = text.trim()
-    listOf("你对于", "你对", "关于", "对于", "你").forEach { prefix ->
-      topic = topic.removePrefix(prefix)
-    }
-    listOf("了解多少", "懂不懂", "懂多少", "知道多少", "熟悉吗", "会不会", "了解吗", "了解", "吗", "？", "?").forEach { token ->
-      topic = topic.replace(token, "")
-    }
-    return topic.trim().ifBlank { "这个话题" }
-  }
+  private fun agentCoreUnavailableMessage(): String =
+    "Agent-Core 没有连接好，无法执行任务。请先在设置里连接 Agent-Core；如果只是普通聊天，也需要先配置可用的模型服务。"
 
   private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
     chatRepository.getMessages()
@@ -915,9 +786,7 @@ class OpenCrayRuntime(
         runtimeRepository.updateConnectionStatus("Gateway planning failed")
         val errorMsg = "${result.code} ${result.message}"
         runtimeRepository.appendEvent("Gateway plan failed: $errorMsg")
-        chatRepository.appendMessage(ChatRole.System, "服务端规划失败，回落到本地规划。\n\n[排错信息]\n原因：$errorMsg")
-        planGoalLocally(goal)
-        runActionsLocally(actionIds = null, submitGatewayResult = false)
+        streamAssistant("Agent-Core 规划失败，无法执行任务。请检查 Agent-Core、模型配置或网络连接后再试。\n\n原因：$errorMsg")
         return@thread
       }
       applyGatewayPlan(goal = goal, data = result.data)
@@ -984,79 +853,6 @@ class OpenCrayRuntime(
       streamAssistant("我已经规划好了，当前有 ${approvedActions.size} 个动作可直接执行，另有 $blockedCount 个动作需要你确认。")
     } else {
       streamAssistant("我已经规划好了，开始执行。")
-    }
-  }
-
-  private fun planGoalLocally(goal: String) {
-    val current = snapshot()
-    val now = System.currentTimeMillis()
-    val taskId = UUID.randomUUID().toString()
-
-    val plannedActions = actionPlanner.plan(goal, current)
-    val safetyRecords = safetyAuditor.auditPlannedActions(plannedActions)
-
-    val actionsWithReviewStatus =
-      plannedActions.map { action ->
-        val review = safetyRecords.firstOrNull { it.actionId == action.id }
-        val status =
-          when (review?.status) {
-            "Awaiting approval" -> "pending_approval"
-            "Auto-approved" -> "approved"
-            else -> "planned"
-          }
-        action.copy(status = status)
-      }
-
-    val taskSummary =
-      buildString {
-        append("Goal planned with ${actionsWithReviewStatus.size} actions")
-        if (safetyAuditor.hasPendingApproval(safetyRecords)) {
-          append(", includes approval-required actions")
-        }
-      }
-
-    val task =
-      AgentTask(
-        id = taskId,
-        goal = goal,
-        status = "planned",
-        attempt = 1,
-        createdAtEpochMs = now,
-        updatedAtEpochMs = now,
-        summary = taskSummary,
-      )
-
-    val memory = memoryManager.updateFromGoal(current.memoryRecords, goal)
-
-    val audit =
-      actionsWithReviewStatus.map { action ->
-        AuditEntry(
-          id = UUID.randomUUID().toString(),
-          taskId = taskId,
-          actionId = action.id,
-          stage = "plan",
-          message = "Action planned with status ${action.status} and confidence ${action.confidence}.",
-          timestampEpochMs = now,
-        )
-      }
-
-    runtimeRepository.replaceSnapshot(
-      current.copy(
-        connectionStatus = "Plan ready",
-        systemActions = actionsWithReviewStatus,
-        safetyRecords = safetyRecords + current.safetyRecords,
-        tasks = listOf(task) + current.tasks.take(9),
-        memoryRecords = memory,
-        auditTrail = audit + current.auditTrail.take(99),
-        recentEvents = listOf("Goal planned: ${goal.take(48)}") + current.recentEvents,
-      ),
-    )
-
-    val pendingCount = safetyRecords.count { it.status == "Awaiting approval" }
-    if (pendingCount > 0) {
-      streamAssistant("我已经规划完成，接下来有 $pendingCount 个动作需要你确认后继续。")
-    } else {
-      streamAssistant("我已经规划完成，正在继续执行。")
     }
   }
 
@@ -1214,38 +1010,6 @@ class OpenCrayRuntime(
     executableActions.forEach { action ->
       val report = actionExecutor.execute(action, latestTask.goal)
       applyExecutionReport(task = latestTask, action = action, report = report, submitGatewayResult = submitGatewayResult)
-
-      if (!report.success && report.recoverable) {
-        val fallbackActions = taskReplanner.replan(action)
-        val fallbackSafety = safetyAuditor.auditPlannedActions(fallbackActions)
-        val after = snapshot()
-        val replanned =
-          fallbackActions.map { fallback ->
-            val review = fallbackSafety.firstOrNull { it.actionId == fallback.id }
-            fallback.copy(
-              status = if (review?.status == "Awaiting approval") "pending_approval" else "approved",
-            )
-          }
-        val replanAudit =
-          replanned.map { fallback ->
-            AuditEntry(
-              id = UUID.randomUUID().toString(),
-              taskId = latestTask.id,
-              actionId = fallback.id,
-              stage = "replan",
-              message = "Fallback action created from failed ${action.id}.",
-              timestampEpochMs = System.currentTimeMillis(),
-            )
-          }
-        runtimeRepository.replaceSnapshot(
-          after.copy(
-            systemActions = after.systemActions + replanned,
-            safetyRecords = fallbackSafety + after.safetyRecords,
-            auditTrail = replanAudit + after.auditTrail,
-            recentEvents = listOf("Replanned from ${action.id} with ${replanned.size} action(s).") + after.recentEvents,
-          ),
-        )
-      }
     }
 
     val after = snapshot()

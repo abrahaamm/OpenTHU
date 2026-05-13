@@ -45,26 +45,6 @@ except ImportError:
     )
 
 
-DEFAULT_ACTIVITY_SOURCES = [
-    {
-        "activity_id": "src_tsinghua_news",
-        "title": "清华大学新闻网",
-        "organizer": "清华大学",
-        "start_time": "",
-        "location": "online",
-        "url": "https://news.tsinghua.edu.cn/",
-    },
-    {
-        "activity_id": "src_tsinghua_events",
-        "title": "清华大学校园活动与通知入口",
-        "organizer": "清华大学",
-        "start_time": "",
-        "location": "online",
-        "url": "https://www.tsinghua.edu.cn/",
-    },
-]
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -215,14 +195,29 @@ class CampusActivitiesSkill(SkillHandler):
         activities = dedupe_activities(info_activities + configured_activities)
         activities = filter_activities(activities, keywords=[], start_date=start_date, end_date=end_date, limit=limit)
         summary_payload = summarize_activities(activities, warnings)
-        source = "info_webvpn_api" if info_activities else "campus_activities_file" if configured_activities else "official_entrypoints"
+        source = "info_webvpn_api" if info_activities else "campus_activities_file" if configured_activities else "not_configured"
         from_cache = not bool(info_activities)
 
         if not activities:
-            activities = list(DEFAULT_ACTIVITY_SOURCES)
-            from_cache = True
-            warnings.append("No parsed activity records available; returned official entry points.")
-            summary_payload = summarize_activities(activities, warnings)
+            if not info_sources and not configured_activities:
+                return SkillResult(
+                    skill_name=invocation.skill_name,
+                    request_id=invocation.request_id,
+                    code="NOT_CONFIGURED",
+                    data={
+                        "status": "not_configured",
+                        "message": "Campus activities source is not configured. Provide INFO/WebVPN cookies or OPENTHU_CAMPUS_ACTIVITIES_FILE.",
+                        "activities": [],
+                        "sources": sources,
+                        "warnings": warnings,
+                        "keywords": keywords,
+                        "query": query,
+                    },
+                    from_cache=False,
+                    fetched_at=_utc_now(),
+                    source="not_configured",
+                )
+            summary_payload = summarize_activities([], warnings)
 
         rag_payload = answer_activity_query(query, activities, limit=min(limit, 5)) if query else {
             "answer": "",
@@ -248,7 +243,7 @@ class CampusActivitiesSkill(SkillHandler):
                 "missing_fields": summary_payload["missing_fields"],
                 "keywords": keywords,
                 "query": query,
-                "note": "Uses INFO/WebVPN news APIs when session cookies are available; falls back to OPENTHU_CAMPUS_ACTIVITIES_FILE or official entry points.",
+                "note": "Uses INFO/WebVPN news APIs when session cookies are available, or OPENTHU_CAMPUS_ACTIVITIES_FILE when explicitly configured.",
             },
             from_cache=from_cache,
             fetched_at=_utc_now(),

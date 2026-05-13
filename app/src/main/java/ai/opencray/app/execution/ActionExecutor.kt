@@ -68,14 +68,23 @@ class ActionExecutor(
         val url =
           (action.payload?.get("url") as? String)
             ?: action.params["url"]
-            ?: "https://www.tsinghua.edu.cn"
-        openWebPage(url)
+        if (url.isNullOrBlank()) {
+          ActionExecutionReport(
+            success = false,
+            message = "Missing required `url` for open_url.",
+            recoverable = false,
+            semantic = "invalid_param",
+          )
+        } else {
+          openWebPage(url)
+        }
       }
       "open_context_review" ->
         ActionExecutionReport(
-          success = true,
-          message = "Opened context review fallback path.",
+          success = false,
+          message = "open_context_review is not configured on this device.",
           recoverable = false,
+          semantic = "not_configured",
         )
       else ->
         ActionExecutionReport(
@@ -89,32 +98,14 @@ class ActionExecutor(
 
   private fun executeGetCampusActivities(): ActionExecutionReport =
     ActionExecutionReport(
-      success = true,
-      message = "Campus activity sources prepared.",
+      success = false,
+      message = "Campus activities are not configured on the device. Configure Agent-Core INFO/WebVPN cookies or an explicit campus activities source.",
       recoverable = false,
-      semantic = "campus_activities_ready",
+      semantic = "not_configured",
       metadata =
         mapOf(
-          "activities" to
-            listOf(
-              mapOf(
-                "activity_id" to "src_tsinghua_news",
-                "title" to "清华大学新闻网",
-                "organizer" to "清华大学",
-                "start_time" to "",
-                "location" to "online",
-                "url" to "https://news.tsinghua.edu.cn/",
-              ),
-              mapOf(
-                "activity_id" to "src_tsinghua_events",
-                "title" to "清华大学校园活动与通知入口",
-                "organizer" to "清华大学",
-                "start_time" to "",
-                "location" to "online",
-                "url" to "https://www.tsinghua.edu.cn/",
-              ),
-            ),
-          "source" to "official_entrypoints",
+          "activities" to emptyList<Map<String, String>>(),
+          "source" to "not_configured",
         ),
     )
 
@@ -213,14 +204,12 @@ class ActionExecutor(
         ?: (action.payload?.get("time") as? String)
         ?: action.params["time"]
     if (dueTime.isNullOrBlank()) {
-      return executeSendNotification(
-        action.copy(
-          payload = mapOf(
-            "title" to ((action.payload?.get("title") as? String) ?: action.params["title"] ?: "OpenTHU 提醒"),
-            "body" to goal,
-          ),
-        ),
-      ).copy(semantic = "reminder_fallback_notification")
+      return ActionExecutionReport(
+        success = false,
+        message = "Missing required `due_time` or `time` for create_reminder.",
+        recoverable = false,
+        semantic = "invalid_param",
+      )
     }
     val alarmAction = action.copy(
       id = "set_alarm",

@@ -58,7 +58,7 @@ flowchart TD
 
 1. `plan_skills`
    - LLM-first skill planning
-   - deterministic fallback if no model is available
+   - returns `LLM_NOT_CONFIGURED` / `LLM_UNAVAILABLE` when the model is missing or unavailable
    - outputs `skill_plan`
 
 2. `safety_check`
@@ -141,7 +141,7 @@ It still does not implement most data/auth skills:
 
 These information/display skills have concrete lightweight handlers:
 
-- `get_campus_activities` (INFO/WebVPN news APIs when session cookies are provided; otherwise records from `OPENTHU_CAMPUS_ACTIVITIES_FILE` or official entry points; accepts `query` for lightweight evidence retrieval over fetched activity details)
+- `get_campus_activities` (INFO/WebVPN news APIs when session cookies are provided, or records from `OPENTHU_CAMPUS_ACTIVITIES_FILE` when explicitly configured; accepts `query` for lightweight evidence retrieval over fetched activity details)
 - `show_summary`
 - `send_notification`
 - `open_url`
@@ -166,7 +166,7 @@ Environment variables:
 - `OPENTHU_ADB_SERIAL` (optional, choose one specific device)
 - `OPENTHU_CALENDAR_TIMEZONE` (optional, default `UTC`)
 - `OPENTHU_WEBVPN_COOKIE` / `OPENTHU_WEBVPN_CSRF` (optional, enables INFO campus activity API access)
-- `OPENTHU_CAMPUS_ACTIVITIES_FILE` (optional, fallback JSON with an `activities[]` list)
+- `OPENTHU_CAMPUS_ACTIVITIES_FILE` (optional, explicit JSON source with an `activities[]` list)
 - `OPENTHU_CALENDAR_BRIDGE_MODE` (`json_file` to enable file bridge)
 - `OPENTHU_KOTLIN_BRIDGE_REQUEST_FILE` (required for `json_file` mode)
 - `OPENTHU_KOTLIN_BRIDGE_RESPONSE_FILE` (required for `json_file` mode)
