@@ -112,6 +112,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var searchProviderInput: EditText
   private lateinit var searchEndpointInput: EditText
   private lateinit var searchApiKeyInput: EditText
+  private lateinit var searchSceneInput: EditText
   private lateinit var searchTtlInput: EditText
   private lateinit var memoryFileInput: EditText
   private lateinit var memoryLongTtlInput: EditText
@@ -234,6 +235,7 @@ class MainActivity : AppCompatActivity() {
     searchProviderInput = findViewById(R.id.setting_search_provider_input)
     searchEndpointInput = findViewById(R.id.setting_search_endpoint_input)
     searchApiKeyInput = findViewById(R.id.setting_search_api_key_input)
+    searchSceneInput = findViewById(R.id.setting_search_scene_input)
     searchTtlInput = findViewById(R.id.setting_search_ttl_input)
     memoryFileInput = findViewById(R.id.setting_memory_file_input)
     memoryLongTtlInput = findViewById(R.id.setting_memory_long_ttl_input)
@@ -1153,6 +1155,7 @@ class MainActivity : AppCompatActivity() {
     searchProviderInput.setText(pref.getString("search_provider", "duckduckgo"))
     searchEndpointInput.setText(pref.getString("search_endpoint", "https://duckduckgo.com/html/"))
     searchApiKeyInput.setText(pref.getString("search_api_key", ""))
+    searchSceneInput.setText(pref.getString("search_scene", "hybrid"))
     searchTtlInput.setText(pref.getString("search_ttl", "3600"))
     memoryFileInput.setText(pref.getString("memory_file", "agent/langgraph/memory_store.json"))
     memoryLongTtlInput.setText(pref.getString("memory_long_ttl", "365"))
@@ -1178,6 +1181,7 @@ class MainActivity : AppCompatActivity() {
       .putString("search_provider", searchProviderInput.text.toString().trim().ifEmpty { "duckduckgo" })
       .putString("search_endpoint", searchEndpointInput.text.toString().trim())
       .putString("search_api_key", searchApiKeyInput.text.toString().trim())
+      .putString("search_scene", searchSceneInput.text.toString().trim().lowercase().ifEmpty { "hybrid" })
       .putString("search_ttl", searchTtlInput.text.toString().trim())
       .putString("memory_file", memoryFileInput.text.toString().trim())
       .putString("memory_long_ttl", memoryLongTtlInput.text.toString().trim())

@@ -1101,7 +1101,8 @@ class OpenTHULangGraphAgent:
             "Prefer data skills before action skills. "
             "Do not invent backend calls. Keep the plan between 1 and 8 skills. "
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
-            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`."
+            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
+            "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses."
         )
 
         try:
@@ -1195,6 +1196,17 @@ class OpenTHULangGraphAgent:
                     description=description or f"Invoke {skill_name}",
                 )
             )
+
+        course_context_skills = {"get_courses", "get_assignments", "get_notices", "get_files"}
+        if (
+            any(item.get("skill_name") == "get_campus_activities" for item in normalized)
+            and not any(item.get("skill_name") in course_context_skills for item in normalized)
+        ):
+            normalized = [
+                item
+                for item in normalized
+                if item.get("skill_name") != "get_semesters"
+            ]
 
         return normalized[:8]
 

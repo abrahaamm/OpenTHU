@@ -23,6 +23,7 @@ try:
         CampusInfoClient,
         CampusInfoError,
     )
+    from .search_skills import SearchProviderError, _build_provider, search_with_scene
 except ImportError:
     import sys
 
@@ -43,6 +44,7 @@ except ImportError:
         CampusInfoClient,
         CampusInfoError,
     )
+    from skills.search_skills import SearchProviderError, _build_provider, search_with_scene
 
 
 def _utc_now() -> str:
@@ -153,6 +155,67 @@ def _fetch_info_activities(
     return activities, sources, warnings
 
 
+def _fetch_public_search_activities(
+    session: dict[str, Any],
+    *,
+    keywords: list[str],
+    query: str,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    search_query = query.strip() or " ".join(keywords[:4]).strip() or "校园活动 讲座"
+    if not any(token in search_query for token in ("清华", "校园", "活动", "讲座", "论坛")):
+        search_query = f"清华 校园活动 {search_query}"
+    try:
+        provider = _build_provider(session=session)
+        results, supplemental, from_cache = search_with_scene(
+            provider=provider,
+            query=search_query,
+            scene="campus",
+            max_results=max(1, min(limit, 10)),
+            supplemental_results=0,
+            domains=[],
+            freshness_days=90,
+            language="zh-CN",
+        )
+    except SearchProviderError as exc:
+        return [], [{"type": "public_search", "status": "failed", "message": str(exc)}], [
+            f"Public campus search unavailable: {exc}"
+        ]
+
+    activities: list[dict[str, Any]] = []
+    for index, item in enumerate(results, start=1):
+        activity = coerce_activity(
+            {
+                "activity_id": f"public_search_{index:03d}",
+                "title": item.title,
+                "url": item.url,
+                "abstract": item.snippet,
+                "source": item.source,
+                "category": "campus",
+                "confidence": 0.45,
+            },
+            index,
+        )
+        if activity is not None:
+            activities.append(activity)
+
+    sources = [
+        {
+            "type": "public_search",
+            "provider": provider.name,
+            "status": "ok",
+            "count": len(activities),
+            "from_cache": from_cache,
+            "query": search_query,
+            "supplemental_count": len(supplemental),
+        }
+    ]
+    warnings: list[str] = []
+    if activities:
+        warnings.append("INFO/WebVPN 未返回可用数据，已使用公开校内网页搜索结果补充。")
+    return activities, sources, warnings
+
+
 class CampusActivitiesSkill(SkillHandler):
     def invoke(
         self,
@@ -162,7 +225,7 @@ class CampusActivitiesSkill(SkillHandler):
     ) -> SkillResult:
         args = dict(invocation.args or {})
         keywords = _coerce_keywords(args)
-        query = _coerce_query(args)
+        query = _coerce_query(args) or str(state.get("user_input", "")).strip()
         limit = _coerce_limit(args)
         start_date = str(args.get("start_date", "")).strip()
         end_date = str(args.get("end_date", "")).strip()
@@ -192,14 +255,33 @@ class CampusActivitiesSkill(SkillHandler):
                 source="campus_activities_file",
             )
 
-        activities = dedupe_activities(info_activities + configured_activities)
+        public_activities: list[dict[str, Any]] = []
+        if not info_activities and not configured_activities:
+            public_activities, public_sources, public_warnings = _fetch_public_search_activities(
+                session,
+                keywords=keywords,
+                query=query,
+                limit=limit,
+            )
+            sources.extend(public_sources)
+            warnings.extend(public_warnings)
+
+        activities = dedupe_activities(info_activities + configured_activities + public_activities)
         activities = filter_activities(activities, keywords=[], start_date=start_date, end_date=end_date, limit=limit)
         summary_payload = summarize_activities(activities, warnings)
-        source = "info_webvpn_api" if info_activities else "campus_activities_file" if configured_activities else "not_configured"
+        source = (
+            "info_webvpn_api"
+            if info_activities
+            else "campus_activities_file"
+            if configured_activities
+            else "public_campus_search"
+            if public_activities
+            else "not_configured"
+        )
         from_cache = not bool(info_activities)
 
         if not activities:
-            if not info_sources and not configured_activities:
+            if not sources and not configured_activities:
                 return SkillResult(
                     skill_name=invocation.skill_name,
                     request_id=invocation.request_id,

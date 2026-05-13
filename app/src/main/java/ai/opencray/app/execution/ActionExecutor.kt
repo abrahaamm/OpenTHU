@@ -250,12 +250,20 @@ class ActionExecutor(
     }
 
     val notifications = service.getUnreadNotifications()
-    val notesList = notifications.mapNotNull { sbn ->
-        val extras = sbn.notification.extras
-        val title = extras.getString(android.app.Notification.EXTRA_TITLE) ?: return@mapNotNull null
-        val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
-        val pkg = sbn.packageName
-        "[$pkg] $title: $text"
+    val notificationItems = notifications.mapNotNull { sbn ->
+      val extras = sbn.notification.extras
+      val title = extras.getString(android.app.Notification.EXTRA_TITLE) ?: return@mapNotNull null
+      val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
+      val pkg = sbn.packageName
+      mapOf(
+        "package" to pkg,
+        "title" to title,
+        "text" to text,
+        "post_time_ms" to sbn.postTime,
+      )
+    }
+    val notesList = notificationItems.map { item ->
+      "[${item["package"]}] ${item["title"]}: ${item["text"]}"
     }
 
     if (notesList.isEmpty()) {
@@ -263,6 +271,12 @@ class ActionExecutor(
         success = true,
         message = "No unread notifications found.",
         recoverable = false,
+        semantic = "notifications_read",
+        metadata =
+          mapOf(
+            "notification_count" to 0,
+            "notifications" to emptyList<Map<String, Any>>(),
+          ),
       )
     }
 
@@ -270,6 +284,12 @@ class ActionExecutor(
       success = true,
       message = "Found ${notesList.size} unread notifications:\n" + notesList.joinToString("\n"),
       recoverable = false,
+      semantic = "notifications_read",
+      metadata =
+        mapOf(
+          "notification_count" to notificationItems.size,
+          "notifications" to notificationItems,
+        ),
     )
   }
 

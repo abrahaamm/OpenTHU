@@ -65,6 +65,7 @@
     <string name="setting_search_provider_label">搜索提供方</string>
     <string name="setting_search_endpoint_label">搜索接口地址</string>
     <string name="setting_search_api_key_label">搜索 API Key</string>
+    <string name="setting_search_scene_label">搜索源范围</string>
     <string name="setting_search_ttl_label">搜索缓存时长</string>
     <string name="setting_memory_file_label">记忆存储文件</string>
     <string name="setting_memory_long_ttl_label">长期记忆 TTL</string>
@@ -88,6 +89,7 @@
     <string name="setting_search_provider_description">搜索提供方名称，当前建议填写 duckduckgo 或 brave。</string>
     <string name="setting_search_endpoint_description">搜索请求地址；只有更换 provider 或代理时才需要调整。</string>
     <string name="setting_search_api_key_description">搜索服务的 API Key，仅部分 provider 需要填写。</string>
+    <string name="setting_search_scene_description">控制搜索来源：campus 只搜校内域名，general 只搜校外/通用网页，hybrid 优先校内并补充通用结果。</string>
     <string name="setting_search_ttl_description">搜索结果缓存时长，单位为秒，数值越大越少重复请求。</string>
     <string name="setting_memory_file_description">本地记忆存储文件路径，当前主要作为记忆持久化配置预留。</string>
     <string name="setting_memory_long_ttl_description">长期记忆保留天数，当前主要作为记忆策略预留参数。</string>
@@ -109,6 +111,7 @@
     <string name="setting_search_provider_hint">OPENTHU_SEARCH_PROVIDER（duckduckgo 或 brave）</string>
     <string name="setting_search_endpoint_hint">OPENTHU_SEARCH_ENDPOINT</string>
     <string name="setting_search_api_key_hint">OPENTHU_SEARCH_API_KEY（可选）</string>
+    <string name="setting_search_scene_hint">campus / general / hybrid</string>
     <string name="setting_search_ttl_hint">OPENTHU_SEARCH_CACHE_TTL_SECONDS</string>
     <string name="setting_memory_file_hint">memory_file 路径</string>
     <string name="setting_memory_long_ttl_hint">长期记忆 TTL（天）</string>

@@ -320,7 +320,12 @@ class AgentCoreStore:
                 "skill_name": result.get("skill_name", ""),
                 "code": code,
                 "success": success,
-                "message": result.get("message") or code,
+                "message": result.get("message")
+                or _display_message_from_result(
+                    skill_name=str(result.get("skill_name", "")),
+                    code=code,
+                    data=result.get("data", {}),
+                ),
                 "data": result.get("data", {}),
                 "source": result.get("source", "agent_core"),
                 "from_cache": bool(result.get("from_cache", False)),
@@ -364,6 +369,21 @@ class AgentCoreStore:
                         continue
                     if request_id in completed or request_id in in_flight:
                         continue
+                    skill_name = str(skill.get("skill_name", "unknown"))
+                    args = skill.get("args", {})
+                    if (
+                        skill_name == "show_summary"
+                        and isinstance(args, dict)
+                        and not str(args.get("content", "")).strip()
+                        and any(
+                            isinstance(candidate, dict)
+                            and str(candidate.get("skill_name", "")) != "show_summary"
+                            and str(candidate.get("request_id", "")) not in completed
+                            and str(candidate.get("request_id", "")) not in in_flight
+                            for candidate in approved
+                        )
+                    ):
+                        continue
 
                     in_flight.add(request_id)
                     task_doc["in_flight_request_ids"] = sorted(in_flight)
@@ -371,7 +391,6 @@ class AgentCoreStore:
                     task_doc["updated_at"] = utc_now()
                     self._mark_skill_status(task_doc, request_id, "dispatched")
                     self._save_locked()
-                    skill_name = skill.get("skill_name", "unknown")
                     logger.info(
                         "[dispatch] task_id=%s request_id=%s skill_name=%s device_id=%s",
                         task_doc.get("task_id", ""),
@@ -634,6 +653,7 @@ def execute_server_side_data_skills(
     state = {
         "task_id": task_id,
         "request_id": current_task.get("request_id", ""),
+        "user_input": current_task.get("goal", ""),
         "session": session,
         "skill_plan": current_task.get("skill_plan", []),
         "approved_skills": current_task.get("approved_skills", []),
@@ -672,7 +692,7 @@ def hydrate_show_summary_skills(
     store: AgentCoreStore,
     task_doc: dict[str, Any],
 ) -> dict[str, Any]:
-    summary_content = build_server_data_summary(task_doc.get("server_results", []))
+    summary_content = build_task_result_summary(task_doc)
     if not summary_content:
         return task_doc
 
@@ -698,6 +718,15 @@ def hydrate_show_summary_skills(
     return current_task
 
 
+def build_task_result_summary(task_doc: dict[str, Any]) -> str:
+    results: list[dict[str, Any]] = []
+    for key in ("server_results", "device_results"):
+        value = task_doc.get(key, [])
+        if isinstance(value, list):
+            results.extend(item for item in value if isinstance(item, dict))
+    return build_server_data_summary(results)
+
+
 def build_server_data_summary(results: Any) -> str:
     if not isinstance(results, list):
         return ""
@@ -709,13 +738,41 @@ def build_server_data_summary(results: Any) -> str:
         data = result.get("data", {})
         if not isinstance(data, dict):
             continue
-        section = _summarize_data_result(skill_name, data)
+        section = _summarize_data_result(skill_name, data, message=str(result.get("message", "")))
         if section:
             sections.append(section)
     return "\n\n".join(sections)
 
 
-def _summarize_data_result(skill_name: str, data: dict[str, Any]) -> str:
+def _display_message_from_result(
+    *,
+    skill_name: str,
+    code: str,
+    data: Any,
+) -> str:
+    if not isinstance(data, dict):
+        return code
+    message = str(data.get("message", "")).strip()
+    if code != "OK":
+        return message or code
+    if skill_name == "search":
+        answer = str(data.get("answer", "") or data.get("summary", "")).strip()
+        if answer:
+            return answer[:1200]
+    if skill_name == "get_campus_activities":
+        answer = str(data.get("answer", "")).strip()
+        summary = str(data.get("summary", "")).strip()
+        if answer:
+            return answer[:1200]
+        if summary:
+            return summary[:1200]
+    if message:
+        return message
+    status = str(data.get("status", "")).strip()
+    return status or code
+
+
+def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str = "") -> str:
     if skill_name == "search":
         lines = ["### 搜索结果"]
         answer = str(data.get("answer") or data.get("summary") or "").strip()
@@ -736,6 +793,46 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any]) -> str:
                 if snippet:
                     line += f"\n  {snippet[:160]}"
                 lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name == "read_notifications":
+        metadata = data.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        notifications = data.get("notifications")
+        if not isinstance(notifications, list):
+            notifications = metadata.get("notifications", [])
+        if not isinstance(notifications, list):
+            notifications = []
+        count_value = data.get("notification_count", metadata.get("notification_count", len(notifications)))
+        try:
+            count = int(count_value)
+        except (TypeError, ValueError):
+            count = len(notifications)
+
+        lines = ["### 未读通知"]
+        if count <= 0 and not notifications:
+            lines.append("没有读取到未读通知。")
+            return "\n".join(lines)
+
+        lines.append(f"共读取到 {max(count, len(notifications))} 条未读通知。")
+        for item in notifications[:8]:
+            if not isinstance(item, dict):
+                continue
+            package = str(item.get("package", "") or item.get("pkg", "")).strip()
+            title = str(item.get("title", "未命名通知")).strip()
+            text = str(item.get("text", "") or item.get("body", "")).strip()
+            line = f"- {title}"
+            if package:
+                line = f"- [{package}] {title}"
+            if text:
+                line += f"：{text[:180]}"
+            lines.append(line)
+
+        if len(lines) == 2:
+            fallback = message.strip()
+            if fallback:
+                lines.append(fallback[:1000])
         return "\n".join(lines)
 
     if skill_name == "get_campus_activities":
@@ -789,6 +886,9 @@ def _final_content_from_task(task_doc: dict[str, Any]) -> str:
         content = str(args.get("content", "")).strip()
         if content:
             return content
+    result_summary = build_task_result_summary(task_doc)
+    if result_summary:
+        return result_summary
     if blocked_count:
         return f"我已经整理好计划，其中 {approved_count} 个步骤可以继续处理，{blocked_count} 个步骤需要你确认。"
     if approved_count:
@@ -981,6 +1081,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         continue
                     skill_name = str(result.get("skill_name", ""))
                     request_id = str(result.get("request_id", ""))
+                    result_ok = result.get("code") == "OK"
                     yield encode_ndjson(
                         agent_event(
                             "tool_call",
@@ -994,12 +1095,12 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     yield encode_ndjson(
                         agent_event(
                             "tool_result",
-                            title=f"{skill_name} 已完成",
+                            title=f"{skill_name} 已完成" if result_ok else f"{skill_name} 未完成",
                             content=str(result.get("message", "")).strip(),
                             task_id=task_id,
                             request_id=request_id,
                             skill_name=skill_name,
-                            status="ok" if result.get("code") == "OK" else "failed",
+                            status="ok" if result_ok else "failed",
                             data={"message": result.get("message", ""), "source": result.get("source", "")},
                         )
                     )
@@ -1114,6 +1215,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
         )
         try:
             task_doc = store.submit_device_result(task_id=task_id, payload=payload)
+            task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
         except KeyError:
             logger.warning("[api] submit_result failed: task_id=%s not found", task_id)
             raise HTTPException(status_code=404, detail="task_not_found")

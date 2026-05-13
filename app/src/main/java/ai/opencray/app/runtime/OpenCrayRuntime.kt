@@ -745,6 +745,7 @@ class OpenCrayRuntime(
     val searchProvider = pref.getString("search_provider", "").orEmpty().trim()
     val searchEndpoint = pref.getString("search_endpoint", "").orEmpty().trim()
     val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
+    val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
 
     val session = linkedMapOf<String, Any?>()
@@ -765,6 +766,7 @@ class OpenCrayRuntime(
     if (searchProvider.isNotEmpty()) session["search_provider"] = searchProvider
     if (searchEndpoint.isNotEmpty()) session["search_endpoint"] = searchEndpoint
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
+    if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
     return session
   }
@@ -1167,16 +1169,18 @@ class OpenCrayRuntime(
     val requestId = action.requestId ?: return
     thread(name = "opencray-gateway-submit", isDaemon = true) {
       val code = mapGatewayResultCode(action, report)
-      val submitData: Map<String, Any> = buildMap {
+      val submitData: Map<String, Any?> = buildMap {
         put("status", if (report.success) "executed" else "failed")
         put("recoverable", report.recoverable)
         put("action_id", action.id)
+        put("semantic", report.semantic)
         // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
         report.metadata.forEach { (key, value) ->
           if (value != null) {
             put(key, value)
           }
         }
+        put("metadata", report.metadata)
       }
       val result =
         gatewayClient.submitResult(
@@ -1187,16 +1191,7 @@ class OpenCrayRuntime(
           skillName = action.id,
           code = code,
           message = report.message,
-
-          data =
-            mapOf(
-              "status" to if (report.success) "executed" else "failed",
-              "recoverable" to report.recoverable,
-              "semantic" to report.semantic,
-              "metadata" to report.metadata,
-              "action_id" to action.id,
-            ),
-
+          data = submitData,
         )
       val current = snapshot()
       if (result.success) {
