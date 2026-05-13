@@ -1,5 +1,6 @@
 package ai.opencray.app.gateway
 
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -7,6 +8,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 
 data class GatewayConfig(
   val host: String,
@@ -57,6 +59,10 @@ data class SubmitResultData(
 )
 
 class AgentCoreHttpClient {
+  companion object {
+    private const val TAG = "AgentCoreHttpClient"
+  }
+
   fun registerDevice(
     config: GatewayConfig,
     userId: String,
@@ -276,7 +282,15 @@ class AgentCoreHttpClient {
     readTimeoutMs: Int = 12_000,
   ): GatewayResult<JSONObject> {
     val protocol = if (config.tlsEnabled) "https" else "http"
-    val url = URL("$protocol://${config.host}:${config.port}$path")
+    val requestId = UUID.randomUUID().toString().take(8)
+    val urlString = "$protocol://${config.host}:${config.port}$path"
+    val url = URL(urlString)
+    val payloadRaw = payload?.toString().orEmpty()
+    Log.d(
+      TAG,
+      "[rid=$requestId] -> $method $urlString connectTimeoutMs=$connectTimeoutMs readTimeoutMs=$readTimeoutMs " +
+        "payloadBytes=${payloadRaw.toByteArray(StandardCharsets.UTF_8).size} payloadPreview=${payloadPreview(payload)}",
+    )
     val connection = (url.openConnection() as HttpURLConnection).apply {
       requestMethod = method
       connectTimeout = connectTimeoutMs
@@ -303,8 +317,19 @@ class AgentCoreHttpClient {
           ?.bufferedReader(StandardCharsets.UTF_8)
           ?.use(BufferedReader::readText)
           .orEmpty()
+      val contentType = connection.contentType.orEmpty()
+      Log.d(
+        TAG,
+        "[rid=$requestId] <- status=$status contentType=$contentType rawLen=${raw.length} rawPreview=${bodyPreview(raw)}",
+      )
 
       val parsed = runCatching { JSONObject(raw) }.getOrNull()
+      if (parsed == null && raw.isNotBlank()) {
+        Log.w(
+          TAG,
+          "[rid=$requestId] response is not JSON; using fallback code/message. status=$status rawPreview=${bodyPreview(raw)}",
+        )
+      }
       val code = parsed?.optString("code", if (status in 200..299) "OK" else "HTTP_$status") ?: if (status in 200..299) "OK" else "HTTP_$status"
       val message = parsed?.optString("message", "").orEmpty().ifEmpty { if (status in 200..299) "ok" else "http_error_$status" }
       val success = status in 200..299
@@ -316,15 +341,58 @@ class AgentCoreHttpClient {
         data = parsed ?: JSONObject(),
       )
     }.getOrElse { throwable ->
+      val chain = throwableChain(throwable)
+      Log.e(
+        TAG,
+        "[rid=$requestId] NETWORK_ERROR method=$method url=$urlString connectTimeoutMs=$connectTimeoutMs readTimeoutMs=$readTimeoutMs chain=$chain",
+        throwable,
+      )
       GatewayResult(
         success = false,
         code = "NETWORK_ERROR",
-        message = throwable.message ?: "network_error",
-        data = JSONObject(),
+        message = "rid=$requestId $chain",
+        data =
+          JSONObject()
+            .put("rid", requestId)
+            .put("method", method)
+            .put("url", urlString)
+            .put("connect_timeout_ms", connectTimeoutMs)
+            .put("read_timeout_ms", readTimeoutMs),
       )
     }.also {
       connection.disconnect()
     }
+  }
+
+  private fun payloadPreview(payload: JSONObject?): String {
+    if (payload == null) return "<empty>"
+    val keys = mutableListOf<String>()
+    val iter = payload.keys()
+    while (iter.hasNext()) {
+      keys += iter.next()
+    }
+    val goalLen = payload.optString("goal", "").length
+    val hasSession = payload.has("session")
+    val hasData = payload.has("data")
+    return "keys=$keys goalLen=$goalLen hasSession=$hasSession hasData=$hasData"
+  }
+
+  private fun bodyPreview(raw: String, maxLen: Int = 220): String {
+    if (raw.isBlank()) return "<empty>"
+    val compact = raw.replace("\r", " ").replace("\n", " ")
+    return if (compact.length <= maxLen) compact else compact.take(maxLen) + "..."
+  }
+
+  private fun throwableChain(throwable: Throwable): String {
+    val parts = mutableListOf<String>()
+    var cur: Throwable? = throwable
+    var depth = 0
+    while (cur != null && depth < 6) {
+      parts += "${cur.javaClass.simpleName}:${cur.message.orEmpty()}"
+      cur = cur.cause
+      depth += 1
+    }
+    return parts.joinToString(" -> ")
   }
 }
 

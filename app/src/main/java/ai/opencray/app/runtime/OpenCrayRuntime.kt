@@ -299,7 +299,9 @@ class OpenCrayRuntime(
       if (!result.success || result.data == null) {
         gatewayRegistered = false
         runtimeRepository.updateConnectionStatus("Gateway planning failed")
+        val cfg = currentGatewayConfig()
         runtimeRepository.appendEvent("Gateway plan failed: ${result.code} ${result.message}")
+        runtimeRepository.appendEvent("Gateway plan debug: host=${cfg.host}:${cfg.port} tls=${cfg.tlsEnabled} goal_len=${goal.length}")
         appendAuditEntry(
           taskId = "",
           actionId = "gateway:plan",
@@ -346,6 +348,14 @@ class OpenCrayRuntime(
       )
     val memory = memoryManager.updateFromGoal(current.memoryRecords, goal)
     val plannedSkillNames = allActions.map { it.id }
+    runtimeRepository.appendEvent(
+      "Gateway plan accepted: task_id=${task.id} server_status=${data.taskStatus} approved=${approvedActions.size} blocked=${blockedActions.size}",
+    )
+    allActions.forEach { action ->
+      runtimeRepository.appendEvent(
+        "Gateway skill planned: task_id=${task.id} request_id=${action.requestId ?: "<none>"} skill=${action.id} args=${summarizeActionArgs(action.payload ?: emptyMap())}",
+      )
+    }
     val planSummaryAudit =
       AuditEntry(
         id = UUID.randomUUID().toString(),
@@ -918,6 +928,27 @@ class OpenCrayRuntime(
         auditTrail = listOf(entry) + current.auditTrail.take(149),
       ),
     )
+  }
+
+  private fun summarizeActionArgs(payload: Map<String, Any?>): String {
+    if (payload.isEmpty()) return "{}"
+    val parts =
+      payload.entries
+        .sortedBy { it.key }
+        .take(8)
+        .map { (key, value) ->
+          val raw = value?.toString().orEmpty()
+          val normalizedKey = key.lowercase()
+          val compactValue =
+            when {
+              normalizedKey.contains("cookie") || normalizedKey.contains("password") || normalizedKey.contains("token") -> "<redacted len=${raw.length}>"
+              raw.length > 80 -> raw.take(80) + "...(len=${raw.length})"
+              else -> raw
+            }
+          "$key=$compactValue"
+        }
+    val suffix = if (payload.size > 8) ",...(+${payload.size - 8})" else ""
+    return "{${parts.joinToString(",")}$suffix}"
   }
 
   private fun upsertAction(
