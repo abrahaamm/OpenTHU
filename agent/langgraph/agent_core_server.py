@@ -672,7 +672,8 @@ def hydrate_show_summary_skills(
     store: AgentCoreStore,
     task_doc: dict[str, Any],
 ) -> dict[str, Any]:
-    summary_content = build_server_data_summary(task_doc.get("server_results", []))
+    all_results = task_doc.get("server_results", []) + task_doc.get("device_results", [])
+    summary_content = build_server_data_summary(all_results)
     if not summary_content:
         return task_doc
 
@@ -736,6 +737,20 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any]) -> str:
                 if snippet:
                     line += f"\n  {snippet[:160]}"
                 lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name == "read_notifications":
+        lines = ["### 通知列表"]
+        count = data.get("notification_count", 0)
+        lines.append(f"共读取到 {count} 条通知。")
+        notifications = data.get("notifications", [])
+        if isinstance(notifications, list) and notifications:
+            for item in notifications[:10]:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "")).strip() or "未命名通知"
+                text = str(item.get("text", "")).strip()
+                lines.append(f"- {title}：{text}")
         return "\n".join(lines)
 
     if skill_name == "get_campus_activities":
@@ -1127,6 +1142,9 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
         except ValueError as exc:
             logger.warning("[api] submit_result invalid: task_id=%s error=%s", task_id, exc)
             raise HTTPException(status_code=400, detail=str(exc))
+
+        # Re-hydrate show_summary to pick up new device_results like read_notifications
+        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
 
         logger.info(
             "[api] result accepted task_id=%s skill_name=%s code=%s task_status=%s received=%d | message=%s",
