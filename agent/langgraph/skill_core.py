@@ -323,7 +323,10 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "read_notifications",
-            "Read unread system notifications",
+            (
+                "Read active/unread status bar notifications from the Android device. "
+                "Use this to check incoming messages (WeChat, SMS, QQ, email) "
+            ),
             "action",
             "low",
             False,

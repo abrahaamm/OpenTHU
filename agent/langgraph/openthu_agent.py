@@ -47,6 +47,7 @@ class AgentState(TypedDict, total=False):
     trace_log: list[dict[str, Any]]
     normalizer_source: str
     planner_source: str
+    final_summary_text: str
 
 
 class StructuredPrompt(TypedDict):
@@ -182,6 +183,7 @@ class OpenTHULangGraphAgent:
         workflow.add_node("replan_failed", self._replan_failed)
         workflow.add_node("audit_record", self._audit_record)
         workflow.add_node("memory_update", self._memory_update)
+        workflow.add_node("synthesize_summary", self._synthesize_summary)
         workflow.add_node("finalize", self._finalize)
 
         workflow.add_edge(START, "normalize_requirement")
@@ -198,7 +200,8 @@ class OpenTHULangGraphAgent:
         )
         workflow.add_edge("replan_failed", "audit_record")
         workflow.add_edge("audit_record", "memory_update")
-        workflow.add_edge("memory_update", "finalize")
+        workflow.add_edge("memory_update", "synthesize_summary")
+        workflow.add_edge("synthesize_summary", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
@@ -1038,6 +1041,54 @@ class OpenTHULangGraphAgent:
             ),
         }
 
+    def _synthesize_summary(self, state: AgentState) -> dict[str, Any]:
+        user_input = state.get("user_input", "")
+        skill_results = state.get("skill_results", [])
+        
+        if not skill_results:
+            return {"final_summary_text": ""}
+
+        openai_key, llm_model, llm_base_url = self._llm_config_from_state(state)
+        if not openai_key:
+            logger.debug("[llm.synthesize] OPENAI_API_KEY not set, skipping LLM synthesis")
+            return {"final_summary_text": ""}
+
+        system_prompt = (
+            "你是一个贴心的校园生活助手。请根据用户的原始提问以及后台工具返回的 JSON 结果数据，"
+            "为用户撰写一段连贯、自然、排版美观的 Markdown 摘要总结。"
+            "剔除不需要关注的底层字段(如状态码、ID等)，突出用户关心的重点。"
+            "如果查询到了活动或日程等，可以用亲切的语气进行提示。如果没有有用信息，委婉地告知。"
+        )
+        user_content = f"【提问】\n{user_input}\n\n【返回数据】\n{json.dumps(skill_results, ensure_ascii=False)}"
+        
+        try:
+            from openai import OpenAI
+            client = self._create_openai_client(OpenAI, openai_key, base_url=llm_base_url)
+            response = client.chat.completions.create(
+                model=llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.7,
+                max_tokens=2048,
+            )
+            final_summary = response.choices[0].message.content or "操作已完成。"
+            return {
+                "final_summary_text": final_summary.strip(),
+                "trace_log": self._append_trace(
+                    state, "synthesize_summary", {"status": "success", "length": len(final_summary.strip())}
+                )
+            }
+        except Exception as e:
+            logger.warning(f"[llm.synthesize] LLM error: {e}")
+            return {
+                "final_summary_text": "",
+                "trace_log": self._append_trace(
+                    state, "synthesize_summary", {"status": "error", "error": str(e)}
+                )
+            }
+
     def _finalize(self, state: AgentState) -> dict[str, Any]:
         code, message = self._summarize_outcome(state)
         response = {
@@ -1060,6 +1111,7 @@ class OpenTHULangGraphAgent:
                 "replanned_skills": state.get("replanned_skills", []),
                 "audit_log": state.get("audit_log", []),
                 "memory_update": state.get("memory_update", {}),
+                "final_summary_text": state.get("final_summary_text", ""),
                 "available_skills": self.skill_manager.list_for_planner(),
                 "trace_log": state.get("trace_log", []),
                 "normalizer_source": state.get("normalizer_source", "not_run"),
