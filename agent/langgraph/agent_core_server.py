@@ -1230,6 +1230,9 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             logger.warning("[api] submit_result invalid: task_id=%s error=%s", task_id, exc)
             raise HTTPException(status_code=400, detail=str(exc))
 
+        # Re-hydrate show_summary to pick up new device_results like read_notifications
+        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
         logger.info(
             "[api] result accepted task_id=%s skill_name=%s code=%s task_status=%s received=%d | message=%s",
             task_doc.get("task_id", ""),
