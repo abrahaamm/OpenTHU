@@ -18,6 +18,7 @@ import java.io.FileInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.OffsetDateTime
@@ -64,6 +65,26 @@ private data class HomeworkRecord(
   val courseId: String,
   val courseName: String,
   val detailUrl: String,
+  val courseNo: String = "",
+  val classNo: String = "",
+  val teacherName: String = "",
+  val statusGroup: String = "",
+  val sourceEndpoint: String = "",
+  val submitUrl: String = "",
+)
+
+private data class HomeworkCourse(
+  val wlkcid: String,
+  val courseName: String,
+  val courseEnglishName: String = "",
+  val courseNo: String = "",
+  val classNo: String = "",
+  val teacherName: String = "",
+  val timeLocation: String = "",
+  val homeworkTotal: String = "",
+  val homeworkUnsubmitted: String = "",
+  val courseUrl: String = "",
+  val homeworkPageUrl: String = "",
 )
 
 class ActionExecutor(
@@ -78,6 +99,7 @@ class ActionExecutor(
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "get_homework_cookie" -> executeGetHomeworkCookie(action)
+      "get_courses" -> executeGetHomeworkCourses(action)
       "crawl_course_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = false)
       "crawl_unsubmitted_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = true)
       "preview_homework_attachments" -> executePreviewHomeworkAttachments(action)
@@ -180,6 +202,43 @@ class ActionExecutor(
     }
   }
 
+  private fun executeGetHomeworkCourses(action: SystemAction): ActionExecutionReport {
+    val auth = resolveHomeworkAuth(action)
+    if (!auth.ok) {
+      return ActionExecutionReport(
+        success = false,
+        message = auth.message,
+        recoverable = false,
+        data = mapOf("reason" to "missing_auth"),
+      )
+    }
+    val forceRefresh = readActionString(action, "force_refresh").toBooleanStrictOrNull() ?: false
+    return runCatching {
+      val cachedBefore = readCachedHomeworkCourses()
+      val courses = loadHomeworkCourses(auth, action, forceRefresh = forceRefresh)
+      ActionExecutionReport(
+        success = true,
+        message = "Homework courses loaded: ${courses.size} item(s).",
+        recoverable = false,
+        data =
+          mapOf(
+            "status" to "courses_loaded",
+            "count" to courses.size,
+            "courses" to courses.map { it.toDataMap() },
+            "from_cache" to (!forceRefresh && cachedBefore.isNotEmpty()),
+            "persisted_to" to coursesCacheFile().absolutePath,
+          ),
+      )
+    }.getOrElse { throwable ->
+      ActionExecutionReport(
+        success = false,
+        message = "Homework courses failed: ${throwable.message ?: "unknown"}",
+        recoverable = true,
+        data = mapOf("reason" to "courses_failed", "exception" to (throwable.message ?: "unknown")),
+      )
+    }
+  }
+
   private fun executeCrawlCourseHomeworks(
     action: SystemAction,
     unsubmittedOnly: Boolean,
@@ -196,45 +255,50 @@ class ActionExecutor(
     val baseUrl = auth.baseUrl
     val cookie = auth.cookie
     val csrf = auth.csrf
-    val courseIds = parseCsvOrJsonArray(action.params["course_ids"])
-    val effectiveCourseIds = if (courseIds.isEmpty()) listOf("") else courseIds
+    val requestedCourseIds = parseCsvOrJsonArray(action.params["course_ids"])
 
     val records = mutableListOf<HomeworkRecord>()
-    val endpointTypes = if (unsubmittedOnly) listOf("WJ") else listOf("WJ", "YJWG", "YPG")
+    val endpointTypes = if (unsubmittedOnly) listOf("unsubmitted") else listOf("unsubmitted", "submitted_ungraded", "graded", "excellent")
     val endpointMap =
       mapOf(
-        "WJ" to "/b/wlxt/kczy/zy/student/zyListWj",
-        "YJWG" to "/b/wlxt/kczy/zy/student/zyListYjwg",
-        "YPG" to "/b/wlxt/kczy/zy/student/zyListYpg",
+        "unsubmitted" to "/b/wlxt/kczy/zy/student/zyListWj",
+        "submitted_ungraded" to "/b/wlxt/kczy/zy/student/zyListYjwg",
+        "graded" to "/b/wlxt/kczy/zy/student/zyListYpg",
+        "excellent" to "/b/wlxt/kczy/zy/student/yxzylist",
       )
 
     return runCatching {
-      effectiveCourseIds.forEach { courseId ->
+      val courses =
+        loadHomeworkCourses(auth, action, forceRefresh = false)
+          .filter { course -> requestedCourseIds.isEmpty() || course.wlkcid in requestedCourseIds }
+      courses.forEach { course ->
+        getForm(
+          url = course.homeworkPageUrl,
+          cookie = cookie,
+          csrfToken = csrf,
+          referer = course.courseUrl,
+          htmlAccept = true,
+        )
         endpointTypes.forEach { endpointType ->
           val endpoint = endpointMap[endpointType].orEmpty()
-          val aoData =
-            JSONArray()
-              .put(
-                JSONObject()
-                  .put("name", "wlkcid")
-                  .put("value", courseId),
-              ).toString()
-          val form = mapOf("aoData" to aoData)
+          val form = datatablePayload(course.wlkcid)
           val raw =
             postForm(
               url = "$baseUrl$endpoint",
               form = form,
               cookie = cookie,
               csrfToken = csrf,
+              referer = course.homeworkPageUrl,
             )
           val parsed = runCatching { JSONObject(raw) }.getOrNull()
-          val items = extractHomeworkRecords(parsed, courseId, endpointType, baseUrl)
+          val items = extractHomeworkRecords(parsed, course, endpointType, endpoint, baseUrl)
           records += items
         }
       }
 
       val deduped = records.distinctBy { "${it.homeworkId}::${it.studentHomeworkId}" }.sortedBy { it.deadline }
       val filtered = filterHomeworkRecords(deduped)
+      persistHomeworkRecords(filtered)
       val status = if (unsubmittedOnly) "unsubmitted_crawled" else "crawled"
       ActionExecutionReport(
         success = true,
@@ -246,9 +310,10 @@ class ActionExecutor(
             "count" to filtered.size,
             "homeworks" to filtered.map { it.toDataMap() },
             "count_before_filter" to deduped.size,
-            "course_ids" to courseIds,
-            "course_scope" to if (courseIds.isEmpty()) "all_courses_inferred" else "selected_courses",
-            "filters_applied" to listOf("exclude_title_contains_补交", "exclude_deadline_passed_if_epoch_ms"),
+            "course_ids" to requestedCourseIds,
+            "course_scope" to if (requestedCourseIds.isEmpty()) "all_courses_from_cache_or_fetch" else "selected_courses",
+            "filters_applied" to listOf("exclude_title_contains_supplement", "exclude_deadline_passed_if_epoch_ms"),
+            "persisted_to" to homeworkCacheFile().absolutePath,
           ),
       )
     }.getOrElse { throwable ->
@@ -260,7 +325,7 @@ class ActionExecutor(
           mapOf(
             "reason" to "crawl_failed",
             "exception" to (throwable.message ?: "unknown"),
-            "course_ids" to courseIds,
+            "course_ids" to requestedCourseIds,
           ),
       )
     }
@@ -449,13 +514,35 @@ class ActionExecutor(
         data = mapOf("reason" to "missing_auth"),
       )
     }
-    val homeworkId = action.params["homework_id"]?.trim().orEmpty()
-    if (homeworkId.isEmpty()) {
+    val requestedId = action.params["homework_id"]?.trim().orEmpty()
+    val requestedXszyid = action.params["xszyid"]?.trim().orEmpty()
+    val cachedHomework = findCachedHomework(requestedId.ifBlank { requestedXszyid })
+    val xszyid =
+      requestedXszyid
+        .ifBlank { cachedHomework?.studentHomeworkId.orEmpty() }
+        .ifBlank { requestedId }
+    val zyid =
+      action.params["zyid"]?.trim().orEmpty()
+        .ifBlank { action.params["homework_zyid"]?.trim().orEmpty() }
+        .ifBlank { cachedHomework?.homeworkId.orEmpty() }
+    val wlkcid =
+      action.params["wlkcid"]?.trim().orEmpty()
+        .ifBlank { action.params["course_id"]?.trim().orEmpty() }
+        .ifBlank { cachedHomework?.courseId.orEmpty() }
+    if (xszyid.isEmpty()) {
       return ActionExecutionReport(
         success = false,
-        message = "homework_id is required.",
+        message = "submit_homework requires xszyid/homework_id.",
         recoverable = false,
         data = mapOf("reason" to "missing_homework_id"),
+      )
+    }
+    if (wlkcid.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message = "submit_homework requires wlkcid/course_id. Run crawl_unsubmitted_homeworks first or pass course_id.",
+        recoverable = false,
+        data = mapOf("reason" to "missing_course_id", "xszyid" to xszyid),
       )
     }
 
@@ -481,23 +568,36 @@ class ActionExecutor(
       val submitUrl = "${auth.baseUrl}/b/wlxt/kczy/zy/student/tjzy"
       val filePart = if (hasFile) resolveFilePart(fileRef, fileUri, action.params["file_name"].orEmpty()) else null
       val attachmentTokenText = attachmentTokens.joinToString(",")
+      val submitPageUrl = "${auth.baseUrl}/f/wlxt/kczy/zy/student/tijiao?wlkcid=$wlkcid&xszyid=$xszyid"
+      val submitPage =
+        getForm(
+          url = submitPageUrl,
+          cookie = auth.cookie,
+          csrfToken = auth.csrf,
+          referer = submitPageUrl,
+          htmlAccept = true,
+        )
+      val form = parseSubmitForm(submitPage)
+      val fields = form.fields.toMutableMap()
+      fields["xszyid"] = xszyid
+      fields["isDeleted"] = fields["isDeleted"].orEmpty().ifBlank { "0" }
+      fields["zynr"] = submissionText
+      if (attachmentTokenText.isNotBlank()) {
+        fields["fjids"] = attachmentTokenText
+      }
       val responseBody =
         postMultipart(
           url = submitUrl,
           cookie = auth.cookie,
           csrfToken = auth.csrf,
-          textParts =
-            mapOf(
-              "xszyid" to homeworkId,
-              "zynr" to submissionText,
-              "fjids" to attachmentTokenText,
-              "isDeleted" to "0",
-            ),
+          referer = submitPageUrl,
+          textParts = fields,
           filePart = filePart,
+          fileFieldName = form.fileFieldName,
         )
       val openUrl =
         action.params["homework_detail_url"]?.trim().orEmpty().ifEmpty {
-          "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$homeworkId"
+          cachedHomework?.detailUrl.orEmpty().ifEmpty { submitPageUrl }
         }
       openWebPage(openUrl)
       ActionExecutionReport(
@@ -507,7 +607,9 @@ class ActionExecutor(
         data =
           mapOf(
             "status" to "submitted",
-            "homework_id" to homeworkId,
+            "homework_id" to zyid,
+            "xszyid" to xszyid,
+            "wlkcid" to wlkcid,
             "submitted_at" to Instant.now().toString(),
             "attachment_tokens" to attachmentTokens,
             "local_file_paths" to localFilePaths,
@@ -523,7 +625,9 @@ class ActionExecutor(
         data =
           mapOf(
             "reason" to "submit_failed",
-            "homework_id" to homeworkId,
+            "homework_id" to zyid,
+            "xszyid" to xszyid,
+            "wlkcid" to wlkcid,
             "exception" to (throwable.message ?: "unknown"),
           ),
       )
@@ -557,7 +661,7 @@ class ActionExecutor(
         "skip_write" -> {
           return ActionExecutionReport(
             success = true,
-            message = "已跳过写入（skip_write）。${conflictSummaryMessage(conflicts)}",
+            message = "瀹歌尪鐑︽潻鍥у晸閸忋儻绱檚kip_write閿涘鈧?{conflictSummaryMessage(conflicts)}",
             recoverable = false,
             data = mapOf(
               "skipped" to true,
@@ -574,7 +678,7 @@ class ActionExecutor(
           if (!allowDelete) {
             return ActionExecutionReport(
               success = false,
-              message = "冲突删除需要明确授权（allow_conflict_delete=true）。${conflictSummaryMessage(conflicts)}",
+              message = "閸愯尙鐛婇崚鐘绘珟闂団偓鐟曚焦妲戠涵顔藉房閺夊喛绱檃llow_conflict_delete=true閿涘鈧?{conflictSummaryMessage(conflicts)}",
               recoverable = false,
               data = mapOf(
                 "reason" to "allow_conflict_delete_not_set",
@@ -588,7 +692,7 @@ class ActionExecutor(
         else -> {
           return ActionExecutionReport(
             success = false,
-            message = "检测到冲突，请选择策略 skip_write / coexist / delete_conflicts。${conflictSummaryMessage(conflicts)}",
+            message = "濡偓濞村鍩岄崘鑼崐閿涘矁顕柅澶嬪缁涙牜鏆?skip_write / coexist / delete_conflicts閵?{conflictSummaryMessage(conflicts)}",
             recoverable = false,
             data = mapOf(
               "reason" to "conflict_strategy_required",
@@ -623,7 +727,7 @@ class ActionExecutor(
       val eventId = uri?.lastPathSegment ?: "unknown"
       ActionExecutionReport(
         success = true,
-        message = "日历事项已创建：「$title」${formatEpochMs(window.startMs)}-${formatEpochMs(window.endMs)}（event_id=$eventId）",
+        message = "Calendar event created: $title ${formatEpochMs(window.startMs)}-${formatEpochMs(window.endMs)} (event_id=$eventId).",
         recoverable = false,
         data = mapOf(
           "event_id" to eventId,
@@ -637,7 +741,7 @@ class ActionExecutor(
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
-        message = "日历写入失败：${throwable.message ?: "未知错误"}",
+        message = "Create calendar event failed: ${throwable.message ?: "unknown"}",
         recoverable = true,
         data = mapOf("exception" to (throwable.message ?: "unknown")),
       )
@@ -664,7 +768,7 @@ class ActionExecutor(
     return ActionExecutionReport(
       success = true,
       message = if (conflicts.isEmpty()) {
-        "未检测到时间冲突（已排除全天事件）。"
+        "Conflict check completed: 0 overlap(s). Android calendar overlap supported=true."
       } else {
         conflictSummaryMessage(conflicts)
       },
@@ -725,7 +829,7 @@ class ActionExecutor(
       val deleted = deleteEventsByIds(idsToDelete)
       ActionExecutionReport(
         success = true,
-        message = "已删除 $deleted 个日历事项（目标 ${idsToDelete.size} 个）。",
+        message = "Deleted $deleted calendar event(s); requested ${idsToDelete.size}.",
         recoverable = false,
         data = mapOf(
           "deleted_count" to deleted,
@@ -735,7 +839,7 @@ class ActionExecutor(
     }.getOrElse { throwable ->
       ActionExecutionReport(
         success = false,
-        message = "日历删除失败：${throwable.message ?: "未知错误"}",
+        message = "Delete calendar event failed: ${throwable.message ?: "unknown"}",
         recoverable = true,
         data = mapOf(
           "exception" to (throwable.message ?: "unknown"),
@@ -818,9 +922,9 @@ class ActionExecutor(
   /** Build a human-readable conflict summary for the message field. */
   private fun conflictSummaryMessage(conflicts: List<CalendarEventBrief>): String {
     val items = conflicts.joinToString("; ") { event ->
-      "「${event.title}」${formatEpochMs(event.startMs)}-${formatEpochMs(event.endMs)}"
+      "閵?{event.title}閵?{formatEpochMs(event.startMs)}-${formatEpochMs(event.endMs)}"
     }
-    return "冲突事项(${conflicts.size}): $items"
+    return "閸愯尙鐛婃禍瀣€?${conflicts.size}): $items"
   }
 
   private fun launchIntent(intent: Intent, successMessage: String): ActionExecutionReport {
@@ -900,7 +1004,7 @@ class ActionExecutor(
         CalendarContract.Events.DTSTART,
         CalendarContract.Events.DTEND,
       )
-    // Exclude all-day events (ALL_DAY=1) — their midnight UTC times cause false positives
+    // Exclude all-day events (ALL_DAY=1) 閳?their midnight UTC times cause false positives
     // against regular timed events.
     val selection =
       buildString {
@@ -1008,6 +1112,240 @@ class ActionExecutor(
     return listOf(parsed)
   }
 
+  private fun homeworkCacheDir(): File =
+    File(appContext.filesDir, "homework_skill").apply { mkdirs() }
+
+  private fun coursesCacheFile(): File = File(homeworkCacheDir(), "courses.json")
+
+  private fun homeworkCacheFile(): File = File(homeworkCacheDir(), "homeworks.json")
+
+  private fun loadHomeworkCourses(
+    auth: HomeworkAuth,
+    action: SystemAction,
+    forceRefresh: Boolean,
+  ): List<HomeworkCourse> {
+    if (!forceRefresh) {
+      val cached = readCachedHomeworkCourses()
+      if (cached.isNotEmpty()) return cached
+    }
+    val courses = fetchHomeworkCourses(auth, action)
+    persistHomeworkCourses(courses)
+    return courses
+  }
+
+  private fun fetchHomeworkCourses(
+    auth: HomeworkAuth,
+    action: SystemAction,
+  ): List<HomeworkCourse> {
+    val semesterId = readActionString(action, "semester_id").ifBlank { "2025-2026-2" }
+    val locale = readActionString(action, "locale").ifBlank { "zh" }
+    val ts = System.currentTimeMillis()
+    val url =
+      "${auth.baseUrl}/b/wlxt/kc/v_wlkc_xs_xkb_kcb_extend/student/loadCourseBySemesterId/$semesterId/$locale?timestamp=$ts"
+    val raw =
+      getForm(
+        url = url,
+        cookie = auth.cookie,
+        csrfToken = auth.csrf,
+        referer = "${auth.baseUrl}/f/wlxt/index/course/student/",
+        ajax = true,
+      )
+    val root = JSONObject(raw)
+    val arr = root.optJSONArray("resultList") ?: JSONArray()
+    val courses = mutableListOf<HomeworkCourse>()
+    for (i in 0 until arr.length()) {
+      val item = arr.optJSONObject(i) ?: continue
+      val wlkcid = normalizeNullableText(item.optString("wlkcid"))
+      if (wlkcid.isBlank()) continue
+      courses +=
+        HomeworkCourse(
+          wlkcid = wlkcid,
+          courseName = normalizeNullableText(item.optString("kcm")),
+          courseEnglishName = normalizeNullableText(item.optString("ywkcm")),
+          courseNo = normalizeNullableText(item.optString("kch")),
+          classNo = normalizeNullableText(item.optString("kxhnumber")),
+          teacherName = normalizeNullableText(item.optString("jsm")),
+          timeLocation = normalizeNullableText(item.optString("sjddb")),
+          homeworkTotal = normalizeNullableText(item.optString("zyzs")),
+          homeworkUnsubmitted = normalizeNullableText(item.optString("wjzys")),
+          courseUrl = "${auth.baseUrl}/f/wlxt/index/course/student/course?wlkcid=$wlkcid",
+          homeworkPageUrl = "${auth.baseUrl}/f/wlxt/kczy/zy/student/beforePageList?wlkcid=$wlkcid",
+        )
+    }
+    return courses
+  }
+
+  private fun persistHomeworkCourses(courses: List<HomeworkCourse>) {
+    val root =
+      JSONObject()
+        .put("updated_at", Instant.now().toString())
+        .put("courses", JSONArray(courses.map { JSONObject(it.toDataMap()) }))
+    coursesCacheFile().writeText(root.toString(2), Charsets.UTF_8)
+  }
+
+  private fun readCachedHomeworkCourses(): List<HomeworkCourse> {
+    val file = coursesCacheFile()
+    if (!file.exists()) return emptyList()
+    return runCatching {
+      val arr = JSONObject(file.readText(Charsets.UTF_8)).optJSONArray("courses") ?: JSONArray()
+      val result = mutableListOf<HomeworkCourse>()
+      for (i in 0 until arr.length()) {
+        val item = arr.optJSONObject(i) ?: continue
+        val wlkcid = normalizeNullableText(item.optString("wlkcid"))
+        if (wlkcid.isBlank()) continue
+        result +=
+          HomeworkCourse(
+            wlkcid = wlkcid,
+            courseName = normalizeNullableText(item.optString("course_name")),
+            courseEnglishName = normalizeNullableText(item.optString("course_english_name")),
+            courseNo = normalizeNullableText(item.optString("course_no")),
+            classNo = normalizeNullableText(item.optString("class_no")),
+            teacherName = normalizeNullableText(item.optString("teacher_name")),
+            timeLocation = normalizeNullableText(item.optString("time_location")),
+            homeworkTotal = normalizeNullableText(item.optString("homework_total")),
+            homeworkUnsubmitted = normalizeNullableText(item.optString("homework_unsubmitted")),
+            courseUrl = normalizeNullableText(item.optString("course_url")),
+            homeworkPageUrl = normalizeNullableText(item.optString("homework_page_url")),
+          )
+      }
+      result
+    }.getOrElse { emptyList() }
+  }
+
+  private fun persistHomeworkRecords(records: List<HomeworkRecord>) {
+    val root =
+      JSONObject()
+        .put("updated_at", Instant.now().toString())
+        .put("homeworks", JSONArray(records.map { JSONObject(it.toDataMap()) }))
+    homeworkCacheFile().writeText(root.toString(2), Charsets.UTF_8)
+  }
+
+  private fun findCachedHomework(id: String): HomeworkRecord? {
+    val normalized = normalizeNullableText(id)
+    if (normalized.isBlank()) return null
+    val file = homeworkCacheFile()
+    if (!file.exists()) return null
+    return runCatching {
+      val arr = JSONObject(file.readText(Charsets.UTF_8)).optJSONArray("homeworks") ?: JSONArray()
+      for (i in 0 until arr.length()) {
+        val item = arr.optJSONObject(i) ?: continue
+        val zyid = normalizeNullableText(item.optString("zyid")).ifBlank { normalizeNullableText(item.optString("homework_id")) }
+        val xszyid = normalizeNullableText(item.optString("xszyid")).ifBlank { normalizeNullableText(item.optString("student_homework_id")) }
+        if (normalized == zyid || normalized == xszyid) {
+          return@runCatching HomeworkRecord(
+            homeworkId = zyid,
+            studentHomeworkId = xszyid,
+            title = normalizeNullableText(item.optString("homework_title")).ifBlank { normalizeNullableText(item.optString("title")) },
+            deadline = normalizeNullableText(item.optString("deadline")),
+            submitted = item.optBoolean("submitted", false),
+            courseId = normalizeNullableText(item.optString("course_wlkcid")).ifBlank { normalizeNullableText(item.optString("course_id")) },
+            courseName = normalizeNullableText(item.optString("course_name")),
+            detailUrl = normalizeNullableText(item.optString("detail_url")),
+            courseNo = normalizeNullableText(item.optString("course_no")),
+            classNo = normalizeNullableText(item.optString("class_no")),
+            teacherName = normalizeNullableText(item.optString("teacher_name")),
+            statusGroup = normalizeNullableText(item.optString("status_group")),
+            sourceEndpoint = normalizeNullableText(item.optString("source_endpoint")),
+            submitUrl = normalizeNullableText(item.optString("submit_url")),
+          )
+        }
+      }
+      null
+    }.getOrNull()
+  }
+
+  private fun parseSubmitForm(html: String): SubmitForm {
+    val formMatch =
+      Regex("""<form[^>]*id=["']form_sn1["'][\s\S]*?</form>""", RegexOption.IGNORE_CASE)
+        .find(html)
+    val formHtml = formMatch?.value ?: html
+    val fields = linkedMapOf<String, String>()
+    val inputRegex = Regex("""<(input|textarea)[^>]*>[\s\S]*?(?:</textarea>)?""", RegexOption.IGNORE_CASE)
+    inputRegex.findAll(formHtml).forEach { match ->
+      val tag = match.value
+      val name = attrValue(tag, "name")
+      if (name.isBlank()) return@forEach
+      val value =
+        if (tag.startsWith("<textarea", ignoreCase = true)) {
+          tag.substringAfter('>', "").substringBeforeLast("</textarea>", "")
+        } else {
+          attrValue(tag, "value")
+        }
+      fields[name] = htmlUnescape(value)
+    }
+    val fileFieldName =
+      Regex("""<input[^>]*type=["']file["'][^>]*>""", RegexOption.IGNORE_CASE)
+        .find(formHtml)
+        ?.value
+        ?.let { attrValue(it, "name") }
+        ?.takeIf { it.isNotBlank() }
+        ?: "fileupload"
+    return SubmitForm(fields = fields, fileFieldName = fileFieldName)
+  }
+
+  private fun attrValue(
+    tag: String,
+    name: String,
+  ): String {
+    val regex = Regex("""\b${Regex.escape(name)}\s*=\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+    return regex.find(tag)?.groupValues?.getOrNull(1).orEmpty()
+  }
+
+  private fun htmlUnescape(value: String): String =
+    value
+      .replace("&amp;", "&")
+      .replace("&lt;", "<")
+      .replace("&gt;", ">")
+      .replace("&quot;", "\"")
+      .replace("&mdash;", "-")
+      .replace("&#39;", "'")
+
+  private fun firstJsonString(
+    obj: JSONObject,
+    vararg keys: String,
+  ): String {
+    val lookup = mutableMapOf<String, String>()
+    val iterator = obj.keys()
+    while (iterator.hasNext()) {
+      val key = iterator.next()
+      lookup[key.lowercase()] = key
+    }
+    keys.forEach { candidate ->
+      val actual = lookup[candidate.lowercase()] ?: return@forEach
+      val value = normalizeNullableText(obj.opt(actual)?.toString().orEmpty())
+      if (value.isNotBlank()) return value
+    }
+    return ""
+  }
+
+  private fun datatablePayload(
+    wlkcid: String,
+    start: Int = 0,
+    length: Int = 1000,
+  ): Map<String, String> {
+    val aoData =
+      JSONArray()
+        .put(JSONObject().put("name", "sEcho").put("value", 1))
+        .put(JSONObject().put("name", "iDisplayStart").put("value", start))
+        .put(JSONObject().put("name", "iDisplayLength").put("value", length))
+        .put(JSONObject().put("name", "iSortCol_0").put("value", 0))
+        .put(JSONObject().put("name", "sSortDir_0").put("value", "desc"))
+        .put(JSONObject().put("name", "wlkcid").put("value", wlkcid))
+        .toString()
+    val condition = JSONArray().put(JSONObject().put("name", "wlkcid").put("value", wlkcid)).toString()
+    return mapOf(
+      "sEcho" to "1",
+      "iDisplayStart" to start.toString(),
+      "iDisplayLength" to length.toString(),
+      "iSortCol_0" to "0",
+      "sSortDir_0" to "desc",
+      "wlkcid" to wlkcid,
+      "aoData" to aoData,
+      "searchCondition" to condition,
+      "defaultSearchCondition" to condition,
+    )
+  }
+
   private data class HomeworkAuth(
     val ok: Boolean,
     val message: String,
@@ -1020,6 +1358,11 @@ class ActionExecutor(
     val fileName: String,
     val mimeType: String,
     val bytes: ByteArray,
+  )
+
+  private data class SubmitForm(
+    val fields: Map<String, String>,
+    val fileFieldName: String,
   )
 
   private fun resolveHomeworkAuth(action: SystemAction): HomeworkAuth {
@@ -1304,24 +1647,31 @@ class ActionExecutor(
     form: Map<String, String>,
     cookie: String,
     csrfToken: String,
+    referer: String = "https://learn.tsinghua.edu.cn/f/wlxt/kczy/zy/student/index",
   ): String {
     val body =
       form.entries.joinToString("&") { (key, value) ->
         "${urlEncode(key)}=${urlEncode(value)}"
       }
-    val conn = (URL(appendCsrf(url, csrfToken)).openConnection() as HttpURLConnection)
+    val conn = (URL(url).openConnection() as HttpURLConnection)
+    conn.instanceFollowRedirects = false
     conn.requestMethod = "POST"
     conn.connectTimeout = 12_000
     conn.readTimeout = 18_000
     conn.doOutput = true
+    conn.setRequestProperty("Accept", "application/json, text/javascript, */*; q=0.01")
+    conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+    conn.setRequestProperty("Cache-Control", "no-cache")
+    conn.setRequestProperty("Pragma", "no-cache")
     conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
     conn.setRequestProperty("Cookie", cookie)
     conn.setRequestProperty(
       "User-Agent",
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     )
-    conn.setRequestProperty("Referer", "https://learn.tsinghua.edu.cn/f/wlxt/kczy/zy/student/index")
+    conn.setRequestProperty("Referer", referer)
     conn.setRequestProperty("Origin", "https://learn.tsinghua.edu.cn")
+    conn.setRequestProperty("X-Requested-With", "XMLHttpRequest")
     if (csrfToken.isNotBlank()) {
       conn.setRequestProperty("X-XSRF-TOKEN", csrfToken)
     }
@@ -1331,10 +1681,59 @@ class ActionExecutor(
     }
     val code = conn.responseCode
     val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-    val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+    val raw = readResponseText(conn, stream)
+    val location = conn.getHeaderField("Location").orEmpty()
     conn.disconnect()
     if (code !in 200..299) {
-      throw IllegalStateException("HTTP $code for $url: ${raw.take(256)}")
+      throw IllegalStateException("HTTP $code for $url${if (location.isNotBlank()) " location=$location" else ""}: ${raw.take(512)}")
+    }
+    return raw
+  }
+
+  private fun getForm(
+    url: String,
+    cookie: String,
+    csrfToken: String,
+    referer: String,
+    ajax: Boolean = false,
+    htmlAccept: Boolean = false,
+  ): String {
+    val conn = (URL(url).openConnection() as HttpURLConnection)
+    conn.instanceFollowRedirects = false
+    conn.requestMethod = "GET"
+    conn.connectTimeout = 12_000
+    conn.readTimeout = 24_000
+    conn.setRequestProperty(
+      "Accept",
+      when {
+        htmlAccept -> "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        ajax -> "application/json, text/javascript, */*; q=0.01"
+        else -> "*/*"
+      },
+    )
+    conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+    conn.setRequestProperty("Cache-Control", "no-cache")
+    conn.setRequestProperty("Pragma", "no-cache")
+    conn.setRequestProperty("Cookie", cookie)
+    conn.setRequestProperty("Referer", referer)
+    conn.setRequestProperty(
+      "User-Agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0",
+    )
+    if (ajax) {
+      conn.setRequestProperty("Origin", "https://learn.tsinghua.edu.cn")
+      conn.setRequestProperty("X-Requested-With", "XMLHttpRequest")
+    }
+    if (csrfToken.isNotBlank()) {
+      conn.setRequestProperty("X-XSRF-TOKEN", csrfToken)
+    }
+    val code = conn.responseCode
+    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+    val raw = readResponseText(conn, stream)
+    val location = conn.getHeaderField("Location").orEmpty()
+    conn.disconnect()
+    if (code !in 200..299) {
+      throw IllegalStateException("HTTP $code for $url${if (location.isNotBlank()) " location=$location" else ""}: ${raw.take(256)}")
     }
     return raw
   }
@@ -1343,17 +1742,34 @@ class ActionExecutor(
     url: String,
     cookie: String,
     csrfToken: String,
+    referer: String = "https://learn.tsinghua.edu.cn/f/wlxt/kczy/zy/student/index",
     textParts: Map<String, String>,
     filePart: MultipartFilePart?,
+    fileFieldName: String = "fileupload",
   ): String {
     val boundary = "----OpenTHUBoundary${System.currentTimeMillis()}"
-    val conn = (URL(appendCsrf(url, csrfToken)).openConnection() as HttpURLConnection)
+    val conn = (URL(url).openConnection() as HttpURLConnection)
+    conn.instanceFollowRedirects = false
     conn.requestMethod = "POST"
     conn.connectTimeout = 12_000
     conn.readTimeout = 24_000
     conn.doOutput = true
+    conn.setRequestProperty("Accept", "application/json, text/javascript, */*; q=0.01")
+    conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+    conn.setRequestProperty("Cache-Control", "no-cache")
+    conn.setRequestProperty("Pragma", "no-cache")
     conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
     conn.setRequestProperty("Cookie", cookie)
+    conn.setRequestProperty("Referer", referer)
+    conn.setRequestProperty("Origin", "https://learn.tsinghua.edu.cn")
+    conn.setRequestProperty("X-Requested-With", "XMLHttpRequest")
+    conn.setRequestProperty(
+      "User-Agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0",
+    )
+    if (csrfToken.isNotBlank()) {
+      conn.setRequestProperty("X-XSRF-TOKEN", csrfToken)
+    }
 
     DataOutputStream(BufferedOutputStream(conn.outputStream)).use { out ->
       textParts.forEach { (name, value) ->
@@ -1365,7 +1781,7 @@ class ActionExecutor(
       if (filePart != null) {
         out.writeBytes("--$boundary\r\n")
         out.writeBytes(
-          "Content-Disposition: form-data; name=\"fileupload\"; filename=\"${filePart.fileName}\"\r\n",
+          "Content-Disposition: form-data; name=\"$fileFieldName\"; filename=\"${filePart.fileName}\"\r\n",
         )
         out.writeBytes("Content-Type: ${filePart.mimeType}\r\n\r\n")
         out.write(filePart.bytes)
@@ -1377,10 +1793,11 @@ class ActionExecutor(
 
     val code = conn.responseCode
     val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-    val raw = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+    val raw = readResponseText(conn, stream)
+    val location = conn.getHeaderField("Location").orEmpty()
     conn.disconnect()
     if (code !in 200..299) {
-      throw IllegalStateException("HTTP $code for $url: ${raw.take(256)}")
+      throw IllegalStateException("HTTP $code for $url${if (location.isNotBlank()) " location=$location" else ""}: ${raw.take(512)}")
     }
     return raw
   }
@@ -1433,7 +1850,7 @@ class ActionExecutor(
   private fun filterHomeworkRecords(rows: List<HomeworkRecord>): List<HomeworkRecord> {
     val nowMs = System.currentTimeMillis()
     return rows.filter { row ->
-      if (row.title.contains("补交")) {
+      if (row.title.contains("\u8865\u4ea4")) {
         return@filter false
       }
       val deadlineMs = row.deadline.trim().toLongOrNull()
@@ -1446,8 +1863,9 @@ class ActionExecutor(
 
   private fun extractHomeworkRecords(
     root: JSONObject?,
-    courseId: String,
-    endpointType: String,
+    course: HomeworkCourse,
+    statusGroup: String,
+    endpoint: String,
     baseUrl: String,
   ): List<HomeworkRecord> {
     if (root == null) return emptyList()
@@ -1455,29 +1873,96 @@ class ActionExecutor(
     val candidates = mutableListOf<JSONObject>()
     collectObjectsRecursively(root, candidates)
     candidates.forEach { obj ->
-      val id = obj.optString("id").ifBlank { obj.optString("zyid") }
-      val xszyid = obj.optString("xszyid").ifBlank { obj.optString("studentHomeworkId") }
-      val title = obj.optString("bt").ifBlank { obj.optString("title") }
-      if (id.isBlank() || title.isBlank()) return@forEach
-      val deadline = obj.optString("jzsj").ifBlank { obj.optString("deadline") }
-      val submitted = when (endpointType) {
-        "WJ" -> false
-        else -> true
-      }
-      val detailUrl = "$baseUrl/f/wlxt/kczy/zy/student/viewZy?zyid=$id"
+      val zyid = firstJsonString(obj, "zyid", "zyId", "id")
+      val xszyid = firstJsonString(obj, "xszyid", "xszyId", "studentHomeworkId")
+      val title = htmlUnescape(firstJsonString(obj, "bt", "title", "name", "zymc", "zybt"))
+      if (zyid.isBlank() && xszyid.isBlank()) return@forEach
+      if (title.isBlank()) return@forEach
+      val deadline = firstJsonString(obj, "jzsj", "deadline", "jzsjStr")
+      val submitted = statusGroup != "unsubmitted"
+      val detailUrl =
+        if (statusGroup == "unsubmitted" && zyid.isNotBlank() && xszyid.isNotBlank()) {
+          "$baseUrl/f/wlxt/kczy/zy/student/viewZy?wlkcid=${course.wlkcid}&sfgq=0&zyid=$zyid&xszyid=$xszyid"
+        } else if (statusGroup == "graded" && zyid.isNotBlank() && xszyid.isNotBlank()) {
+          "$baseUrl/f/wlxt/kczy/zy/student/viewCj?wlkcid=${course.wlkcid}&zyid=$zyid&xszyid=$xszyid"
+        } else if (statusGroup == "excellent" && zyid.isNotBlank() && xszyid.isNotBlank()) {
+          "$baseUrl/f/wlxt/kczy/zy/student/viewYxzy?wlkcid=${course.wlkcid}&zyid=$zyid&xszyid=$xszyid"
+        } else {
+          ""
+        }
+      val submitUrl =
+        if (statusGroup == "unsubmitted" && xszyid.isNotBlank()) {
+          "$baseUrl/f/wlxt/kczy/zy/student/tijiao?wlkcid=${course.wlkcid}&xszyid=$xszyid"
+        } else {
+          ""
+        }
       list +=
         HomeworkRecord(
-          homeworkId = id,
+          homeworkId = zyid,
           studentHomeworkId = xszyid,
           title = title,
           deadline = deadline,
           submitted = submitted,
-          courseId = courseId,
-          courseName = obj.optString("kcmc"),
+          courseId = course.wlkcid,
+          courseName = course.courseName.ifBlank { firstJsonString(obj, "kcmc", "courseName") },
           detailUrl = detailUrl,
+          courseNo = course.courseNo,
+          classNo = course.classNo,
+          teacherName = course.teacherName,
+          statusGroup = statusGroup,
+          sourceEndpoint = endpoint,
+          submitUrl = submitUrl,
         )
     }
     return list
+  }
+
+  private fun readResponseText(
+    conn: HttpURLConnection,
+    stream: java.io.InputStream?,
+  ): String {
+    if (stream == null) return ""
+    val bytes = stream.use { it.readBytes() }
+    if (bytes.isEmpty()) return ""
+    val declaredCharset = extractCharsetFromContentType(conn.contentType)
+    val primary = decodeBytes(bytes, declaredCharset ?: StandardCharsets.UTF_8.name())
+    if (looksLikeMojibake(primary)) {
+      val fallback = decodeBytes(bytes, "GB18030")
+      if (!looksLikeMojibake(fallback)) return fallback
+    }
+    return primary
+  }
+
+  private fun extractCharsetFromContentType(contentType: String?): String? {
+    if (contentType.isNullOrBlank()) return null
+    val match = Regex("""charset\s*=\s*([A-Za-z0-9_\-]+)""", RegexOption.IGNORE_CASE).find(contentType)
+    return match?.groupValues?.getOrNull(1)?.trim()
+  }
+
+  private fun decodeBytes(
+    bytes: ByteArray,
+    charsetName: String,
+  ): String =
+    runCatching {
+      String(bytes, Charset.forName(charsetName))
+    }.getOrElse {
+      String(bytes, StandardCharsets.UTF_8)
+    }
+
+  private fun looksLikeMojibake(text: String): Boolean {
+    if (text.isBlank()) return false
+    return text.contains("\uFFFD") ||
+      text.contains("\u00EF\u00BF\u00BD") ||
+      text.contains("\u00E9\u008D\u0090") ||
+      text.contains("\u00E7\u00BC\u0083") ||
+      text.contains("\u00E6\u00B6\u0093") ||
+      text.contains("\u00E7\u00BB\u0094")
+  }
+  private fun normalizeNullableText(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return ""
+    if (trimmed.equals("null", ignoreCase = true)) return ""
+    return trimmed
   }
 
   private fun extractAttachments(
@@ -1560,13 +2045,39 @@ class ActionExecutor(
   private fun HomeworkRecord.toDataMap(): Map<String, Any> =
     mapOf(
       "homework_id" to homeworkId,
+      "zyid" to homeworkId,
       "student_homework_id" to studentHomeworkId,
+      "xszyid" to studentHomeworkId,
       "title" to title,
+      "homework_title" to title,
       "deadline" to deadline,
       "submitted" to submitted,
       "course_id" to courseId,
+      "course_wlkcid" to courseId,
       "course_name" to courseName,
+      "course_no" to courseNo,
+      "class_no" to classNo,
+      "teacher_name" to teacherName,
+      "status_group" to statusGroup,
+      "source_endpoint" to sourceEndpoint,
       "detail_url" to detailUrl,
+      "submit_url" to submitUrl,
+    )
+
+  private fun HomeworkCourse.toDataMap(): Map<String, Any> =
+    mapOf(
+      "wlkcid" to wlkcid,
+      "course_id" to wlkcid,
+      "course_name" to courseName,
+      "course_english_name" to courseEnglishName,
+      "course_no" to courseNo,
+      "class_no" to classNo,
+      "teacher_name" to teacherName,
+      "time_location" to timeLocation,
+      "homework_total" to homeworkTotal,
+      "homework_unsubmitted" to homeworkUnsubmitted,
+      "course_url" to courseUrl,
+      "homework_page_url" to homeworkPageUrl,
     )
 
   private fun HomeworkAttachment.toDataMap(): Map<String, Any> =
