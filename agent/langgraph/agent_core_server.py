@@ -5,6 +5,7 @@ import json
 import logging
 import logging.handlers
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ logging.getLogger("openai._base_client").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("agent_core_server")
+DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS = 8.0
+DEVICE_RESULT_WAIT_TIMEOUT_SECONDS = 300.0
 
 
 def utc_now() -> str:
@@ -104,6 +107,7 @@ class AgentCoreStore:
     def __init__(self, store_file: Path) -> None:
         self.store_file = store_file
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._state = {
             "devices": {},
             "tasks": {},
@@ -210,6 +214,7 @@ class AgentCoreStore:
             }
             self._state["tasks"][task_id] = task_doc
             self._save_locked()
+            self._condition.notify_all()
             logger.info(
                 "[task] created task_id=%s device_id=%s status=%s "
                 "approved_skills=%d blocked_skills=%d goal=%r",
@@ -341,6 +346,36 @@ class AgentCoreStore:
             self._refresh_task_status_locked(task_doc)
             task_doc["updated_at"] = utc_now()
             self._save_locked()
+            self._condition.notify_all()
+            return dict(task_doc)
+
+    def suppress_show_summary_for_stream(self, *, task_id: str) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+
+            completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
+            changed = False
+            for skill in task_doc.get("approved_skills", []):
+                if not isinstance(skill, dict):
+                    continue
+                if str(skill.get("skill_name", "")) != "show_summary":
+                    continue
+                request_id = str(skill.get("request_id", ""))
+                if not request_id:
+                    continue
+                completed.add(request_id)
+                self._mark_skill_status(task_doc, request_id, "suppressed")
+                changed = True
+
+            if changed:
+                task_doc["completed_request_ids"] = sorted(completed)
+                task_doc["stream_final_summary"] = True
+                self._refresh_task_status_locked(task_doc)
+                task_doc["updated_at"] = utc_now()
+                self._save_locked()
+                self._condition.notify_all()
             return dict(task_doc)
 
     def pop_next_dispatch(self, device_id: str) -> dict[str, Any] | None:
@@ -379,7 +414,6 @@ class AgentCoreStore:
                             isinstance(candidate, dict)
                             and str(candidate.get("skill_name", "")) != "show_summary"
                             and str(candidate.get("request_id", "")) not in completed
-                            and str(candidate.get("request_id", "")) not in in_flight
                             for candidate in approved
                         )
                     ):
@@ -484,6 +518,7 @@ class AgentCoreStore:
             self._refresh_task_status_locked(task_doc)
             task_doc["updated_at"] = utc_now()
             self._save_locked()
+            self._condition.notify_all()
             logger.info(
                 "[result] task_id=%s updated status=%s completed=%d/%d",
                 task_id,
@@ -589,6 +624,7 @@ class AgentCoreStore:
             task_doc["updated_at"] = now
             self._refresh_task_status_locked(task_doc)
             self._save_locked()
+            self._condition.notify_all()
             logger.info(
                 "[decision] task_id=%s request_id=%s decision=%s status=%s",
                 task_id,
@@ -625,7 +661,45 @@ class AgentCoreStore:
             if updated:
                 task_doc["updated_at"] = utc_now()
                 self._save_locked()
+                self._condition.notify_all()
             return dict(task_doc)
+
+    def set_final_summary(
+        self,
+        *,
+        task_id: str,
+        summary: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+            task_doc["final_summary_text"] = summary
+            task_doc["final_summary_generated_at"] = utc_now()
+            task_doc["updated_at"] = utc_now()
+            self._save_locked()
+            self._condition.notify_all()
+            return dict(task_doc)
+
+    def wait_for_task_update(
+        self,
+        *,
+        task_id: str,
+        last_updated_at: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        with self._condition:
+            while True:
+                task_doc = self._state["tasks"].get(task_id)
+                if not isinstance(task_doc, dict):
+                    return None
+                if str(task_doc.get("updated_at", "")) != last_updated_at:
+                    return dict(task_doc)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return dict(task_doc)
+                self._condition.wait(timeout=remaining)
 
 
 def _skill_invocation_from_dict(payload: dict[str, Any]) -> SkillInvocation:
@@ -725,6 +799,25 @@ def build_task_result_summary(task_doc: dict[str, Any]) -> str:
         if isinstance(value, list):
             results.extend(item for item in value if isinstance(item, dict))
     return build_server_data_summary(results)
+
+
+def pending_runtime_request_ids(task_doc: dict[str, Any]) -> list[str]:
+    approved = task_doc.get("approved_skills", [])
+    if not isinstance(approved, list):
+        return []
+    completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
+    pending: list[str] = []
+    for skill in approved:
+        if not isinstance(skill, dict):
+            continue
+        skill_name = str(skill.get("skill_name", ""))
+        request_id = str(skill.get("request_id", ""))
+        if not request_id or request_id in completed:
+            continue
+        if skill_name == "show_summary":
+            continue
+        pending.append(request_id)
+    return pending
 
 
 def build_server_data_summary(results: Any) -> str:
@@ -873,6 +966,9 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
 
 
 def _final_content_from_task(task_doc: dict[str, Any]) -> str:
+    final_summary = str(task_doc.get("final_summary_text", "")).strip()
+    if final_summary:
+        return final_summary
     approved = task_doc.get("approved_skills", [])
     blocked = task_doc.get("blocked_skills", [])
     approved_count = len(approved) if isinstance(approved, list) else 0
@@ -1059,6 +1155,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     user_id=payload.user_id,
                     goal=payload.message,
                 )
+                task_doc = store.suppress_show_summary_for_stream(task_id=str(task_doc.get("task_id", "")))
                 task_doc = execute_server_side_data_skills(
                     agent=agent,
                     store=store,
@@ -1072,9 +1169,8 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                 task_id = str(task_doc.get("task_id", ""))
                 server_results = task_doc.get("server_results", [])
                 completed_request_ids = {
-                    str(item.get("request_id", ""))
-                    for item in server_results
-                    if isinstance(item, dict)
+                    str(item)
+                    for item in task_doc.get("completed_request_ids", [])
                 }
                 for result in server_results if isinstance(server_results, list) else []:
                     if not isinstance(result, dict):
@@ -1106,11 +1202,12 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     )
 
                 approved_skills = task_doc.get("approved_skills", [])
+                queued_runtime_ids = set(pending_runtime_request_ids(task_doc))
                 for skill in approved_skills if isinstance(approved_skills, list) else []:
                     if not isinstance(skill, dict):
                         continue
                     request_id = str(skill.get("request_id", ""))
-                    if request_id in completed_request_ids:
+                    if request_id in completed_request_ids or request_id not in queued_runtime_ids:
                         continue
                     skill_name = str(skill.get("skill_name", ""))
                     yield encode_ndjson(
@@ -1147,7 +1244,83 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         )
                     )
 
+                pending_ids = pending_runtime_request_ids(task_doc)
+                if pending_ids:
+                    yield encode_ndjson(
+                        agent_event(
+                            "assistant_delta",
+                            content="我已经把需要手机端执行的步骤发过去了，会等结果回来后再给你最终总结。",
+                        )
+                    )
+                    wait_started = time.monotonic()
+                    while pending_ids and time.monotonic() - wait_started < DEVICE_RESULT_WAIT_TIMEOUT_SECONDS:
+                        last_updated_at = str(task_doc.get("updated_at", ""))
+                        waited_task = store.wait_for_task_update(
+                            task_id=task_id,
+                            last_updated_at=last_updated_at,
+                            timeout_seconds=DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS,
+                        )
+                        if waited_task is None:
+                            break
+                        task_doc = waited_task
+                        pending_ids = pending_runtime_request_ids(task_doc)
+                        if pending_ids:
+                            yield encode_ndjson(
+                                agent_event(
+                                    "tool_call",
+                                    title="等待手机端执行结果",
+                                    content=f"还在等待 {len(pending_ids)} 个端侧步骤完成。",
+                                    task_id=task_id,
+                                    status="waiting",
+                                )
+                            )
+
+                    task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
+                    device_results = task_doc.get("device_results", [])
+                    for result in device_results if isinstance(device_results, list) else []:
+                        if not isinstance(result, dict):
+                            continue
+                        request_id = str(result.get("request_id", ""))
+                        skill_name = str(result.get("skill_name", ""))
+                        if skill_name == "show_summary":
+                            continue
+                        result_ok = result.get("code") == "OK"
+                        yield encode_ndjson(
+                            agent_event(
+                                "tool_result",
+                                title=f"{skill_name} 已完成" if result_ok else f"{skill_name} 未完成",
+                                content=str(result.get("message", "")).strip(),
+                                task_id=task_id,
+                                request_id=request_id,
+                                skill_name=skill_name,
+                                status="ok" if result_ok else "failed",
+                                data={"message": result.get("message", ""), "source": result.get("source", "")},
+                            )
+                        )
+
                 final_content = _final_content_from_task(task_doc)
+                still_pending = pending_runtime_request_ids(task_doc)
+                if still_pending:
+                    final_content = (
+                        f"{final_content}\n\n"
+                        f"手机端还有 {len(still_pending)} 个步骤暂时没有返回结果，我会在它们完成后继续更新。"
+                    )
+                else:
+                    summary_session = (
+                        plan_response.get("data", {}).get("session", {})
+                        if isinstance(plan_response.get("data"), dict)
+                        else {}
+                    )
+                    if not isinstance(summary_session, dict):
+                        summary_session = payload.session
+                    final_content = agent.synthesize_summary_from_results(
+                        user_input=payload.message,
+                        session=summary_session,
+                        task_doc=task_doc,
+                        fallback_summary=final_content,
+                    )
+                    task_doc = store.set_final_summary(task_id=task_id, summary=final_content)
                 yield encode_ndjson(
                     agent_event(
                         "assistant_final",
@@ -1229,9 +1402,6 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
         except ValueError as exc:
             logger.warning("[api] submit_result invalid: task_id=%s error=%s", task_id, exc)
             raise HTTPException(status_code=400, detail=str(exc))
-
-        # Re-hydrate show_summary to pick up new device_results like read_notifications
-        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
 
         logger.info(
             "[api] result accepted task_id=%s skill_name=%s code=%s task_status=%s received=%d | message=%s",
