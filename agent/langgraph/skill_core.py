@@ -135,12 +135,43 @@ def build_default_registry() -> SkillRegistry:
         SkillSpec("get_semesters", "Fetch semester list and current semester", "data", "low", False, session_required=True),
         SkillSpec(
             "get_courses",
-            "Fetch course list for a semester",
+            "Fetch course list and class time/location blocks for a semester",
             "data",
             "low",
             False,
             session_required=True,
             args_schema={"semester_id": "string"},
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "semester_id": {"type": "string"},
+                    "lang": {"type": "string"},
+                    "include_schedule_detail": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "get_course_schedule",
+            "Fetch class schedule entries from Tsinghua WebVPN teaching-calendar or Learn course list",
+            "data",
+            "low",
+            False,
+            session_required=True,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "semester_id": {"type": "string"},
+                    "first_day": {"type": "string"},
+                    "week_count": {"type": "integer"},
+                    "graduate": {"type": "boolean"},
+                    "include_secondary": {"type": "boolean"},
+                    "lang": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
         ),
         SkillSpec(
             "get_notices",
@@ -558,6 +589,15 @@ def build_default_registry() -> SkillRegistry:
         registry.register_handler("open_url", OpenUrlSkill())
     except ImportError:
         pass
+    try:
+        try:
+            from .skills.course_info_skills import register_course_info_handlers
+        except ImportError:
+            from skills.course_info_skills import register_course_info_handlers
+        register_course_info_handlers(registry)
+    except ImportError:
+        pass
+
     try:
         try:
             from .skills.campus_data_skills import build_static_campus_data_handlers

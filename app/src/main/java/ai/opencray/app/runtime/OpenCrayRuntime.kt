@@ -760,6 +760,9 @@ class OpenCrayRuntime(
     listOf(
       "get_current_time",
       "set_alarm",
+      "get_semesters",
+      "get_courses",
+      "get_course_schedule",
       "get_campus_activities",
       "search",
       "get_homework_cookie",

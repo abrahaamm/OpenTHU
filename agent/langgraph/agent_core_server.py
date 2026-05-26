@@ -952,6 +952,68 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
                 lines.append(line)
         return "\n".join(lines)
 
+    if skill_name == "get_semesters":
+        semesters = data.get("semesters", [])
+        if not isinstance(semesters, list):
+            semesters = []
+        current = str(data.get("current_semester", "")).strip()
+        lines = ["### 学期信息"]
+        if current:
+            lines.append(f"当前学期：{current}")
+        lines.append(f"共找到 {len(semesters)} 个学期。")
+        for item in semesters[:6]:
+            if isinstance(item, dict):
+                label = str(item.get("semester_name") or item.get("semester_id") or "").strip()
+                first_day = str(item.get("first_day", "")).strip()
+                if label:
+                    lines.append(f"- {label}" + (f"（教学周从 {first_day} 开始）" if first_day else ""))
+            elif item:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+
+    if skill_name in {"get_courses", "get_course_schedule"}:
+        courses = data.get("courses", [])
+        if not isinstance(courses, list):
+            courses = []
+        schedule_entries = data.get("schedule_entries", [])
+        schedule_count = len(schedule_entries) if isinstance(schedule_entries, list) else 0
+        title = "课表" if skill_name == "get_course_schedule" else "课程列表"
+        lines = [f"### {title}", f"共找到 {len(courses)} 门课程。"]
+        if schedule_count:
+            lines.append(f"按日期展开的课表条目：{schedule_count} 条。")
+        for item in courses[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("course_name") or "未命名课程").strip()
+            teacher = str(item.get("teacher_name", "")).strip()
+            time_blocks = item.get("time_and_location", [])
+            details = []
+            if teacher:
+                details.append(teacher)
+            if isinstance(time_blocks, list) and time_blocks:
+                block = time_blocks[0]
+                if isinstance(block, dict):
+                    weekday = block.get("weekday")
+                    period = block.get("period", [])
+                    location = str(block.get("location", "")).strip()
+                    time_label = ""
+                    if weekday:
+                        time_label += f"周{weekday}"
+                    if isinstance(period, list) and len(period) >= 2:
+                        time_label += f" 第{period[0]}-{period[1]}节"
+                    if location:
+                        time_label += f" {location}"
+                    if time_label.strip():
+                        details.append(time_label.strip())
+            line = f"- {name}"
+            if details:
+                line += f"（{'，'.join(details)}）"
+            lines.append(line)
+        warnings = data.get("warnings", [])
+        if isinstance(warnings, list) and warnings:
+            lines.append("提示：" + "；".join(str(item) for item in warnings[:3]))
+        return "\n".join(lines)
+
     if skill_name in {"crawl_course_homeworks", "crawl_unsubmitted_homeworks"}:
         homeworks = data.get("homeworks", [])
         if not isinstance(homeworks, list):
