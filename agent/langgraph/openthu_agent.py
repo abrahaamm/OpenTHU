@@ -1131,6 +1131,98 @@ class OpenTHULangGraphAgent:
             return "SKILL_EXECUTION_FAILED", "Some skills failed and replanning guidance was generated"
         return "OK", "Workflow completed"
 
+    def synthesize_summary_from_results(
+        self,
+        *,
+        user_input: str,
+        session: dict[str, Any],
+        task_doc: dict[str, Any],
+        fallback_summary: str,
+    ) -> str:
+        api_key, model, base_url = self._llm_config_from_session(session if isinstance(session, dict) else {})
+        if not api_key:
+            return fallback_summary
+
+        results: list[dict[str, Any]] = []
+        for key in ("server_results", "device_results"):
+            raw_results = task_doc.get(key, [])
+            if isinstance(raw_results, list):
+                results.extend(self._compact_result_for_summary(item, key) for item in raw_results if isinstance(item, dict))
+
+        payload = {
+            "user_input": user_input,
+            "task_status": task_doc.get("status", ""),
+            "results": results,
+            "blocked_skills": [
+                {
+                    "skill_name": item.get("skill_name", ""),
+                    "description": item.get("description", ""),
+                    "risk_level": item.get("risk_level", ""),
+                }
+                for item in task_doc.get("blocked_skills", [])
+                if isinstance(item, dict)
+            ],
+            "fallback_summary": fallback_summary,
+        }
+
+        system_prompt = (
+            "你是 OpenTHU 移动端 Agent 的最终总结节点。"
+            "你会收到用户原始请求、云端 skill 和手机端 skill 的结构化执行结果。"
+            "请在所有结果基础上给用户一段自然、明确、有帮助的中文最终回复。"
+            "不要暴露 request_id、内部 JSON、工具日志或实现细节；"
+            "如果有失败或权限问题，要说明用户下一步应该怎么做；"
+            "如果已有具体结果，直接总结结果，不要只说任务已完成。"
+        )
+
+        try:
+            from openai import OpenAI
+
+            client = self._create_openai_client(OpenAI, api_key, base_url=base_url)
+            completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)[:14000]},
+                ],
+                max_tokens=800,
+                temperature=0.35,
+            )
+            text = (completion.choices[0].message.content or "").strip()
+            return text or fallback_summary
+        except Exception as exc:
+            logger.warning("[agent.summary] final synthesis failed: %s", exc)
+            return fallback_summary
+
+    def _compact_result_for_summary(self, result: dict[str, Any], result_group: str) -> dict[str, Any]:
+        data = result.get("data", {})
+        compact: dict[str, Any] = {
+            "group": result_group,
+            "skill_name": result.get("skill_name", ""),
+            "code": result.get("code", ""),
+            "success": bool(result.get("success", result.get("code") == "OK")),
+            "message": result.get("message", ""),
+            "source": result.get("source", ""),
+        }
+        if isinstance(data, dict):
+            for key in (
+                "status",
+                "message",
+                "answer",
+                "summary",
+                "query",
+                "count",
+                "notification_count",
+                "semantic",
+            ):
+                value = data.get(key)
+                if value not in (None, "", [], {}):
+                    compact[key] = value
+            for key in ("results", "citations", "activities", "notifications", "warnings"):
+                value = data.get(key)
+                if isinstance(value, list) and value:
+                    compact[key] = value[:6]
+        return compact
+
     def _plan_skills_via_llm(
         self,
         state: AgentState,

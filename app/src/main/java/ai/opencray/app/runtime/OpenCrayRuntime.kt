@@ -36,6 +36,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
+import java.util.Collections
 import java.util.UUID
 import kotlin.math.min
 import java.util.Locale
@@ -82,6 +83,7 @@ class OpenCrayRuntime(
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
   @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
+  private val serverSummaryTaskIds = Collections.synchronizedSet(mutableSetOf<String>())
   /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
   @Volatile private var pendingPermissionCallback: (() -> Unit)? = null
 
@@ -474,6 +476,9 @@ class OpenCrayRuntime(
             "assistant_delta" -> updateAssistantText(event.content)
             "assistant_final" -> {
               val id = ensureAssistantMessage()
+              if (event.taskId.isNotBlank()) {
+                serverSummaryTaskIds.remove(event.taskId)
+              }
               if (event.content.isNotBlank()) {
                 assistantText.clear()
                 assistantText.append(event.content)
@@ -489,6 +494,12 @@ class OpenCrayRuntime(
             -> {
               val id = ensureAssistantMessage()
               chatRepository.appendEvent(id, event.toChatEvent())
+              if (event.type == "tool_call" && event.status == "queued") {
+                if (event.taskId.isNotBlank()) {
+                  serverSummaryTaskIds.add(event.taskId)
+                }
+                runGatewayDispatchLoop()
+              }
             }
           }
         }
@@ -1108,6 +1119,8 @@ class OpenCrayRuntime(
 
     val userFacingMessage =
       when {
+        submitGatewayResult && serverSummaryTaskIds.contains(task.id) && !needsConflictResolution ->
+          ""
         needsConflictResolution ->
           "我发现这个日程和现有安排有冲突。你可以选择：跳过创建、共存，或删除冲突事项后再创建。"
         report.success && action.id.substringBefore("#") == "show_summary" ->
@@ -1119,7 +1132,9 @@ class OpenCrayRuntime(
         else ->
           "这个操作没有成功，我已经记录原因并会尝试给你替代方案。"
       }
-    streamAssistant(userFacingMessage)
+    if (userFacingMessage.isNotBlank()) {
+      streamAssistant(userFacingMessage)
+    }
   }
 
   /**
