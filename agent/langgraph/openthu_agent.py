@@ -104,7 +104,10 @@ class RequirementLLM:
             system_prompt = (
                 "Convert the user requirement into strict JSON with keys: "
                 "objective, entities, constraints, success_criteria, sensitivity. "
-                "Use concise, execution-oriented values. Return JSON only."
+                "Use concise, execution-oriented values. "
+                "If the input contains an [attached_file] block, preserve its file_uri and file_name "
+                "verbatim in constraints so downstream homework upload skills can use them. "
+                "Return JSON only."
             )
             if not resolved_base_url:
                 try:
@@ -1183,6 +1186,7 @@ class OpenTHULangGraphAgent:
 
         payload = {
             "structured_prompt": structured_prompt,
+            "user_input": state.get("user_input", ""),
             "semester_id": state.get("semester_id", ""),
             "available_skills": self.skill_manager.list_for_planner(),
         }
@@ -1195,7 +1199,8 @@ class OpenTHULangGraphAgent:
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
             "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
-            "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; use get_homework_cookie only when the user provides a Learn cookie."
+            "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; use get_homework_cookie only when the user provides a Learn cookie. "
+            "If user_input or structured_prompt constraints include an [attached_file] block with file_uri/file_name, copy those exact values into upload_homework_attachment or submit_homework args when the user asks to upload or submit homework."
         )
 
         try:
@@ -1514,6 +1519,10 @@ class OpenTHULangGraphAgent:
             constraints_raw = [constraints_raw]
             warnings.append("'constraints' was not a list; coerced to list")
         constraints = [str(item).strip() for item in constraints_raw if str(item).strip()]
+        attached_constraints = self._extract_attached_file_constraints(source_text)
+        for item in attached_constraints:
+            if item not in constraints:
+                constraints.append(item)
 
         success_raw = raw_prompt.get("success_criteria", [])
         if not isinstance(success_raw, list):
@@ -1537,6 +1546,27 @@ class OpenTHULangGraphAgent:
             },
             warnings,
         )
+
+    def _extract_attached_file_constraints(self, source_text: str) -> list[str]:
+        if "[attached_file]" not in source_text:
+            return []
+        values: dict[str, str] = {}
+        for raw_line in source_text.splitlines():
+            line = raw_line.strip()
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip()
+            if key in {"file_uri", "file_name"}:
+                values[key] = value.strip()
+        constraints: list[str] = []
+        file_uri = values.get("file_uri", "")
+        file_name = values.get("file_name", "")
+        if file_uri:
+            constraints.append(f"attached_file.file_uri={file_uri}")
+        if file_name:
+            constraints.append(f"attached_file.file_name={file_name}")
+        return constraints
 
     def _extract_json_text(self, text: str) -> str:
         stripped = text.strip()

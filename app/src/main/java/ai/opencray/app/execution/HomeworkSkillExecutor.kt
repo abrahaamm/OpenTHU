@@ -3,6 +3,7 @@ package ai.opencray.app.execution
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import ai.opencray.app.LearnCookieLoginActivity
 import ai.opencray.app.domain.model.SystemAction
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
@@ -139,20 +140,36 @@ class HomeworkSkillExecutor(
     val studentId = readActionString(action, "student_id")
     val password = readActionString(action, "password")
     if (studentId.isNotBlank() || password.isNotBlank()) {
+      openLearnCookieLogin(baseUrl)
       return homeworkFailure(
-        message = "Credential-based Learn login is not implemented in this branch. Paste a Learn cookie for now; WebView unified-login cookie extraction will be added separately.",
+        message = "Credential-based Learn login is not supported. Opening the WebView unified-login flow instead.",
         reason = "credential_login_not_implemented",
-        recoverable = false,
-        semantic = "homework_cookie_not_configured",
+        recoverable = true,
+        semantic = "homework_cookie_login_required",
       )
     }
 
-    return homeworkFailure(
-      message = "Homework cookie is not configured. Paste a Learn cookie in settings or pass cookies/session_cookie.",
-      reason = "missing_auth",
-      recoverable = false,
-      semantic = "homework_cookie_not_configured",
+    openLearnCookieLogin(baseUrl)
+    return ActionExecutionReport(
+      success = false,
+      message = "Homework cookie is not configured. Opened the WebView unified-login flow; finish login and retry the homework request.",
+      recoverable = true,
+      semantic = "homework_cookie_login_required",
+      metadata =
+        mapOf(
+          "status" to "login_required",
+          "reason" to "missing_auth",
+          "learn_base_url" to baseUrl,
+        ),
     )
+  }
+
+  private fun openLearnCookieLogin(baseUrl: String) {
+    val intent =
+      Intent(appContext, LearnCookieLoginActivity::class.java)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        .putExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL, baseUrl)
+    appContext.startActivity(intent)
   }
 
   private fun executeCrawlCourseHomeworks(

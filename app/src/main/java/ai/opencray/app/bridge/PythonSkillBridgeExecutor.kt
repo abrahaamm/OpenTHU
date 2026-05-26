@@ -142,9 +142,10 @@ class PythonSkillBridgeExecutor(
           .put("message", message)
       }
       "get_homework_cookie" -> {
+        val reportedStatus = report.metadata["status"]?.toString().orEmpty()
         val data =
           JSONObject()
-            .put("status", if (report.success) "cookie_ready" else "failed")
+            .put("status", reportedStatus.ifBlank { if (report.success) "cookie_ready" else "failed" })
             .put("message", message)
         putReportData(data, report)
       }

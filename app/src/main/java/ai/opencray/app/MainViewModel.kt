@@ -125,10 +125,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = destination
   }
 
-  fun sendChatMessage(text: String) {
+  fun sendChatMessage(
+    text: String,
+    attachedFileUri: String? = null,
+    attachedFileName: String? = null,
+  ) {
     val normalized = text.trim()
-    if (normalized.isEmpty()) return
-    val planned = runtime.planGoal(normalized)
+    val normalizedUri = attachedFileUri.orEmpty().trim()
+    if (normalized.isEmpty() && normalizedUri.isEmpty()) return
+    val planned =
+      if (normalizedUri.isNotEmpty()) {
+        runtime.planGoalWithAttachment(
+          goal = normalized,
+          fileUri = normalizedUri,
+          fileName = attachedFileName.orEmpty().trim(),
+        )
+      } else {
+        runtime.planGoal(normalized)
+      }
     if (planned) {
       runtime.runActions()
     }

@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/learn_login_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/opencray_background"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="10dp">
+
+        <Button
+            android:id="@+id/learn_login_close_button"
+            style="@style/OpenCray.SecondaryButton"
+            android:layout_width="72dp"
+            android:layout_height="48dp"
+            android:minWidth="0dp"
+            android:text="@string/learn_login_close" />
+
+        <TextView
+            android:id="@+id/learn_login_status_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="10dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:text="@string/learn_login_status_loading"
+            android:textColor="@color/opencray_ink"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/learn_login_save_button"
+            style="@style/OpenCray.PrimaryButton"
+            android:layout_width="96dp"
+            android:layout_height="48dp"
+            android:minWidth="0dp"
+            android:text="@string/learn_login_save_cookie" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
+
+        <Button
+            android:id="@+id/learn_login_clear_button"
+            style="@style/OpenCray.SecondaryButton"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:minWidth="0dp"
+            android:text="@string/learn_login_clear" />
+
+        <Button
+            android:id="@+id/learn_login_reload_button"
+            style="@style/OpenCray.SecondaryButton"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:minWidth="0dp"
+            android:text="@string/learn_login_reload" />
+    </LinearLayout>
+
+    <WebView
+        android:id="@+id/learn_login_webview"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+</LinearLayout>

@@ -347,15 +347,52 @@ class OpenCrayRuntime(
     val normalizedGoal = goal.trim()
     if (normalizedGoal.isEmpty()) return false
 
-    chatRepository.sendMessage(normalizedGoal)
+    return planGoalInternal(plannerGoal = normalizedGoal, displayGoal = normalizedGoal)
+  }
+
+  fun planGoalWithAttachment(
+    goal: String,
+    fileUri: String,
+    fileName: String,
+  ): Boolean {
+    val normalizedGoal = goal.trim().ifEmpty { "请处理这个附件" }
+    val normalizedFileUri = fileUri.trim()
+    if (normalizedFileUri.isEmpty()) return planGoal(normalizedGoal)
+    val normalizedFileName = fileName.trim()
+    val displayName = normalizedFileName.ifBlank { "已选择文件" }
+    val displayGoal = "$normalizedGoal\n\n附件：$displayName"
+    val plannerGoal =
+      buildString {
+        append(normalizedGoal)
+        append("\n\n[attached_file]\n")
+        append("file_uri: ").append(normalizedFileUri).append('\n')
+        if (normalizedFileName.isNotBlank()) {
+          append("file_name: ").append(normalizedFileName).append('\n')
+        }
+        append(
+          "instruction: The user selected this local Android file in chat. " +
+            "When uploading or submitting homework, pass file_uri and file_name to " +
+            "upload_homework_attachment or submit_homework.",
+        )
+      }
+    return planGoalInternal(plannerGoal = plannerGoal, displayGoal = displayGoal)
+  }
+
+  private fun planGoalInternal(
+    plannerGoal: String,
+    displayGoal: String,
+  ): Boolean {
+    if (plannerGoal.isBlank() || displayGoal.isBlank()) return false
+
+    chatRepository.sendMessage(displayGoal)
 
     if (gatewayRegistered) {
-      handleStreamingRunViaGateway(normalizedGoal)
+      handleStreamingRunViaGateway(plannerGoal)
       return false
     }
 
-    if (!shouldPlanLocally(normalizedGoal)) {
-      handleLocalChat(normalizedGoal)
+    if (!shouldPlanLocally(plannerGoal)) {
+      handleLocalChat(plannerGoal)
       return false
     }
 
