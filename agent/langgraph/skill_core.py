@@ -6,8 +6,10 @@ from typing import Any, Protocol
 
 try:
     from .calendar_handlers import register_calendar_handlers
+    from .homework_handlers import register_homework_handlers
 except ImportError:
     from calendar_handlers import register_calendar_handlers
+    from homework_handlers import register_homework_handlers
 
 
 @dataclass
@@ -166,6 +168,168 @@ def build_default_registry() -> SkillRegistry:
             False,
             session_required=True,
             args_schema={"course_ids": "list[string]"},
+        ),
+        SkillSpec(
+            "get_homework_cookie",
+            "Load a provided Tsinghua Learn cookie for homework skills",
+            "auth",
+            "high",
+            True,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "cookies": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                    "homework_csrf": {"type": "string"},
+                    "learn_csrf": {"type": "string"},
+                    "learn_base_url": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "crawl_course_homeworks",
+            "Crawl homework records from Tsinghua Learn on the Android device",
+            "action",
+            "low",
+            False,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "semester_id": {"type": "string"},
+                    "course_ids": {"type": "array", "items": {"type": "string"}},
+                    "include_submitted": {"type": "boolean"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                    "locale": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "crawl_unsubmitted_homeworks",
+            "Crawl unsubmitted homework records from Tsinghua Learn on the Android device",
+            "action",
+            "low",
+            False,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "semester_id": {"type": "string"},
+                    "course_ids": {"type": "array", "items": {"type": "string"}},
+                    "include_overdue": {"type": "boolean"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                    "locale": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "preview_homework_attachments",
+            "Open and parse attachment entries for a homework item",
+            "action",
+            "low",
+            False,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "homework_id": {"type": "string"},
+                    "homework_detail_url": {"type": "string"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                    "include_feedback_attachments": {"type": "boolean"},
+                },
+                "required": ["homework_id"],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "upload_homework_attachment",
+            "Upload one attachment into a homework submission form",
+            "action",
+            "medium",
+            True,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "homework_id": {"type": "string"},
+                    "xszyid": {"type": "string"},
+                    "student_homework_id": {"type": "string"},
+                    "file_path": {"type": "string"},
+                    "file_uri": {"type": "string"},
+                    "file_name": {"type": "string"},
+                    "submission_text": {"type": "string"},
+                    "homework_detail_url": {"type": "string"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                },
+                "required": ["homework_id"],
+                "additionalProperties": False,
+            },
+        ),
+        SkillSpec(
+            "submit_homework",
+            "Submit homework content and/or uploaded files",
+            "action",
+            "high",
+            True,
+            session_required=False,
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "homework_id": {"type": "string"},
+                    "zyid": {"type": "string"},
+                    "homework_zyid": {"type": "string"},
+                    "xszyid": {"type": "string"},
+                    "student_homework_id": {"type": "string"},
+                    "course_id": {"type": "string"},
+                    "wlkcid": {"type": "string"},
+                    "submission_text": {"type": "string"},
+                    "attachment_tokens": {"type": "array", "items": {"type": "string"}},
+                    "local_file_paths": {"type": "array", "items": {"type": "string"}},
+                    "file_path": {"type": "string"},
+                    "file_uri": {"type": "string"},
+                    "file_name": {"type": "string"},
+                    "homework_detail_url": {"type": "string"},
+                    "confirm_submit": {"type": "boolean"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                },
+                "required": ["homework_id", "confirm_submit"],
+                "additionalProperties": False,
+            },
         ),
         SkillSpec(
             "get_academic_calendar",
@@ -405,4 +569,5 @@ def build_default_registry() -> SkillRegistry:
     except ImportError:
         pass
     register_calendar_handlers(registry)
+    register_homework_handlers(registry)
     return registry

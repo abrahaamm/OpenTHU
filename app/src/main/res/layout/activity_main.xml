@@ -925,6 +925,63 @@
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_learn_base_url_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_learn_base_url_description" />
+
+                        <EditText
+                            android:id="@+id/setting_learn_base_url_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_learn_base_url_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_homework_cookie_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_homework_cookie_description" />
+
+                        <EditText
+                            android:id="@+id/setting_homework_cookie_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_homework_cookie_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_homework_csrf_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_homework_csrf_description" />
+
+                        <EditText
+                            android:id="@+id/setting_homework_csrf_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_homework_csrf_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
                             android:text="@string/setting_campus_file_label" />
 
                         <TextView

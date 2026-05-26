@@ -952,6 +952,69 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
                 lines.append(line)
         return "\n".join(lines)
 
+    if skill_name in {"crawl_course_homeworks", "crawl_unsubmitted_homeworks"}:
+        homeworks = data.get("homeworks", [])
+        if not isinstance(homeworks, list):
+            homeworks = []
+        count_value = data.get("count", len(homeworks))
+        try:
+            count = int(count_value)
+        except (TypeError, ValueError):
+            count = len(homeworks)
+        title = "未提交作业" if skill_name == "crawl_unsubmitted_homeworks" else "作业列表"
+        lines = [f"### {title}", f"共找到 {max(count, len(homeworks))} 条作业记录。"]
+        for item in homeworks[:8]:
+            if not isinstance(item, dict):
+                continue
+            homework_title = str(item.get("title") or item.get("homework_title") or "未命名作业").strip()
+            course_name = str(item.get("course_name", "")).strip()
+            deadline = str(item.get("deadline", "")).strip()
+            submitted = item.get("submitted")
+            details = []
+            if course_name:
+                details.append(course_name)
+            if deadline:
+                details.append(f"截止：{deadline}")
+            if isinstance(submitted, bool):
+                details.append("已提交" if submitted else "未提交")
+            line = f"- {homework_title}"
+            if details:
+                line += f"（{'，'.join(details)}）"
+            detail_url = str(item.get("detail_url", "")).strip()
+            if detail_url:
+                line += f"：{detail_url}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name == "preview_homework_attachments":
+        attachments = data.get("attachments", [])
+        if not isinstance(attachments, list):
+            attachments = []
+        lines = ["### 作业附件", f"找到 {len(attachments)} 个附件。"]
+        for item in attachments[:8]:
+            if not isinstance(item, dict):
+                continue
+            file_name = str(item.get("file_name", "未命名附件")).strip()
+            url = str(item.get("preview_url") or item.get("download_url") or "").strip()
+            line = f"- {file_name}"
+            if url:
+                line += f"：{url}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name in {"upload_homework_attachment", "submit_homework", "get_homework_cookie"}:
+        status = str(data.get("status", "")).strip()
+        message = str(data.get("message", "")).strip()
+        if skill_name == "get_homework_cookie":
+            if status == "cookie_ready":
+                return "### 网络学堂登录态\nLearn Cookie 已加载，后续作业操作可以继续使用。"
+            return f"### 网络学堂登录态\n{message or status or 'Cookie 未配置。'}"
+        if skill_name == "upload_homework_attachment":
+            file_name = str(data.get("file_name", "")).strip()
+            return "### 作业附件上传\n" + (f"附件 {file_name} 已上传。" if status == "uploaded" else (message or status))
+        if skill_name == "submit_homework":
+            return "### 作业提交\n" + ("作业已提交。" if status == "submitted" else (message or status))
+
     if skill_name.startswith("get_"):
         message = str(data.get("message", "")).strip()
         warnings = data.get("warnings", [])

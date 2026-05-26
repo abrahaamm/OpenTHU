@@ -1194,7 +1194,8 @@ class OpenTHULangGraphAgent:
             "Do not invent backend calls. Keep the plan between 1 and 8 skills. "
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
             "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
-            "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses."
+            "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
+            "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; use get_homework_cookie only when the user provides a Learn cookie."
         )
 
         try:

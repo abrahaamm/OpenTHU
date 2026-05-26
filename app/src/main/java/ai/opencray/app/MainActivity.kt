@@ -108,6 +108,9 @@ class MainActivity : AppCompatActivity() {
   private lateinit var userIdInput: EditText
   private lateinit var webvpnCookieInput: EditText
   private lateinit var webvpnCsrfInput: EditText
+  private lateinit var learnBaseUrlInput: EditText
+  private lateinit var homeworkCookieInput: EditText
+  private lateinit var homeworkCsrfInput: EditText
   private lateinit var campusFileInput: EditText
   private lateinit var searchProviderInput: EditText
   private lateinit var searchEndpointInput: EditText
@@ -231,6 +234,9 @@ class MainActivity : AppCompatActivity() {
     userIdInput = findViewById(R.id.setting_user_id_input)
     webvpnCookieInput = findViewById(R.id.setting_webvpn_cookie_input)
     webvpnCsrfInput = findViewById(R.id.setting_webvpn_csrf_input)
+    learnBaseUrlInput = findViewById(R.id.setting_learn_base_url_input)
+    homeworkCookieInput = findViewById(R.id.setting_homework_cookie_input)
+    homeworkCsrfInput = findViewById(R.id.setting_homework_csrf_input)
     campusFileInput = findViewById(R.id.setting_campus_file_input)
     searchProviderInput = findViewById(R.id.setting_search_provider_input)
     searchEndpointInput = findViewById(R.id.setting_search_endpoint_input)
@@ -1151,6 +1157,9 @@ class MainActivity : AppCompatActivity() {
     userIdInput.setText(pref.getString("user_id", "demo_user"))
     webvpnCookieInput.setText(pref.getString("webvpn_cookie", ""))
     webvpnCsrfInput.setText(pref.getString("webvpn_csrf", ""))
+    learnBaseUrlInput.setText(pref.getString("learn_base_url", "https://learn.tsinghua.edu.cn"))
+    homeworkCookieInput.setText(pref.getString("homework_cookie", ""))
+    homeworkCsrfInput.setText(pref.getString("homework_csrf", ""))
     campusFileInput.setText(pref.getString("campus_file", ""))
     searchProviderInput.setText(pref.getString("search_provider", "duckduckgo"))
     searchEndpointInput.setText(pref.getString("search_endpoint", "https://duckduckgo.com/html/"))
@@ -1177,6 +1186,9 @@ class MainActivity : AppCompatActivity() {
       .putString("user_id", userIdInput.text.toString().trim())
       .putString("webvpn_cookie", webvpnCookieInput.text.toString().trim())
       .putString("webvpn_csrf", webvpnCsrfInput.text.toString().trim())
+      .putString("learn_base_url", learnBaseUrlInput.text.toString().trim().ifEmpty { "https://learn.tsinghua.edu.cn" })
+      .putString("homework_cookie", homeworkCookieInput.text.toString().trim())
+      .putString("homework_csrf", homeworkCsrfInput.text.toString().trim())
       .putString("campus_file", campusFileInput.text.toString().trim())
       .putString("search_provider", searchProviderInput.text.toString().trim().ifEmpty { "duckduckgo" })
       .putString("search_endpoint", searchEndpointInput.text.toString().trim())
@@ -1199,6 +1211,7 @@ class MainActivity : AppCompatActivity() {
     val warnings = mutableListOf<String>()
     if (openAiKeyInput.text.toString().trim().isEmpty()) warnings += "缺少 OPENAI_API_KEY"
     if (webvpnCookieInput.text.toString().trim().isEmpty()) warnings += "缺少 WebVPN Cookie（校园资讯真实抓取会降级）"
+    if (homeworkCookieInput.text.toString().trim().isEmpty()) warnings += "缺少网络学堂 Cookie（作业 skill 需要手动提供 Cookie）"
     if (
       searchProviderInput.text.toString().trim().equals("brave", ignoreCase = true) &&
       searchApiKeyInput.text.toString().trim().isEmpty()
