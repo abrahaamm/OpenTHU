@@ -49,4 +49,21 @@
         <item name="android:textColor">@color/opencray_ink</item>
         <item name="android:textSize">13sp</item>
     </style>
+
+    <style name="OpenCraySettingsFieldTitle">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">12dp</item>
+        <item name="android:textColor">@color/opencray_primary_dark</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="OpenCraySettingsFieldHelp">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">4dp</item>
+        <item name="android:textColor">@color/opencray_muted</item>
+        <item name="android:textSize">12sp</item>
+    </style>
 </resources>
