@@ -309,4 +309,30 @@ class PythonSkillBridgeExecutorTest {
     assertEquals("provided_cookie", data.getString("cookie_source"))
     assertTrue(data.getBoolean("has_csrf"))
   }
+
+  @Test
+  fun mapsHomeworkLoginRequiredToNotConfigured() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = false,
+          message = "网络学堂登录态未配置。请去设置页的「清华统一登录」完成登录后再重试。",
+          recoverable = false,
+          semantic = "homework_cookie_login_required",
+          metadata = mapOf("status" to "login_required", "reason" to "login_required"),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_homework_login_1")
+        .put("skill_name", "crawl_unsubmitted_homeworks")
+        .put("args", JSONObject())
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("NOT_CONFIGURED", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("login_required", data.getString("status"))
+    assertEquals("login_required", data.getString("reason"))
+  }
 }

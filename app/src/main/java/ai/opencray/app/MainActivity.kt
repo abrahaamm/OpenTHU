@@ -143,10 +143,12 @@ class MainActivity : AppCompatActivity() {
         val data = result.data
         val cookie = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_COOKIE).orEmpty()
         val csrf = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_CSRF).orEmpty()
+        val webvpnCookie = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_WEBVPN_COOKIE).orEmpty()
         val baseUrl = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL).orEmpty()
         if (baseUrl.isNotBlank()) learnBaseUrlInput.setText(baseUrl)
         if (cookie.isNotBlank()) homeworkCookieInput.setText(cookie)
-        homeworkCsrfInput.setText(csrf)
+        if (csrf.isNotBlank()) homeworkCsrfInput.setText(csrf)
+        if (webvpnCookie.isNotBlank()) webvpnCookieInput.setText(webvpnCookie)
         Toast.makeText(this, getString(R.string.setting_learn_cookie_login_success), Toast.LENGTH_SHORT).show()
       } else {
         Toast.makeText(this, getString(R.string.setting_learn_cookie_login_failed), Toast.LENGTH_SHORT).show()

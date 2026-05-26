@@ -3,7 +3,6 @@ package ai.opencray.app.execution
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import ai.opencray.app.LearnCookieLoginActivity
 import ai.opencray.app.domain.model.SystemAction
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
@@ -140,36 +139,27 @@ class HomeworkSkillExecutor(
     val studentId = readActionString(action, "student_id")
     val password = readActionString(action, "password")
     if (studentId.isNotBlank() || password.isNotBlank()) {
-      openLearnCookieLogin(baseUrl)
       return homeworkFailure(
-        message = "Credential-based Learn login is not supported. Opening the WebView unified-login flow instead.",
-        reason = "credential_login_not_implemented",
-        recoverable = true,
+        message = "不再支持在 skill 内使用学号密码登录。请去设置页的「清华统一登录」完成登录后再重试。",
+        reason = "login_required",
+        recoverable = false,
         semantic = "homework_cookie_login_required",
+        extra = mapOf("learn_base_url" to baseUrl),
       )
     }
 
-    openLearnCookieLogin(baseUrl)
     return ActionExecutionReport(
       success = false,
-      message = "Homework cookie is not configured. Opened the WebView unified-login flow; finish login and retry the homework request.",
-      recoverable = true,
+      message = "网络学堂登录态未配置。请去设置页的「清华统一登录」完成登录后再重试。",
+      recoverable = false,
       semantic = "homework_cookie_login_required",
       metadata =
         mapOf(
           "status" to "login_required",
-          "reason" to "missing_auth",
+          "reason" to "login_required",
           "learn_base_url" to baseUrl,
         ),
     )
-  }
-
-  private fun openLearnCookieLogin(baseUrl: String) {
-    val intent =
-      Intent(appContext, LearnCookieLoginActivity::class.java)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        .putExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL, baseUrl)
-    appContext.startActivity(intent)
   }
 
   private fun executeCrawlCourseHomeworks(
@@ -178,7 +168,12 @@ class HomeworkSkillExecutor(
   ): ActionExecutionReport {
     val auth = resolveHomeworkAuth(action)
     if (!auth.ok) {
-      return homeworkFailure(auth.message, "missing_auth", recoverable = false)
+      return homeworkFailure(
+        auth.message,
+        "login_required",
+        recoverable = false,
+        semantic = "homework_cookie_login_required",
+      )
     }
     val requestedCourseIds = parseCsvOrJsonArray(action.params["course_ids"])
     val endpointTypes =
@@ -255,7 +250,12 @@ class HomeworkSkillExecutor(
   private fun executePreviewHomeworkAttachments(action: SystemAction): ActionExecutionReport {
     val auth = resolveHomeworkAuth(action)
     if (!auth.ok) {
-      return homeworkFailure(auth.message, "missing_auth", recoverable = false)
+      return homeworkFailure(
+        auth.message,
+        "login_required",
+        recoverable = false,
+        semantic = "homework_cookie_login_required",
+      )
     }
     val homeworkId = readActionString(action, "homework_id")
     if (homeworkId.isBlank()) {
@@ -301,7 +301,12 @@ class HomeworkSkillExecutor(
   private fun executeUploadHomeworkAttachment(action: SystemAction): ActionExecutionReport {
     val auth = resolveHomeworkAuth(action)
     if (!auth.ok) {
-      return homeworkFailure(auth.message, "missing_auth", recoverable = false)
+      return homeworkFailure(
+        auth.message,
+        "login_required",
+        recoverable = false,
+        semantic = "homework_cookie_login_required",
+      )
     }
     val requestedId = readActionString(action, "homework_id")
     if (requestedId.isBlank()) {
@@ -408,7 +413,12 @@ class HomeworkSkillExecutor(
     }
     val auth = resolveHomeworkAuth(action)
     if (!auth.ok) {
-      return homeworkFailure(auth.message, "missing_auth", recoverable = false)
+      return homeworkFailure(
+        auth.message,
+        "login_required",
+        recoverable = false,
+        semantic = "homework_cookie_login_required",
+      )
     }
     val requestedId = readActionString(action, "homework_id")
     val requestedXszyid = readActionString(action, "xszyid")
@@ -569,7 +579,7 @@ class HomeworkSkillExecutor(
     if (cookie.isEmpty()) {
       return HomeworkAuth(
         ok = false,
-        message = "Missing homework cookie. Execute get_homework_cookie first, configure Learn Cookie in settings, or pass cookies/session_cookie.",
+        message = "网络学堂登录态未配置。请去设置页的「清华统一登录」完成登录后再重试。",
       )
     }
     return HomeworkAuth(ok = true, message = "ok", baseUrl = baseUrl, cookie = cookie, csrf = csrf)
@@ -1120,7 +1130,11 @@ class HomeworkSkillExecutor(
       message = message,
       recoverable = recoverable,
       semantic = semantic,
-      metadata = mapOf("status" to "failed", "reason" to reason) + extra,
+      metadata =
+        mapOf(
+          "status" to if (reason == "login_required") "login_required" else "failed",
+          "reason" to reason,
+        ) + extra,
     )
 
   private fun normalizeCookieHeader(raw: String): String {

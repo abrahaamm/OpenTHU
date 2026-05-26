@@ -71,7 +71,17 @@
             android:layout_marginStart="8dp"
             android:layout_weight="1"
             android:minWidth="0dp"
-            android:text="@string/learn_login_reload" />
+            android:text="@string/learn_login_unified" />
+
+        <Button
+            android:id="@+id/learn_login_open_learn_button"
+            style="@style/OpenCray.SecondaryButton"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:minWidth="0dp"
+            android:text="@string/learn_login_open_learn" />
     </LinearLayout>
 
     <WebView

@@ -1310,6 +1310,7 @@ class OpenCrayRuntime(
     if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
     if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
     if (reason == "confirm_submit_required") return "APPROVAL_REQUIRED"
+    if (reason == "login_required" || report.semantic == "homework_cookie_login_required") return "NOT_CONFIGURED"
 
     if (message.contains("confirm_delete=true", ignoreCase = true) ||
       message.contains("confirm_submit=true", ignoreCase = true)

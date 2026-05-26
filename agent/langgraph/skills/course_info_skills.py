@@ -610,7 +610,7 @@ class _BaseCourseInfoSkill(SkillHandler):
                 "NOT_CONFIGURED",
                 {
                     "status": "not_configured",
-                    "message": "Learn cookie is not configured. Use the WebView login flow or set homework_cookie/learn_cookie.",
+                    "message": "Learn cookie is not configured. Open Settings > 清华统一登录 to sign in, then retry.",
                 },
                 "course_info_auth",
             )
@@ -620,7 +620,7 @@ class _BaseCourseInfoSkill(SkillHandler):
                 "NOT_CONFIGURED",
                 {
                     "status": "not_configured",
-                    "message": "WebVPN cookie is not configured, so the full teaching-calendar schedule cannot be fetched.",
+                    "message": "WebVPN cookie is not configured. Open Settings > 清华统一登录 to sign in for full timetable access.",
                 },
                 "course_info_auth",
             )
@@ -994,7 +994,7 @@ class GetCourseScheduleSkill(_BaseCourseInfoSkill):
                 "NOT_CONFIGURED",
                 {
                     "status": "not_configured",
-                    "message": "Neither WebVPN cookie nor Learn cookie is configured for course schedule crawling.",
+                    "message": "Neither WebVPN cookie nor Learn cookie is configured. Open Settings > 清华统一登录 to sign in, then retry.",
                     "warnings": warnings,
                 },
                 "course_info_auth",

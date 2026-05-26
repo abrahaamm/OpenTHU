@@ -70,6 +70,9 @@ class PythonSkillBridgeExecutor(
     ) {
       return "APPROVAL_REQUIRED"
     }
+    if (reason == "login_required" || report.semantic == "homework_cookie_login_required") {
+      return "NOT_CONFIGURED"
+    }
     if (message.contains("confirm_delete=true", ignoreCase = true) ||
       message.contains("confirm_submit=true", ignoreCase = true)
     ) {
@@ -152,21 +155,21 @@ class PythonSkillBridgeExecutor(
       "crawl_course_homeworks" -> {
         val data =
           JSONObject()
-            .put("status", if (report.success) "crawled" else "failed")
+            .put("status", if (report.success) "crawled" else reportedFailureStatus(report))
             .put("message", message)
         putReportData(data, report)
       }
       "crawl_unsubmitted_homeworks" -> {
         val data =
           JSONObject()
-            .put("status", if (report.success) "unsubmitted_crawled" else "failed")
+            .put("status", if (report.success) "unsubmitted_crawled" else reportedFailureStatus(report))
             .put("message", message)
         putReportData(data, report)
       }
       "preview_homework_attachments" -> {
         val data =
           JSONObject()
-            .put("status", if (report.success) "preview_ready" else "failed")
+            .put("status", if (report.success) "preview_ready" else reportedFailureStatus(report))
             .put("message", message)
         putReportData(data, report)
       }
@@ -175,7 +178,7 @@ class PythonSkillBridgeExecutor(
           when {
             code == "APPROVAL_REQUIRED" -> "awaiting_confirmation"
             report.success -> "uploaded"
-            else -> "failed"
+            else -> reportedFailureStatus(report)
           }
         val data =
           JSONObject()
@@ -188,7 +191,7 @@ class PythonSkillBridgeExecutor(
           when {
             code == "APPROVAL_REQUIRED" -> "awaiting_confirmation"
             report.success -> "submitted"
-            else -> "failed"
+            else -> reportedFailureStatus(report)
           }
         val data =
           JSONObject()
@@ -246,6 +249,9 @@ class PythonSkillBridgeExecutor(
     }
     return json
   }
+
+  private fun reportedFailureStatus(report: ActionExecutionReport): String =
+    report.metadata["status"]?.toString()?.takeIf { it.isNotBlank() } ?: "failed"
 
   private fun toJsonValue(value: Any?): Any? =
     when (value) {
