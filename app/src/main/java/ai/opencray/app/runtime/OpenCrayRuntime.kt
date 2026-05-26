@@ -5,8 +5,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.core.content.ContextCompat
-import ai.opencray.app.agent.ActionPlanner
-import ai.opencray.app.agent.TaskReplanner
 import ai.opencray.app.bridge.PythonSkillBridgeExecutor
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.data.repository.ChatRepository
@@ -30,10 +28,15 @@ import ai.opencray.app.gateway.GatewayConfig
 import ai.opencray.app.gateway.PlanTaskData
 import ai.opencray.app.gateway.PlannedSkillInvocation
 import ai.opencray.app.memory.MemoryManager
-import ai.opencray.app.safety.SafetyAuditor
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
+import java.util.Collections
 import java.util.UUID
 import kotlin.math.min
 import java.util.Locale
@@ -46,16 +49,28 @@ fun interface CalendarPermissionDelegate {
   fun requestCalendarPermissions()
 }
 
+private data class LocalLlmConfig(
+  val apiKey: String,
+  val model: String,
+  val baseUrl: String,
+) {
+  fun chatCompletionsEndpoint(): String {
+    val normalizedBase = baseUrl.trim().trimEnd('/').ifBlank { "https://api.openai.com/v1" }
+    return if (normalizedBase.endsWith("/chat/completions")) {
+      normalizedBase
+    } else {
+      "$normalizedBase/chat/completions"
+    }
+  }
+}
+
 class OpenCrayRuntime(
   appContext: Context,
   private val runtimeRepository: RuntimeRepository,
   private val chatRepository: ChatRepository,
 ) {
   private val appContext: Context = appContext.applicationContext
-  private val actionPlanner = ActionPlanner()
-  private val safetyAuditor = SafetyAuditor()
   private val memoryManager = MemoryManager()
-  private val taskReplanner = TaskReplanner()
   private val actionExecutor = ActionExecutor(this.appContext)
   private val pythonSkillBridgeExecutor = PythonSkillBridgeExecutor(actionExecutor)
   private val gatewayClient = AgentCoreHttpClient()
@@ -68,6 +83,7 @@ class OpenCrayRuntime(
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
   @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
+  private val serverSummaryTaskIds = Collections.synchronizedSet(mutableSetOf<String>())
   /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
   @Volatile private var pendingPermissionCallback: (() -> Unit)? = null
 
@@ -339,13 +355,92 @@ class OpenCrayRuntime(
     }
 
     if (!shouldPlanLocally(normalizedGoal)) {
-      streamAssistant(replyLocalChat(normalizedGoal))
+      handleLocalChat(normalizedGoal)
       return false
     }
 
-    streamAssistant("好的，我来处理。")
-    planGoalLocally(normalizedGoal)
-    return true
+    streamAssistant(agentCoreUnavailableMessage())
+    return false
+  }
+
+  private fun handleLocalChat(message: String) {
+    thread(name = "opencray-local-chat", isDaemon = true) {
+      val reply = generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage()
+      streamAssistant(reply)
+    }
+  }
+
+  private fun generateLocalLlmChatReply(message: String): String? {
+    val config = localLlmConfig() ?: return null
+    val endpoint = config.chatCompletionsEndpoint()
+    val messages = JSONArray()
+      .put(
+        JSONObject()
+          .put("role", "system")
+          .put(
+            "content",
+            "你是 OpenTHU 移动端里的对话式校园助手。"
+              + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。"
+              + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。",
+          ),
+      )
+
+    localChatHistoryForLlm().forEach { item ->
+      messages.put(
+        JSONObject()
+          .put("role", item["role"].orEmpty())
+          .put("content", item["text"].orEmpty()),
+      )
+    }
+    messages.put(JSONObject().put("role", "user").put("content", message))
+
+    val payload =
+      JSONObject()
+        .put("model", config.model)
+        .put("messages", messages)
+        .put("temperature", 0.8)
+        .put("max_tokens", 500)
+
+    return runCatching {
+      val connection =
+        (URL(endpoint).openConnection() as HttpURLConnection).apply {
+          requestMethod = "POST"
+          connectTimeout = 10_000
+          readTimeout = 45_000
+          useCaches = false
+          doOutput = true
+          setRequestProperty("Accept", "application/json")
+          setRequestProperty("Content-Type", "application/json; charset=utf-8")
+          setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+        }
+      try {
+        OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
+          writer.write(payload.toString())
+        }
+        val status = connection.responseCode
+        val raw =
+          (if (status in 200..299) connection.inputStream else connection.errorStream)
+            ?.bufferedReader(StandardCharsets.UTF_8)
+            ?.use { it.readText() }
+            .orEmpty()
+        if (status !in 200..299) {
+          runtimeRepository.appendEvent("Local LLM chat failed: HTTP_$status $raw")
+          return@runCatching null
+        }
+        JSONObject(raw)
+          .optJSONArray("choices")
+          ?.optJSONObject(0)
+          ?.optJSONObject("message")
+          ?.optString("content", "")
+          ?.trim()
+          ?.takeIf { it.isNotBlank() }
+      } finally {
+        connection.disconnect()
+      }
+    }.getOrElse { throwable ->
+      runtimeRepository.appendEvent("Local LLM chat failed: ${throwable.message ?: "unknown_error"}")
+      null
+    }
   }
 
   private fun handleStreamingRunViaGateway(message: String) {
@@ -381,6 +476,9 @@ class OpenCrayRuntime(
             "assistant_delta" -> updateAssistantText(event.content)
             "assistant_final" -> {
               val id = ensureAssistantMessage()
+              if (event.taskId.isNotBlank()) {
+                serverSummaryTaskIds.remove(event.taskId)
+              }
               if (event.content.isNotBlank()) {
                 assistantText.clear()
                 assistantText.append(event.content)
@@ -396,6 +494,12 @@ class OpenCrayRuntime(
             -> {
               val id = ensureAssistantMessage()
               chatRepository.appendEvent(id, event.toChatEvent())
+              if (event.type == "tool_call" && event.status == "queued") {
+                if (event.taskId.isNotBlank()) {
+                  serverSummaryTaskIds.add(event.taskId)
+                }
+                runGatewayDispatchLoop()
+              }
             }
           }
         }
@@ -404,11 +508,9 @@ class OpenCrayRuntime(
         runtimeRepository.appendEvent("Gateway stream failed: ${result.code} ${result.message}")
         if (assistantMessageId.isBlank()) {
           if (shouldPlanLocally(message)) {
-            streamAssistant("我先按本地能力处理。")
-            planGoalLocally(message)
-            runActionsLocally(actionIds = null, submitGatewayResult = false)
+            streamAssistant(agentCoreUnavailableMessage())
           } else {
-            streamAssistant(replyLocalChat(message))
+            streamAssistant(generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage())
           }
         } else {
           chatRepository.appendEvent(
@@ -443,18 +545,16 @@ class OpenCrayRuntime(
       if (!result.success || result.data == null) {
         runtimeRepository.appendEvent("Gateway chat failed: ${result.code} ${result.message}")
         if (shouldPlanLocally(message)) {
-          streamAssistant("我先按本地能力处理。")
-          planGoalLocally(message)
-          runActionsLocally(actionIds = null, submitGatewayResult = false)
+          streamAssistant(agentCoreUnavailableMessage())
         } else {
-          streamAssistant(replyLocalChat(message))
+          streamAssistant(generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage())
         }
         return@thread
       }
 
       val data = result.data
       val reply = data.reply.ifBlank {
-        if (data.shouldPlan) "好的，我来处理。" else replyLocalChat(message)
+        if (data.shouldPlan) "好的，我来处理。" else generateLocalLlmChatReply(message) ?: localLlmUnavailableMessage()
       }
       streamAssistant(reply)
       if (data.shouldPlan) {
@@ -478,6 +578,9 @@ class OpenCrayRuntime(
       "你是谁",
       "你是做什么的",
       "你是干嘛的",
+      "how are you",
+      "你好吗",
+      "最近怎么样",
       "你能做什么",
       "你能帮我做什么",
       "可以帮我做什么",
@@ -532,22 +635,15 @@ class OpenCrayRuntime(
     return taskMarkers.any { normalized.contains(it) }
   }
 
-  private fun replyLocalChat(text: String): String {
-    val normalized = text.trim().lowercase(Locale.getDefault())
-    return when {
-      normalized.contains("hello") || normalized.contains("hi") || normalized.contains("hey") ->
-        "Hello，我在。你可以随便和我聊，也可以直接告诉我要处理的事。"
-      normalized.contains("who are you") || normalized.contains("what are you") || normalized.contains("你是谁") ->
-        "我是 OpenTHU 助手，一个偏校园场景的对话式 Agent。你可以和我聊天，也可以让我帮你处理提醒、日历、校园活动、搜索和系统通知。"
-      normalized.contains("你能做什么") || normalized.contains("能干什么") || normalized.contains("help") || normalized.contains("帮助") ->
-        "你可以像聊天一样说需求，比如“明早八点提醒我交作业”“帮我看看近期校园活动”“搜索一下某个话题”。普通聊天我也会直接回复。"
-      normalized.contains("讲个笑话") ->
-        "可以。这个项目现在最像一个刚学会分辨“聊天”和“干活”的助手，已经懂得先问一句：这次是真的要执行，还是只是陪你聊聊。"
-      normalized.contains("谢谢") || normalized.contains("thank") ->
-        "不客气。我在这里，下一步你直接说就行。"
-      else -> "我听到了。现在我会先按普通对话回应；如果你要我执行任务，直接用自然语言说出来就可以。"
+  private fun localLlmUnavailableMessage(): String =
+    if (localLlmConfig() == null) {
+      "模型没有配置好。请先在设置里填写模型 API Key、模型名称和 Base URL，然后我才能进行对话。"
+    } else {
+      "模型服务当前不可用。请检查 Base URL、模型名称、API Key 或网络连接后再试。"
     }
-  }
+
+  private fun agentCoreUnavailableMessage(): String =
+    "Agent-Core 没有连接好，无法执行任务。请先在设置里连接 Agent-Core；如果只是普通聊天，也需要先配置可用的模型服务。"
 
   private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
     chatRepository.getMessages()
@@ -563,6 +659,31 @@ class OpenCrayRuntime(
           "text" to message.text,
         )
       }
+
+  private fun localChatHistoryForLlm(limit: Int = 8): List<Map<String, String>> =
+    chatRepository.getMessages()
+      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+      .dropLast(1)
+      .takeLast(limit)
+      .map { message ->
+        mapOf(
+          "role" to when (message.role) {
+            ChatRole.User -> "user"
+            ChatRole.Assistant -> "assistant"
+            ChatRole.System -> "system"
+          },
+          "text" to message.text.take(1000),
+        )
+      }
+
+  private fun localLlmConfig(): LocalLlmConfig? {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    val apiKey = pref.getString("openai_api_key", "").orEmpty().trim()
+    if (apiKey.isBlank()) return null
+    val model = pref.getString("llm_model", "gpt-4.1-mini").orEmpty().trim().ifBlank { "gpt-4.1-mini" }
+    val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
+    return LocalLlmConfig(apiKey = apiKey, model = model, baseUrl = baseUrl)
+  }
 
   private fun streamAssistant(
     text: String,
@@ -635,6 +756,7 @@ class OpenCrayRuntime(
     val searchProvider = pref.getString("search_provider", "").orEmpty().trim()
     val searchEndpoint = pref.getString("search_endpoint", "").orEmpty().trim()
     val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
+    val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
 
     val session = linkedMapOf<String, Any?>()
@@ -655,6 +777,7 @@ class OpenCrayRuntime(
     if (searchProvider.isNotEmpty()) session["search_provider"] = searchProvider
     if (searchEndpoint.isNotEmpty()) session["search_endpoint"] = searchEndpoint
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
+    if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
     return session
   }
@@ -676,9 +799,7 @@ class OpenCrayRuntime(
         runtimeRepository.updateConnectionStatus("Gateway planning failed")
         val errorMsg = "${result.code} ${result.message}"
         runtimeRepository.appendEvent("Gateway plan failed: $errorMsg")
-        chatRepository.appendMessage(ChatRole.System, "服务端规划失败，回落到本地规划。\n\n[排错信息]\n原因：$errorMsg")
-        planGoalLocally(goal)
-        runActionsLocally(actionIds = null, submitGatewayResult = false)
+        streamAssistant("Agent-Core 规划失败，无法执行任务。请检查 Agent-Core、模型配置或网络连接后再试。\n\n原因：$errorMsg")
         return@thread
       }
       applyGatewayPlan(goal = goal, data = result.data)
@@ -745,79 +866,6 @@ class OpenCrayRuntime(
       streamAssistant("我已经规划好了，当前有 ${approvedActions.size} 个动作可直接执行，另有 $blockedCount 个动作需要你确认。")
     } else {
       streamAssistant("我已经规划好了，开始执行。")
-    }
-  }
-
-  private fun planGoalLocally(goal: String) {
-    val current = snapshot()
-    val now = System.currentTimeMillis()
-    val taskId = UUID.randomUUID().toString()
-
-    val plannedActions = actionPlanner.plan(goal, current)
-    val safetyRecords = safetyAuditor.auditPlannedActions(plannedActions)
-
-    val actionsWithReviewStatus =
-      plannedActions.map { action ->
-        val review = safetyRecords.firstOrNull { it.actionId == action.id }
-        val status =
-          when (review?.status) {
-            "Awaiting approval" -> "pending_approval"
-            "Auto-approved" -> "approved"
-            else -> "planned"
-          }
-        action.copy(status = status)
-      }
-
-    val taskSummary =
-      buildString {
-        append("Goal planned with ${actionsWithReviewStatus.size} actions")
-        if (safetyAuditor.hasPendingApproval(safetyRecords)) {
-          append(", includes approval-required actions")
-        }
-      }
-
-    val task =
-      AgentTask(
-        id = taskId,
-        goal = goal,
-        status = "planned",
-        attempt = 1,
-        createdAtEpochMs = now,
-        updatedAtEpochMs = now,
-        summary = taskSummary,
-      )
-
-    val memory = memoryManager.updateFromGoal(current.memoryRecords, goal)
-
-    val audit =
-      actionsWithReviewStatus.map { action ->
-        AuditEntry(
-          id = UUID.randomUUID().toString(),
-          taskId = taskId,
-          actionId = action.id,
-          stage = "plan",
-          message = "Action planned with status ${action.status} and confidence ${action.confidence}.",
-          timestampEpochMs = now,
-        )
-      }
-
-    runtimeRepository.replaceSnapshot(
-      current.copy(
-        connectionStatus = "Plan ready",
-        systemActions = actionsWithReviewStatus,
-        safetyRecords = safetyRecords + current.safetyRecords,
-        tasks = listOf(task) + current.tasks.take(9),
-        memoryRecords = memory,
-        auditTrail = audit + current.auditTrail.take(99),
-        recentEvents = listOf("Goal planned: ${goal.take(48)}") + current.recentEvents,
-      ),
-    )
-
-    val pendingCount = safetyRecords.count { it.status == "Awaiting approval" }
-    if (pendingCount > 0) {
-      streamAssistant("我已经规划完成，接下来有 $pendingCount 个动作需要你确认后继续。")
-    } else {
-      streamAssistant("我已经规划完成，正在继续执行。")
     }
   }
 
@@ -975,38 +1023,6 @@ class OpenCrayRuntime(
     executableActions.forEach { action ->
       val report = actionExecutor.execute(action, latestTask.goal)
       applyExecutionReport(task = latestTask, action = action, report = report, submitGatewayResult = submitGatewayResult)
-
-      if (!report.success && report.recoverable) {
-        val fallbackActions = taskReplanner.replan(action)
-        val fallbackSafety = safetyAuditor.auditPlannedActions(fallbackActions)
-        val after = snapshot()
-        val replanned =
-          fallbackActions.map { fallback ->
-            val review = fallbackSafety.firstOrNull { it.actionId == fallback.id }
-            fallback.copy(
-              status = if (review?.status == "Awaiting approval") "pending_approval" else "approved",
-            )
-          }
-        val replanAudit =
-          replanned.map { fallback ->
-            AuditEntry(
-              id = UUID.randomUUID().toString(),
-              taskId = latestTask.id,
-              actionId = fallback.id,
-              stage = "replan",
-              message = "Fallback action created from failed ${action.id}.",
-              timestampEpochMs = System.currentTimeMillis(),
-            )
-          }
-        runtimeRepository.replaceSnapshot(
-          after.copy(
-            systemActions = after.systemActions + replanned,
-            safetyRecords = fallbackSafety + after.safetyRecords,
-            auditTrail = replanAudit + after.auditTrail,
-            recentEvents = listOf("Replanned from ${action.id} with ${replanned.size} action(s).") + after.recentEvents,
-          ),
-        )
-      }
     }
 
     val after = snapshot()
@@ -1103,6 +1119,8 @@ class OpenCrayRuntime(
 
     val userFacingMessage =
       when {
+        submitGatewayResult && serverSummaryTaskIds.contains(task.id) && !needsConflictResolution ->
+          ""
         needsConflictResolution ->
           "我发现这个日程和现有安排有冲突。你可以选择：跳过创建、共存，或删除冲突事项后再创建。"
         report.success && action.id.substringBefore("#") == "show_summary" ->
@@ -1114,7 +1132,9 @@ class OpenCrayRuntime(
         else ->
           "这个操作没有成功，我已经记录原因并会尝试给你替代方案。"
       }
-    streamAssistant(userFacingMessage)
+    if (userFacingMessage.isNotBlank()) {
+      streamAssistant(userFacingMessage)
+    }
   }
 
   /**
@@ -1164,16 +1184,18 @@ class OpenCrayRuntime(
     val requestId = action.requestId ?: return
     thread(name = "opencray-gateway-submit", isDaemon = true) {
       val code = mapGatewayResultCode(action, report)
-      val submitData: Map<String, Any> = buildMap {
+      val submitData: Map<String, Any?> = buildMap {
         put("status", if (report.success) "executed" else "failed")
         put("recoverable", report.recoverable)
         put("action_id", action.id)
+        put("semantic", report.semantic)
         // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
         report.metadata.forEach { (key, value) ->
           if (value != null) {
             put(key, value)
           }
         }
+        put("metadata", report.metadata)
       }
       val result =
         gatewayClient.submitResult(
@@ -1184,16 +1206,7 @@ class OpenCrayRuntime(
           skillName = action.id,
           code = code,
           message = report.message,
-
-          data =
-            mapOf(
-              "status" to if (report.success) "executed" else "failed",
-              "recoverable" to report.recoverable,
-              "semantic" to report.semantic,
-              "metadata" to report.metadata,
-              "action_id" to action.id,
-            ),
-
+          data = submitData,
         )
       val current = snapshot()
       if (result.success) {

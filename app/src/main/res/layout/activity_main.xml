@@ -1001,6 +1001,26 @@
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_search_scene_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_search_scene_description" />
+
+                        <EditText
+                            android:id="@+id/setting_search_scene_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_search_scene_hint"
+                            android:inputType="text"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
                             android:text="@string/setting_search_ttl_label" />
 
                         <TextView

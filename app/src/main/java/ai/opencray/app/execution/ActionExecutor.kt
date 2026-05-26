@@ -68,14 +68,23 @@ class ActionExecutor(
         val url =
           (action.payload?.get("url") as? String)
             ?: action.params["url"]
-            ?: "https://www.tsinghua.edu.cn"
-        openWebPage(url)
+        if (url.isNullOrBlank()) {
+          ActionExecutionReport(
+            success = false,
+            message = "Missing required `url` for open_url.",
+            recoverable = false,
+            semantic = "invalid_param",
+          )
+        } else {
+          openWebPage(url)
+        }
       }
       "open_context_review" ->
         ActionExecutionReport(
-          success = true,
-          message = "Opened context review fallback path.",
+          success = false,
+          message = "open_context_review is not configured on this device.",
           recoverable = false,
+          semantic = "not_configured",
         )
       else ->
         ActionExecutionReport(
@@ -89,32 +98,14 @@ class ActionExecutor(
 
   private fun executeGetCampusActivities(): ActionExecutionReport =
     ActionExecutionReport(
-      success = true,
-      message = "Campus activity sources prepared.",
+      success = false,
+      message = "Campus activities are not configured on the device. Configure Agent-Core INFO/WebVPN cookies or an explicit campus activities source.",
       recoverable = false,
-      semantic = "campus_activities_ready",
+      semantic = "not_configured",
       metadata =
         mapOf(
-          "activities" to
-            listOf(
-              mapOf(
-                "activity_id" to "src_tsinghua_news",
-                "title" to "清华大学新闻网",
-                "organizer" to "清华大学",
-                "start_time" to "",
-                "location" to "online",
-                "url" to "https://news.tsinghua.edu.cn/",
-              ),
-              mapOf(
-                "activity_id" to "src_tsinghua_events",
-                "title" to "清华大学校园活动与通知入口",
-                "organizer" to "清华大学",
-                "start_time" to "",
-                "location" to "online",
-                "url" to "https://www.tsinghua.edu.cn/",
-              ),
-            ),
-          "source" to "official_entrypoints",
+          "activities" to emptyList<Map<String, String>>(),
+          "source" to "not_configured",
         ),
     )
 
@@ -213,14 +204,12 @@ class ActionExecutor(
         ?: (action.payload?.get("time") as? String)
         ?: action.params["time"]
     if (dueTime.isNullOrBlank()) {
-      return executeSendNotification(
-        action.copy(
-          payload = mapOf(
-            "title" to ((action.payload?.get("title") as? String) ?: action.params["title"] ?: "OpenTHU 提醒"),
-            "body" to goal,
-          ),
-        ),
-      ).copy(semantic = "reminder_fallback_notification")
+      return ActionExecutionReport(
+        success = false,
+        message = "Missing required `due_time` or `time` for create_reminder.",
+        recoverable = false,
+        semantic = "invalid_param",
+      )
     }
     val alarmAction = action.copy(
       id = "set_alarm",
@@ -261,26 +250,59 @@ class ActionExecutor(
     }
 
     val notifications = service.getUnreadNotifications()
-    val notesList = notifications.mapNotNull { sbn ->
+    val parsedNotifications = mutableListOf<Map<String, Any>>()
+
+    for (sbn in notifications) {
         val extras = sbn.notification.extras
-        val title = extras.getString(android.app.Notification.EXTRA_TITLE) ?: return@mapNotNull null
-        val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
+        val title = extras.getString(android.app.Notification.EXTRA_TITLE)?.toString() ?: continue
+        
+        val textLines = extras.getCharSequenceArray(android.app.Notification.EXTRA_TEXT_LINES)
+        val messages = extras.getParcelableArray(android.app.Notification.EXTRA_MESSAGES)
+        
+        val content = if (textLines != null && textLines.isNotEmpty()) {
+            textLines.joinToString("\n") { it.toString() }
+        } else if (messages != null && messages.isNotEmpty()) {
+            messages.mapNotNull { 
+                if (it is android.os.Bundle) it.getCharSequence("text")?.toString() else null 
+            }.joinToString("\n")
+        } else {
+            extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString() ?: ""
+        }
+
         val pkg = sbn.packageName
-        "[$pkg] $title: $text"
+        parsedNotifications.add(mapOf(
+            "package" to pkg,
+            "title" to title,
+            "text" to content,
+            "post_time_ms" to sbn.postTime
+        ))
     }
 
-    if (notesList.isEmpty()) {
+    if (parsedNotifications.isEmpty()) {
       return ActionExecutionReport(
         success = true,
         message = "No unread notifications found.",
         recoverable = false,
+        semantic = "notifications_read",
+        metadata = mapOf(
+            "notification_count" to 0,
+            "notifications" to emptyList<Map<String, Any>>()
+        )
       )
     }
 
+    val displayMessage = "Found ${parsedNotifications.size} unread notifications:\n" + 
+        parsedNotifications.joinToString("\n") { "[${it["package"]}] ${it["title"]}: ${it["text"]}" }
+
     return ActionExecutionReport(
       success = true,
-      message = "Found ${notesList.size} unread notifications:\n" + notesList.joinToString("\n"),
+      message = displayMessage,
       recoverable = false,
+      semantic = "notifications_read",
+      metadata = mapOf(
+          "notification_count" to parsedNotifications.size,
+          "notifications" to parsedNotifications
+      )
     )
   }
 

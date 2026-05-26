@@ -128,7 +128,7 @@ def _trim_labeled_value(value: str) -> str:
     return value[:80].strip(" ，,；;")
 
 
-def extract_datetime(text: str, fallback_publish_time: str = "") -> str:
+def extract_datetime(text: str, publish_time_hint: str = "") -> str:
     now = datetime.now(CN_TZ)
     explicit = re.search(
         r"((20\d{2})[年./-]\s*(\d{1,2})[月./-]\s*(\d{1,2})日?)"
@@ -149,7 +149,7 @@ def extract_datetime(text: str, fallback_publish_time: str = "") -> str:
         text,
     )
     if cn_date:
-        year = infer_year(int(cn_date.group(1)), int(cn_date.group(2)), fallback_publish_time, now.date())
+        year = infer_year(int(cn_date.group(1)), int(cn_date.group(2)), publish_time_hint, now.date())
         hour = int(cn_date.group(3) or 0)
         minute = int(cn_date.group(4) or 0)
         return datetime(year, int(cn_date.group(1)), int(cn_date.group(2)), hour, minute, tzinfo=CN_TZ).isoformat()

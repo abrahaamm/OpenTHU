@@ -85,6 +85,12 @@ def _coerce_scene(raw: Any) -> str:
     value = str(raw or "hybrid").strip().lower()
     if value in {"campus", "general", "hybrid"}:
         return value
+    if value in {"internal", "inside", "school", "校内", "校内搜索", "校园"}:
+        return "campus"
+    if value in {"external", "outside", "web", "校外", "通用", "通用搜索"}:
+        return "general"
+    if value in {"mixed", "both", "混合", "校内外"}:
+        return "hybrid"
     return "hybrid"
 
 
@@ -108,15 +114,17 @@ class SearchSkill(SkillHandler):
                 source="search_skill",
             )
 
-        max_results = _coerce_limit(args, "max_results", 5, 10)
-        fetch_limit = _coerce_limit(args, "fetch_limit", max_results, 8)
-        scope = str(args.get("scope", "web") or "web").strip().lower()
-        domains = _coerce_domains(args.get("domains") or args.get("domain"))
-        scene = _coerce_scene(args.get("scene"))
-        supplemental_results = _coerce_limit(args, "supplemental_results", 3, 8)
-        freshness_days = _coerce_limit(args, "freshness_days", 30, 3650)
-        use_rag = _coerce_bool(args.get("use_rag", True), default=True)
-        language = str(args.get("language", "zh-CN") or "zh-CN")
+        merged_args = dict(session or {})
+        merged_args.update(args)
+        max_results = _coerce_limit(merged_args, "max_results", 5, 10)
+        fetch_limit = _coerce_limit(merged_args, "fetch_limit", max_results, 8)
+        scope = str(merged_args.get("scope", "web") or "web").strip().lower()
+        domains = _coerce_domains(merged_args.get("domains") or merged_args.get("domain") or merged_args.get("search_domains"))
+        scene = _coerce_scene(merged_args.get("scene") or merged_args.get("search_scene"))
+        supplemental_results = _coerce_limit(merged_args, "supplemental_results", 3, 8)
+        freshness_days = _coerce_limit(merged_args, "freshness_days", 30, 3650)
+        use_rag = _coerce_bool(merged_args.get("use_rag", True), default=True)
+        language = str(merged_args.get("language", "zh-CN") or "zh-CN")
         warnings: list[str] = []
 
         if scope not in {"web", "all"}:
@@ -154,7 +162,7 @@ class SearchSkill(SkillHandler):
 
         documents = fetch_documents(results[:fetch_limit], warnings) if use_rag else []
         rag = build_search_answer(query, results, documents, max_results=max_results) if use_rag else {
-            "answer": "",
+            "answer": build_result_snippet_answer(query, results, max_results=max_results),
             "citations": [],
             "evidence": [],
         }
@@ -196,44 +204,6 @@ class SearchProvider:
         language: str,
     ) -> tuple[list[WebSearchResult], bool]:
         raise NotImplementedError
-
-
-class MockSearchProvider(SearchProvider):
-    name = "mock"
-
-    def search(
-        self,
-        *,
-        query: str,
-        max_results: int,
-        domains: list[str],
-        freshness_days: int,
-        language: str,
-    ) -> tuple[list[WebSearchResult], bool]:
-        records = [
-            WebSearchResult(
-                title="清华大学近期 AI 讲座与学术活动",
-                url="https://www.tsinghua.edu.cn/mock/ai-lecture",
-                snippet="包含人工智能、大模型、机器学习相关讲座的时间、地点与报名方式。",
-                source="mock",
-                score=0.91,
-            ),
-            WebSearchResult(
-                title="OpenTHU Agent-Core 搜索 Skill 设计说明",
-                url="https://github.com/thu-info-community/thu-info-app",
-                snippet="搜索引擎检索、网页正文抽取、轻量 RAG 召回和带引用总结。",
-                source="mock",
-                score=0.72,
-            ),
-            WebSearchResult(
-                title="校园资讯与活动信息整合",
-                url="https://info.tsinghua.edu.cn/mock/campus",
-                snippet="校园动态、报名活动、论坛与招聘通知的统一检索入口。",
-                source="mock",
-                score=0.65,
-            ),
-        ]
-        return records[:max_results], True
 
 
 class SearxngSearchProvider(SearchProvider):
@@ -385,7 +355,7 @@ def _build_provider(session: dict[str, Any] | None = None) -> SearchProvider:
         "duckduckgo",
     ).lower() or "duckduckgo"
     if provider == "mock":
-        return MockSearchProvider()
+        raise SearchProviderError("Mock search provider has been removed; configure duckduckgo, searxng, or brave.")
     if provider == "duckduckgo":
         endpoint = _session_or_env(
             session,
@@ -551,17 +521,6 @@ def _unwrap_duckduckgo_redirect(url: str) -> str:
 def fetch_documents(results: list[WebSearchResult], warnings: list[str]) -> list[WebDocument]:
     documents: list[WebDocument] = []
     for result in results:
-        if result.source == "mock":
-            documents.append(
-                WebDocument(
-                    title=result.title,
-                    url=result.url,
-                    text=f"{result.title}\n{result.snippet}",
-                    snippet=result.snippet,
-                    source=result.source,
-                )
-            )
-            continue
         cached = _read_cache(_cache_key("document", result.url))
         if cached:
             documents.append(WebDocument(**cached))
@@ -606,9 +565,7 @@ def build_search_answer(
             {"title": item.title, "url": item.url, "snippet": item.snippet}
             for item in results[:max_results]
         ]
-        answer = f"已检索到 {len(results)} 条与“{query}”相关的网页，但未能从页面正文中抽取到足够证据。"
-        if citations:
-            answer += f"可以先查看：{citations[0]['title']}。"
+        answer = build_result_snippet_answer(query, results, max_results=max_results)
         return {"answer": answer, "citations": citations, "evidence": []}
 
     citations = []
@@ -628,13 +585,36 @@ def build_search_answer(
             }
         )
 
-    lead = citations[0]["title"] if citations else results[0].title if results else ""
-    answer = f"根据检索到的网页证据，找到 {len(citations)} 个来源与“{query}”相关。"
-    if lead:
-        answer += f"优先参考：{lead}。"
-    if len(citations) > 1:
-        answer += "其他相关来源包括：" + "；".join(item["title"] for item in citations[1:3]) + "。"
+    answer_lines = [f"根据检索到的网页证据，找到 {len(citations)} 个来源与“{query}”相关。"]
+    for item in evidence[:3]:
+        title = str(item.get("title", "")).strip()
+        text = _clean_text(str(item.get("text", ""))).strip()
+        if not title and not text:
+            continue
+        line = f"- {title}" if title else "-"
+        if text:
+            line += f"：{text[:180]}"
+        answer_lines.append(line)
+    answer = "\n".join(answer_lines)
     return {"answer": answer, "citations": citations, "evidence": evidence}
+
+
+def build_result_snippet_answer(
+    query: str,
+    results: list[WebSearchResult],
+    max_results: int,
+) -> str:
+    if not results:
+        return f"没有检索到与“{query}”相关的网页结果。"
+    lines = [f"已检索到 {len(results)} 条与“{query}”相关的结果，先整理出最相关的 {min(len(results), max_results, 3)} 条："]
+    for item in results[: min(max_results, 3)]:
+        title = _clean_text(item.title) or "未命名结果"
+        snippet = _clean_text(item.snippet)
+        line = f"- {title}"
+        if snippet:
+            line += f"：{snippet[:180]}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def chunk_document(text: str, chunk_size: int = 700, overlap: int = 120) -> list[str]:
