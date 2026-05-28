@@ -1,10 +1,14 @@
 package ai.opencray.app
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -19,6 +23,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -28,6 +33,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
+import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.AgentEvent
 import ai.opencray.app.feature.chat.AgentEventOption
@@ -38,6 +44,7 @@ import ai.opencray.app.feature.chat.ChatRole
 class MainActivity : AppCompatActivity() {
   companion object {
     private const val CALENDAR_PERMISSION_REQUEST = 1201
+    private const val PREF_SHOW_PLANNING_DETAILS = "show_planning_details"
   }
 
   private lateinit var viewModel: MainViewModel
@@ -66,6 +73,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var safetyPanel: LinearLayout
   private lateinit var chatPanel: LinearLayout
   private lateinit var planningPage: ScrollView
+  private lateinit var planningCardsContainer: LinearLayout
   private lateinit var settingsPage: ScrollView
   private lateinit var chatHistoryScroll: ScrollView
   private lateinit var chatHistoryContainer: LinearLayout
@@ -74,6 +82,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var conversationTabsContainer: LinearLayout
   private lateinit var newConversationButton: Button
   private lateinit var chatInput: EditText
+  private lateinit var chatAttachButton: Button
+  private lateinit var chatAttachmentView: TextView
   private lateinit var chatSendButton: Button
   private lateinit var preferenceInput: EditText
   private lateinit var preferenceAddButton: Button
@@ -91,6 +101,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var settingsTab: Button
   private lateinit var notificationToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
+  private lateinit var planningDetailsToggle: CheckBox
   private lateinit var connectButton: Button
   private lateinit var saveSettingsButton: Button
   private lateinit var testSettingsButton: Button
@@ -108,6 +119,10 @@ class MainActivity : AppCompatActivity() {
   private lateinit var userIdInput: EditText
   private lateinit var webvpnCookieInput: EditText
   private lateinit var webvpnCsrfInput: EditText
+  private lateinit var learnBaseUrlInput: EditText
+  private lateinit var homeworkCookieInput: EditText
+  private lateinit var homeworkCsrfInput: EditText
+  private lateinit var learnCookieLoginButton: Button
   private lateinit var campusFileInput: EditText
   private lateinit var searchProviderInput: EditText
   private lateinit var searchEndpointInput: EditText
@@ -122,7 +137,38 @@ class MainActivity : AppCompatActivity() {
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneInput: EditText
-  private var showPlanningDeveloperInfo: Boolean = false
+  private var showPlanningDetails: Boolean = false
+  private var selectedChatFileUri: Uri? = null
+  private var selectedChatFileName: String = ""
+
+  private val learnCookieLoginLauncher =
+    registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      if (result.resultCode == Activity.RESULT_OK) {
+        val data = result.data
+        val cookie = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_COOKIE).orEmpty()
+        val csrf = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_CSRF).orEmpty()
+        val webvpnCookie = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_WEBVPN_COOKIE).orEmpty()
+        val baseUrl = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL).orEmpty()
+        if (baseUrl.isNotBlank()) learnBaseUrlInput.setText(baseUrl)
+        if (cookie.isNotBlank()) homeworkCookieInput.setText(cookie)
+        if (csrf.isNotBlank()) homeworkCsrfInput.setText(csrf)
+        if (webvpnCookie.isNotBlank()) webvpnCookieInput.setText(webvpnCookie)
+        Toast.makeText(this, getString(R.string.setting_learn_cookie_login_success), Toast.LENGTH_SHORT).show()
+      } else {
+        Toast.makeText(this, getString(R.string.setting_learn_cookie_login_failed), Toast.LENGTH_SHORT).show()
+      }
+    }
+
+  private val chatFilePickerLauncher =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri == null) return@registerForActivityResult
+      runCatching {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      selectedChatFileUri = uri
+      selectedChatFileName = resolveDisplayName(uri)
+      renderChatAttachment()
+    }
 
   private val uiRefreshHandler = Handler(Looper.getMainLooper())
   private val uiRefreshTicker =
@@ -189,6 +235,7 @@ class MainActivity : AppCompatActivity() {
     safetyPanel = findViewById(R.id.safety_panel)
     chatPanel = findViewById(R.id.chat_panel)
     planningPage = findViewById(R.id.planning_page)
+    planningCardsContainer = findViewById(R.id.planning_cards_container)
     settingsPage = findViewById(R.id.settings_page)
     chatHistoryScroll = findViewById(R.id.chat_history_scroll)
     chatHistoryContainer = findViewById(R.id.chat_history_container)
@@ -197,6 +244,8 @@ class MainActivity : AppCompatActivity() {
     conversationTabsContainer = findViewById(R.id.conversation_tabs_container)
     newConversationButton = findViewById(R.id.new_conversation_button)
     chatInput = findViewById(R.id.chat_input)
+    chatAttachButton = findViewById(R.id.chat_attach_button)
+    chatAttachmentView = findViewById(R.id.chat_attachment_text)
     chatSendButton = findViewById(R.id.chat_send_button)
     preferenceInput = findViewById(R.id.preference_input)
     preferenceAddButton = findViewById(R.id.preference_add_button)
@@ -214,6 +263,7 @@ class MainActivity : AppCompatActivity() {
     settingsTab = findViewById(R.id.settings_tab)
     notificationToggle = findViewById(R.id.capability_notification_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
+    planningDetailsToggle = findViewById(R.id.capability_planning_details_toggle)
     connectButton = findViewById(R.id.connect_button)
     saveSettingsButton = findViewById(R.id.save_settings_button)
     testSettingsButton = findViewById(R.id.test_settings_button)
@@ -231,6 +281,10 @@ class MainActivity : AppCompatActivity() {
     userIdInput = findViewById(R.id.setting_user_id_input)
     webvpnCookieInput = findViewById(R.id.setting_webvpn_cookie_input)
     webvpnCsrfInput = findViewById(R.id.setting_webvpn_csrf_input)
+    learnBaseUrlInput = findViewById(R.id.setting_learn_base_url_input)
+    homeworkCookieInput = findViewById(R.id.setting_homework_cookie_input)
+    homeworkCsrfInput = findViewById(R.id.setting_homework_csrf_input)
+    learnCookieLoginButton = findViewById(R.id.setting_learn_cookie_login_button)
     campusFileInput = findViewById(R.id.setting_campus_file_input)
     searchProviderInput = findViewById(R.id.setting_search_provider_input)
     searchEndpointInput = findViewById(R.id.setting_search_endpoint_input)
@@ -398,10 +452,25 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
+    chatAttachButton.setOnClickListener {
+      chatFilePickerLauncher.launch(arrayOf("*/*"))
+    }
+    chatAttachmentView.setOnClickListener {
+      clearChatAttachment()
+    }
+    chatAttachmentView.setOnLongClickListener {
+      clearChatAttachment()
+      true
+    }
     chatSendButton.setOnClickListener {
       val text = chatInput.text.toString()
-      viewModel.sendChatMessage(text)
+      viewModel.sendChatMessage(
+        text = text,
+        attachedFileUri = selectedChatFileUri?.toString(),
+        attachedFileName = selectedChatFileName,
+      )
       chatInput.setText("")
+      clearChatAttachment()
       drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
@@ -416,7 +485,11 @@ class MainActivity : AppCompatActivity() {
       syncQuickSkillsToggle()
     }
     planningDeveloperToggleButton.setOnClickListener {
-      showPlanningDeveloperInfo = !showPlanningDeveloperInfo
+      setPlanningDetailsVisible(!showPlanningDetails)
+      render()
+    }
+    planningDetailsToggle.setOnCheckedChangeListener { _, isChecked ->
+      setPlanningDetailsVisible(isChecked)
       render()
     }
 
@@ -454,6 +527,17 @@ class MainActivity : AppCompatActivity() {
           "${getString(R.string.settings_health_warn)}：${warnings.joinToString("；")}"
         }
       Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+    learnCookieLoginButton.setOnClickListener {
+      val learnBaseUrl = learnBaseUrlInput.text.toString().trim().ifEmpty { "https://learn.tsinghua.edu.cn" }
+      getSharedPreferences("openthu_settings", MODE_PRIVATE)
+        .edit()
+        .putString("learn_base_url", learnBaseUrl)
+        .apply()
+      learnCookieLoginLauncher.launch(
+        Intent(this, LearnCookieLoginActivity::class.java)
+          .putExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL, learnBaseUrl),
+      )
     }
 
     runAgentButton.setOnClickListener {
@@ -504,6 +588,40 @@ class MainActivity : AppCompatActivity() {
     portInput.syncToViewModel { value -> viewModel.updatePort(value) }
   }
 
+  private fun renderChatAttachment() {
+    val name =
+      selectedChatFileName
+        .takeIf { it.isNotBlank() }
+        ?: getString(R.string.chat_attachment_empty_file)
+    chatAttachmentView.text = getString(R.string.chat_attachment_selected, name)
+    chatAttachmentView.visibility = View.VISIBLE
+  }
+
+  private fun clearChatAttachment() {
+    selectedChatFileUri = null
+    selectedChatFileName = ""
+    chatAttachmentView.text = ""
+    chatAttachmentView.visibility = View.GONE
+  }
+
+  private fun resolveDisplayName(uri: Uri): String {
+    val queried =
+      runCatching {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+          if (cursor.moveToFirst()) {
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) cursor.getString(index).orEmpty() else ""
+          } else {
+            ""
+          }
+        }.orEmpty()
+      }.getOrDefault("")
+    return queried.ifBlank {
+      uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+        ?: getString(R.string.chat_attachment_empty_file)
+    }
+  }
+
   private fun render() {
     val state = viewModel.getUiState()
     val isPlanning = state.currentDestination == AppDestination.Planning
@@ -521,14 +639,17 @@ class MainActivity : AppCompatActivity() {
     planningTab.isEnabled = state.currentDestination != AppDestination.Planning
     settingsTab.isEnabled = state.currentDestination != AppDestination.Settings
     syncQuickSkillsToggle()
-    planningDeveloperContextSection.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
-    planningDeveloperFlowSection.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
-    actionFeedView.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
+    planningDeveloperContextSection.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
+    planningDeveloperFlowSection.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
+    actionFeedView.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
+    if (planningDetailsToggle.isChecked != showPlanningDetails) {
+      planningDetailsToggle.isChecked = showPlanningDetails
+    }
     planningDeveloperToggleButton.text =
-      if (showPlanningDeveloperInfo) {
-        "隐藏开发者信息"
+      if (showPlanningDetails) {
+        getString(R.string.planning_details_hide)
       } else {
-        "显示开发者信息"
+        getString(R.string.planning_details_show)
       }
 
     statusView.text = "Agent 状态：${state.snapshot.connectionStatus}"
@@ -659,6 +780,7 @@ class MainActivity : AppCompatActivity() {
             .ifBlank { "• 暂无待办任务，先在对话页提交目标。" }
         append(content)
       }
+    renderPlanningCards(state.planningCards)
 
     val conflict = state.pendingConflict
     if (conflict != null) {
@@ -803,6 +925,165 @@ class MainActivity : AppCompatActivity() {
       conversationTabsContainer.addView(row, params)
     }
   }
+
+  private fun renderPlanningCards(cards: List<PlanningCard>) {
+    planningCardsContainer.removeAllViews()
+    if (cards.isEmpty()) {
+      planningCardsContainer.addView(
+        TextView(this).apply {
+          text = getString(R.string.planning_cards_empty)
+          textSize = 13f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+          setBackgroundResource(R.drawable.chat_section_surface)
+          setPadding(dp(14), dp(12), dp(14), dp(12))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+        },
+      )
+      return
+    }
+
+    cards.forEachIndexed { index, card ->
+      val cardView =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.VERTICAL
+          setBackgroundResource(R.drawable.chat_section_surface)
+          setPadding(dp(14), dp(12), dp(14), dp(12))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              if (index > 0) topMargin = dp(10)
+            }
+        }
+
+      cardView.addView(
+        TextView(this).apply {
+          text = card.title
+          textSize = 15f
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+        },
+      )
+      cardView.addView(
+        TextView(this).apply {
+          text = planningCardMeta(card)
+          textSize = 12f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_primary_dark))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(6)
+            }
+        },
+      )
+      cardView.addView(
+        TextView(this).apply {
+          text = card.body
+          textSize = 13f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(8)
+            }
+        },
+      )
+
+      val buttonRow =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.HORIZONTAL
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(10)
+            }
+        }
+      buttonRow.addView(planningCardButton(getString(R.string.planning_card_move_up), index > 0) {
+        viewModel.movePlanningCard(card.id, -1)
+        render()
+      })
+      buttonRow.addView(planningCardButton(getString(R.string.planning_card_move_down), index < cards.lastIndex) {
+        viewModel.movePlanningCard(card.id, 1)
+        render()
+      })
+      buttonRow.addView(planningCardButton(getString(R.string.planning_card_delete), true) {
+        viewModel.deletePlanningCard(card.id)
+        render()
+      })
+      cardView.addView(buttonRow)
+      planningCardsContainer.addView(cardView)
+    }
+  }
+
+  private fun planningCardButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+  ): Button =
+    Button(this).apply {
+      this.text = text
+      isEnabled = enabled
+      alpha = if (enabled) 1f else 0.45f
+      minWidth = 0
+      setBackgroundResource(R.drawable.button_secondary_selector)
+      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+      stateListAnimator = null
+      elevation = dp(3).toFloat()
+      setOnClickListener { onClick() }
+      layoutParams =
+        LinearLayout.LayoutParams(
+          0,
+          dp(42),
+          1f,
+        ).apply {
+          marginEnd = dp(8)
+        }
+    }
+
+  private fun planningCardMeta(card: PlanningCard): String =
+    listOf(
+      planningCardTypeLabel(card.type),
+      planningCardStatusLabel(card.status),
+      card.source.ifBlank { "规划页" },
+    ).joinToString(" · ")
+
+  private fun planningCardTypeLabel(type: String): String =
+    when (type) {
+      "alarm" -> "闹钟"
+      "todo" -> "待办"
+      "course" -> "课表"
+      "calendar" -> "日历"
+      "homework" -> "作业"
+      "notification" -> "通知"
+      "search" -> "搜索"
+      else -> "规划"
+    }
+
+  private fun planningCardStatusLabel(status: String): String =
+    when (status) {
+      "planned" -> "待执行"
+      "approved" -> "待执行"
+      "pending_approval" -> "待确认"
+      "queued" -> "等待端侧"
+      "ok" -> "已完成"
+      "running" -> "执行中"
+      "executed" -> "已完成"
+      "completed" -> "已完成"
+      "failed" -> "未成功"
+      "conflict_pending" -> "需处理冲突"
+      else -> status.ifBlank { "待处理" }
+    }
 
   private fun syncQuickSkillsToggle() {
     quickSkillsToggle.text =
@@ -1151,12 +1432,17 @@ class MainActivity : AppCompatActivity() {
     userIdInput.setText(pref.getString("user_id", "demo_user"))
     webvpnCookieInput.setText(pref.getString("webvpn_cookie", ""))
     webvpnCsrfInput.setText(pref.getString("webvpn_csrf", ""))
+    learnBaseUrlInput.setText(pref.getString("learn_base_url", "https://learn.tsinghua.edu.cn"))
+    homeworkCookieInput.setText(pref.getString("homework_cookie", ""))
+    homeworkCsrfInput.setText(pref.getString("homework_csrf", ""))
     campusFileInput.setText(pref.getString("campus_file", ""))
     searchProviderInput.setText(pref.getString("search_provider", "duckduckgo"))
     searchEndpointInput.setText(pref.getString("search_endpoint", "https://duckduckgo.com/html/"))
     searchApiKeyInput.setText(pref.getString("search_api_key", ""))
     searchSceneInput.setText(pref.getString("search_scene", "hybrid"))
     searchTtlInput.setText(pref.getString("search_ttl", "3600"))
+    showPlanningDetails = pref.getBoolean(PREF_SHOW_PLANNING_DETAILS, false)
+    planningDetailsToggle.isChecked = showPlanningDetails
     memoryFileInput.setText(pref.getString("memory_file", "agent/langgraph/memory_store.json"))
     memoryLongTtlInput.setText(pref.getString("memory_long_ttl", "365"))
     memoryMidTtlInput.setText(pref.getString("memory_mid_ttl", "30"))
@@ -1177,12 +1463,16 @@ class MainActivity : AppCompatActivity() {
       .putString("user_id", userIdInput.text.toString().trim())
       .putString("webvpn_cookie", webvpnCookieInput.text.toString().trim())
       .putString("webvpn_csrf", webvpnCsrfInput.text.toString().trim())
+      .putString("learn_base_url", learnBaseUrlInput.text.toString().trim().ifEmpty { "https://learn.tsinghua.edu.cn" })
+      .putString("homework_cookie", homeworkCookieInput.text.toString().trim())
+      .putString("homework_csrf", homeworkCsrfInput.text.toString().trim())
       .putString("campus_file", campusFileInput.text.toString().trim())
       .putString("search_provider", searchProviderInput.text.toString().trim().ifEmpty { "duckduckgo" })
       .putString("search_endpoint", searchEndpointInput.text.toString().trim())
       .putString("search_api_key", searchApiKeyInput.text.toString().trim())
       .putString("search_scene", searchSceneInput.text.toString().trim().lowercase().ifEmpty { "hybrid" })
       .putString("search_ttl", searchTtlInput.text.toString().trim())
+      .putBoolean(PREF_SHOW_PLANNING_DETAILS, showPlanningDetails)
       .putString("memory_file", memoryFileInput.text.toString().trim())
       .putString("memory_long_ttl", memoryLongTtlInput.text.toString().trim())
       .putString("memory_mid_ttl", memoryMidTtlInput.text.toString().trim())
@@ -1195,10 +1485,19 @@ class MainActivity : AppCompatActivity() {
     return true
   }
 
+  private fun setPlanningDetailsVisible(visible: Boolean) {
+    showPlanningDetails = visible
+    getSharedPreferences("openthu_settings", MODE_PRIVATE)
+      .edit()
+      .putBoolean(PREF_SHOW_PLANNING_DETAILS, visible)
+      .apply()
+  }
+
   private fun buildSettingsWarnings(): List<String> {
     val warnings = mutableListOf<String>()
     if (openAiKeyInput.text.toString().trim().isEmpty()) warnings += "缺少 OPENAI_API_KEY"
     if (webvpnCookieInput.text.toString().trim().isEmpty()) warnings += "缺少 WebVPN Cookie（校园资讯真实抓取会降级）"
+    if (homeworkCookieInput.text.toString().trim().isEmpty()) warnings += "缺少网络学堂 Cookie（作业 skill 需要手动提供 Cookie）"
     if (
       searchProviderInput.text.toString().trim().equals("brave", ignoreCase = true) &&
       searchApiKeyInput.text.toString().trim().isEmpty()

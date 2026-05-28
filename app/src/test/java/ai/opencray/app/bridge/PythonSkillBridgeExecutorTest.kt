@@ -210,4 +210,129 @@ class PythonSkillBridgeExecutorTest {
     assertEquals("failed", result.getJSONObject("data").getString("status"))
     assertFalse(result.getJSONObject("data").optString("message").isBlank())
   }
+
+  @Test
+  fun mapsHomeworkSubmitConfirmRequirementToApprovalRequired() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = false,
+          message = "Submit blocked: confirm_submit=true is required for high-risk homework submission.",
+          recoverable = false,
+          metadata = mapOf("reason" to "confirm_submit_required"),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_hw_submit_1")
+        .put("skill_name", "submit_homework")
+        .put("args", JSONObject().put("homework_id", "hw_1").put("confirm_submit", false))
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("APPROVAL_REQUIRED", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("awaiting_confirmation", data.getString("status"))
+    assertTrue(data.getBoolean("high_risk"))
+    assertEquals("confirm_submit_required", data.getString("reason"))
+  }
+
+  @Test
+  fun mapsHomeworkCrawlStructuredMetadataFromReport() {
+    val homeworks =
+      listOf(
+        mapOf(
+          "homework_id" to "hw_101",
+          "title" to "Project 1",
+          "submitted" to false,
+        ),
+      )
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = true,
+          message = "Homework crawl completed: 1 item(s).",
+          recoverable = false,
+          metadata =
+            mapOf(
+              "status" to "crawled",
+              "count" to 1,
+              "homeworks" to homeworks,
+              "course_ids" to listOf("2026spring-ai"),
+            ),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_hw_crawl_1")
+        .put("skill_name", "crawl_course_homeworks")
+        .put("args", JSONObject().put("course_ids", JSONArray(listOf("2026spring-ai"))))
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("OK", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("crawled", data.getString("status"))
+    assertEquals(1, data.getInt("count"))
+    assertEquals(1, data.getJSONArray("homeworks").length())
+    assertEquals("hw_101", data.getJSONArray("homeworks").getJSONObject(0).getString("homework_id"))
+    assertEquals("2026spring-ai", data.getJSONArray("course_ids").getString(0))
+  }
+
+  @Test
+  fun mapsGetHomeworkCookieResultToCookieReady() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = true,
+          message = "Homework cookie loaded from provided Learn cookie.",
+          recoverable = false,
+          metadata =
+            mapOf(
+              "status" to "cookie_ready",
+              "cookie_source" to "provided_cookie",
+              "has_csrf" to true,
+            ),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_cookie_1")
+        .put("skill_name", "get_homework_cookie")
+        .put("args", JSONObject().put("cookies", "JSESSIONID=abc; XSRF-TOKEN=xyz"))
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("OK", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("cookie_ready", data.getString("status"))
+    assertEquals("provided_cookie", data.getString("cookie_source"))
+    assertTrue(data.getBoolean("has_csrf"))
+  }
+
+  @Test
+  fun mapsHomeworkLoginRequiredToNotConfigured() {
+    val gateway =
+      CapturingGateway(
+        ActionExecutionReport(
+          success = false,
+          message = "网络学堂登录态未配置。请去设置页的「清华统一登录」完成登录后再重试。",
+          recoverable = false,
+          semantic = "homework_cookie_login_required",
+          metadata = mapOf("status" to "login_required", "reason" to "login_required"),
+        ),
+      )
+    val executor = PythonSkillBridgeExecutor(gateway)
+    val invocation =
+      JSONObject()
+        .put("request_id", "req_homework_login_1")
+        .put("skill_name", "crawl_unsubmitted_homeworks")
+        .put("args", JSONObject())
+
+    val result = executor.executeSkillInvocation(invocation)
+    assertEquals("NOT_CONFIGURED", result.getString("code"))
+    val data = result.getJSONObject("data")
+    assertEquals("login_required", data.getString("status"))
+    assertEquals("login_required", data.getString("reason"))
+  }
 }

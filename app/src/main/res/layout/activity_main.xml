@@ -140,35 +140,64 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
                     android:background="@drawable/chat_composer_surface"
-                    android:gravity="bottom"
-                    android:orientation="horizontal"
+                    android:orientation="vertical"
                     android:padding="10dp">
 
-                    <EditText
-                        android:id="@+id/chat_input"
-                        android:layout_width="0dp"
+                    <TextView
+                        android:id="@+id/chat_attachment_text"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:background="@drawable/chat_input_surface"
-                        android:gravity="top|start"
-                        android:hint="@string/chat_input_hint"
-                        android:minHeight="56dp"
-                        android:paddingStart="16dp"
-                        android:paddingTop="14dp"
-                        android:paddingEnd="16dp"
-                        android:paddingBottom="14dp"
-                        android:textColor="@color/opencray_ink"
-                        android:textColorHint="@color/opencray_muted"
-                        android:textSize="15sp" />
+                        android:layout_marginBottom="8dp"
+                        android:background="@drawable/chat_status_chip_surface"
+                        android:paddingStart="12dp"
+                        android:paddingTop="7dp"
+                        android:paddingEnd="12dp"
+                        android:paddingBottom="7dp"
+                        android:textColor="@color/opencray_primary_dark"
+                        android:textSize="12sp"
+                        android:visibility="gone" />
 
-                    <Button
-                        android:id="@+id/chat_send_button"
-                        style="@style/OpenCray.PrimaryButton"
-                        android:layout_width="72dp"
-                        android:layout_height="56dp"
-                        android:layout_marginStart="10dp"
-                        android:minWidth="0dp"
-                        android:text="@string/chat_send" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="bottom"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/chat_attach_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="64dp"
+                            android:layout_height="56dp"
+                            android:minWidth="0dp"
+                            android:text="@string/chat_attach_file" />
+
+                        <EditText
+                            android:id="@+id/chat_input"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/chat_input_surface"
+                            android:gravity="top|start"
+                            android:hint="@string/chat_input_hint"
+                            android:minHeight="56dp"
+                            android:paddingStart="16dp"
+                            android:paddingTop="14dp"
+                            android:paddingEnd="16dp"
+                            android:paddingBottom="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted"
+                            android:textSize="15sp" />
+
+                        <Button
+                            android:id="@+id/chat_send_button"
+                            style="@style/OpenCray.PrimaryButton"
+                            android:layout_width="72dp"
+                            android:layout_height="56dp"
+                            android:layout_marginStart="10dp"
+                            android:minWidth="0dp"
+                            android:text="@string/chat_send" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
 
@@ -356,6 +385,28 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/planning_cards_title"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <LinearLayout
+                            android:id="@+id/planning_cards_container"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+
+                    <LinearLayout
                         android:id="@+id/context_panel"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -391,7 +442,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="开发者上下文"
+                                android:text="规划上下文"
                                 android:textColor="@color/opencray_ink"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -507,7 +558,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="内部执行流程"
+                                android:text="执行流程详情"
                                 android:textColor="@color/opencray_ink"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -545,7 +596,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
-                            android:text="显示开发者信息" />
+                            android:text="@string/planning_details_show" />
 
                         <TextView
                             android:id="@+id/action_summary_text"
@@ -718,6 +769,13 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/capability_safety"
+                            android:textColor="@color/opencray_ink" />
+
+                        <CheckBox
+                            android:id="@+id/capability_planning_details_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/capability_planning_details"
                             android:textColor="@color/opencray_ink" />
                     </LinearLayout>
 
@@ -919,6 +977,71 @@
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
                             android:hint="@string/setting_webvpn_csrf_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_learn_base_url_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_learn_base_url_description" />
+
+                        <EditText
+                            android:id="@+id/setting_learn_base_url_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_learn_base_url_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <Button
+                            android:id="@+id/setting_learn_cookie_login_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/setting_learn_cookie_login" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_homework_cookie_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_homework_cookie_description" />
+
+                        <EditText
+                            android:id="@+id/setting_homework_cookie_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_homework_cookie_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_homework_csrf_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_homework_csrf_description" />
+
+                        <EditText
+                            android:id="@+id/setting_homework_csrf_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_homework_csrf_hint"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted" />

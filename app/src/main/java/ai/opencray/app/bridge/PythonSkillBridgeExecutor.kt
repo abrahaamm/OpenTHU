@@ -61,14 +61,37 @@ class PythonSkillBridgeExecutor(
 
   private fun mapCode(skillName: String, report: ActionExecutionReport): String {
     if (report.success) return "OK"
+    val reason = report.metadata["reason"]?.toString()?.trim().orEmpty()
     val message = report.message
-    if (message.contains("confirm_delete=true", ignoreCase = true)) return "APPROVAL_REQUIRED"
+    if (
+      reason == "conflict_strategy_required" ||
+      reason == "allow_conflict_delete_not_set" ||
+      reason == "confirm_submit_required"
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
+    if (reason == "login_required" || report.semantic == "homework_cookie_login_required") {
+      return "NOT_CONFIGURED"
+    }
+    if (message.contains("confirm_delete=true", ignoreCase = true) ||
+      message.contains("confirm_submit=true", ignoreCase = true)
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
     if (skillName == "create_calendar_event" &&
       message.contains("Choose skip_write / coexist / delete_conflicts", ignoreCase = true)
     ) {
       return "APPROVAL_REQUIRED"
     }
-    if (message.contains("Invalid", ignoreCase = true) ||
+    if (reason == "missing_auth" ||
+      reason == "missing_credentials" ||
+      reason == "invalid_cookies" ||
+      reason == "credential_login_not_implemented" ||
+      reason == "missing_homework_id" ||
+      reason == "missing_course_id" ||
+      reason == "missing_submission_content" ||
+      reason == "missing_file" ||
+      message.contains("Invalid", ignoreCase = true) ||
       message.contains("Missing", ignoreCase = true) ||
       message.contains("requires event_id/event_ids", ignoreCase = true) ||
       message.contains("requires explicit confirmation", ignoreCase = true)
@@ -121,9 +144,68 @@ class PythonSkillBridgeExecutor(
           .put("high_risk", true)
           .put("message", message)
       }
+      "get_homework_cookie" -> {
+        val reportedStatus = report.metadata["status"]?.toString().orEmpty()
+        val data =
+          JSONObject()
+            .put("status", reportedStatus.ifBlank { if (report.success) "cookie_ready" else "failed" })
+            .put("message", message)
+        putReportData(data, report)
+      }
+      "crawl_course_homeworks" -> {
+        val data =
+          JSONObject()
+            .put("status", if (report.success) "crawled" else reportedFailureStatus(report))
+            .put("message", message)
+        putReportData(data, report)
+      }
+      "crawl_unsubmitted_homeworks" -> {
+        val data =
+          JSONObject()
+            .put("status", if (report.success) "unsubmitted_crawled" else reportedFailureStatus(report))
+            .put("message", message)
+        putReportData(data, report)
+      }
+      "preview_homework_attachments" -> {
+        val data =
+          JSONObject()
+            .put("status", if (report.success) "preview_ready" else reportedFailureStatus(report))
+            .put("message", message)
+        putReportData(data, report)
+      }
+      "upload_homework_attachment" -> {
+        val status =
+          when {
+            code == "APPROVAL_REQUIRED" -> "awaiting_confirmation"
+            report.success -> "uploaded"
+            else -> reportedFailureStatus(report)
+          }
+        val data =
+          JSONObject()
+            .put("status", status)
+            .put("message", message)
+        putReportData(data, report)
+      }
+      "submit_homework" -> {
+        val status =
+          when {
+            code == "APPROVAL_REQUIRED" -> "awaiting_confirmation"
+            report.success -> "submitted"
+            else -> reportedFailureStatus(report)
+          }
+        val data =
+          JSONObject()
+            .put("status", status)
+            .put("high_risk", true)
+            .put("message", message)
+        putReportData(data, report)
+      }
       else -> JSONObject()
-        .put("status", if (report.success) "ok" else "failed")
-        .put("message", message)
+        .let { data ->
+          data.put("status", if (report.success) "ok" else "failed")
+          data.put("message", message)
+          putReportData(data, report)
+        }
     }
   }
 
@@ -154,5 +236,45 @@ class PythonSkillBridgeExecutor(
       is JSONArray -> value.toString()
       else -> value.toString()
     }
+  }
+
+  private fun putReportData(
+    json: JSONObject,
+    report: ActionExecutionReport,
+  ): JSONObject {
+    report.metadata.forEach { (key, value) ->
+      if (!json.has(key)) {
+        json.put(key, toJsonValue(value))
+      }
+    }
+    return json
+  }
+
+  private fun reportedFailureStatus(report: ActionExecutionReport): String =
+    report.metadata["status"]?.toString()?.takeIf { it.isNotBlank() } ?: "failed"
+
+  private fun toJsonValue(value: Any?): Any? =
+    when (value) {
+      null -> JSONObject.NULL
+      is Map<*, *> -> toJsonObject(value)
+      is List<*> -> toJsonArray(value)
+      is Array<*> -> toJsonArray(value.toList())
+      else -> value
+    }
+
+  private fun toJsonObject(map: Map<*, *>): JSONObject {
+    val json = JSONObject()
+    map.forEach { (key, value) ->
+      if (key is String) {
+        json.put(key, toJsonValue(value))
+      }
+    }
+    return json
+  }
+
+  private fun toJsonArray(list: List<*>): JSONArray {
+    val array = JSONArray()
+    list.forEach { item -> array.put(toJsonValue(item)) }
+    return array
   }
 }

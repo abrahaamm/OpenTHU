@@ -1,0 +1,866 @@
+{
+  "devices": {
+    "android-fb7bf199cad5f69b": {
+      "device_id": "android-fb7bf199cad5f69b",
+      "user_id": "android_user",
+      "platform": "android",
+      "fcm_token": null,
+      "app_version": "0.1.0",
+      "capabilities": [
+        "get_current_time",
+        "set_alarm",
+        "get_campus_activities",
+        "search",
+        "create_calendar_event",
+        "detect_calendar_conflicts",
+        "delete_calendar_event",
+        "open_url",
+        "read_notifications",
+        "create_reminder",
+        "show_summary",
+        "send_notification"
+      ],
+      "registered_at": "2026-05-13T03:43:28.429959+00:00",
+      "last_seen_at": "2026-05-13T03:43:28.429959+00:00"
+    }
+  },
+  "tasks": {
+    "task_149d0d9d38": {
+      "task_id": "task_149d0d9d38",
+      "request_id": "req_593ad43149ab",
+      "device_id": "android-fb7bf199cad5f69b",
+      "user_id": "android_user",
+      "goal": "帮我设置一个明早九点的闹钟",
+      "status": "completed",
+      "created_at": "2026-05-13T03:44:14.777220+00:00",
+      "updated_at": "2026-05-13T03:44:15.311110+00:00",
+      "plan_only_response": {
+        "request_id": "req_593ad43149ab",
+        "code": "OK",
+        "message": "Plan generated and ready for device execution",
+        "data": {
+          "mode": "plan_only",
+          "task_id": "task_149d0d9d38",
+          "task_status": "ready_for_device_execution",
+          "session": {
+            "openai_api_key": "sk-SKyAMSwrA7wm9weB2xSQJw31eCl05nR1OsHzP4dwiwvVprKc",
+            "llm_model": "moonshot-v1-8k-vision-preview",
+            "llm_base_url": "https://api.moonshot.cn/v1",
+            "user_id": "demo_user",
+            "search_provider": "duckduckgo",
+            "search_endpoint": "https://duckduckgo.com/html/",
+            "search_ttl": "3600"
+          },
+          "standardized_prompt": {
+            "objective": "设置闹钟",
+            "entities": [
+              "{'time': '明早九点', 'device': '智能手机'}"
+            ],
+            "constraints": [
+              "{'time_accuracy': '精确到分钟', 'repeat': '单次', 'sound': '默认铃声'}"
+            ],
+            "success_criteria": [
+              "闹钟在指定时间响起"
+            ],
+            "sensitivity": "low"
+          },
+          "normalization_warnings": [
+            "'entities' was not a list; coerced to list",
+            "'constraints' was not a list; coerced to list",
+            "'success_criteria' was not a list; coerced to list",
+            "missing 'sensitivity'; defaulted to 'low'"
+          ],
+          "skill_plan": [
+            {
+              "skill_name": "get_current_time",
+              "request_id": "req_5dcc9f883a",
+              "task_id": "task_149d0d9d38",
+              "args": {},
+              "risk_level": "low",
+              "requires_approval": false,
+              "description": "获取当前时间，以便计算明早九点的准确时间",
+              "status": "executed"
+            },
+            {
+              "skill_name": "set_alarm",
+              "request_id": "req_300dc2f5be",
+              "task_id": "task_149d0d9d38",
+              "args": {
+                "time": "09:00",
+                "label": "明早九点的闹钟",
+                "repeat": "单次",
+                "vibrate": false
+              },
+              "risk_level": "low",
+              "requires_approval": false,
+              "description": "在智能手机上设置一个明早九点的闹钟，使用默认铃声，单次提醒，不振动",
+              "status": "executed"
+            }
+          ],
+          "approved_skills": [
+            {
+              "skill_name": "get_current_time",
+              "request_id": "req_5dcc9f883a",
+              "task_id": "task_149d0d9d38",
+              "args": {},
+              "risk_level": "low",
+              "requires_approval": false,
+              "description": "获取当前时间，以便计算明早九点的准确时间",
+              "status": "executed",
+              "risk_reason": "rule-only: used declared skill risk",
+              "risk_source": "rule"
+            },
+            {
+              "skill_name": "set_alarm",
+              "request_id": "req_300dc2f5be",
+              "task_id": "task_149d0d9d38",
+              "args": {
+                "time": "09:00",
+                "label": "明早九点的闹钟",
+                "repeat": "单次",
+                "vibrate": false
+              },
+              "risk_level": "low",
+              "requires_approval": false,
+              "description": "在智能手机上设置一个明早九点的闹钟，使用默认铃声，单次提醒，不振动",
+              "status": "executed",
+              "risk_reason": "rule-only: used declared skill risk",
+              "risk_source": "rule"
+            }
+          ],
+          "blocked_skills": [],
+          "safety_report": {
+            "approved_count": 2,
+            "blocked_count": 0,
+            "risk_details": [
+              {
+                "skill_name": "get_current_time",
+                "request_id": "req_5dcc9f883a",
+                "risk_level": "low",
+                "reason": "rule-only: used declared skill risk",
+                "source": "rule"
+              },
+              {
+                "skill_name": "set_alarm",
+                "request_id": "req_300dc2f5be",
+                "risk_level": "low",
+                "reason": "rule-only: used declared skill risk",
+                "source": "rule"
+              }
+            ]
+          },
+          "approval_records": [],
+          "audit_log": [
+            {
+              "audit_id": "aud_290b153006",
+              "task_id": "task_149d0d9d38",
+              "skill_name": null,
+              "request_id": "req_593ad43149ab",
+              "stage": "plan",
+              "result": "success",
+              "message": "Planned 2 skill invocations",
+              "timestamp": "2026-05-13T03:44:14.775781+00:00"
+            },
+            {
+              "audit_id": "aud_f15aa0115f",
+              "task_id": "task_149d0d9d38",
+              "skill_name": null,
+              "request_id": "req_593ad43149ab",
+              "stage": "safety_check",
+              "result": "success",
+              "message": "Approved 2 skills, blocked 0 skills",
+              "timestamp": "2026-05-13T03:44:14.775781+00:00"
+            }
+          ],
+          "memory_update": {
+            "ts": "2026-05-13T03:44:14.776324+00:00",
+            "user_id": "android_user",
+            "task_id": "task_149d0d9d38",
+            "task_status": "in_progress",
+            "objective": "设置闹钟",
+            "entities": [
+              "{'time': '明早九点', 'device': '智能手机'}"
+            ],
+            "planned_skill_count": 2,
+            "success_count": 0,
+            "failure_count": 0,
+            "blocked_count": 0
+          },
+          "trace_log": [
+            {
+              "ts": "2026-05-13T03:44:11.011677+00:00",
+              "node": "normalize_requirement",
+              "detail": {
+                "entities": [
+                  "{'time': '明早九点', 'device': '智能手机'}"
+                ],
+                "sensitivity": "low",
+                "warnings_count": 4,
+                "source": "llm_chat_completions",
+                "error": ""
+              }
+            },
+            {
+              "ts": "2026-05-13T03:44:14.741124+00:00",
+              "node": "plan_skills",
+              "detail": {
+                "planned_count": 2,
+                "planned_skills": [
+                  "get_current_time",
+                  "set_alarm"
+                ],
+                "source": "llm"
+              }
+            },
+            {
+              "ts": "2026-05-13T03:44:14.775772+00:00",
+              "node": "safety_check",
+              "detail": {
+                "approved_count": 2,
+                "blocked_count": 0,
+                "blocked_skills": []
+              }
+            },
+            {
+              "ts": "2026-05-13T03:44:14.775795+00:00",
+              "node": "audit_record",
+              "detail": {
+                "audit_count": 2
+              }
+            },
+            {
+              "ts": "2026-05-13T03:44:14.777006+00:00",
+              "node": "memory_update",
+              "detail": {
+                "task_status": "in_progress",
+                "success_count": 0,
+                "failure_count": 0
+              }
+            }
+          ],
+          "available_skills": [
+            {
+              "skill_name": "login",
+              "description": "Authenticate with Tsinghua identity system",
+              "category": "auth",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "refresh_session",
+              "description": "Refresh an existing learn session",
+              "category": "auth",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "logout",
+              "description": "Clear local session and upstream learn session",
+              "category": "auth",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "get_user_info",
+              "description": "Fetch student profile",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "get_semesters",
+              "description": "Fetch semester list and current semester",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "get_courses",
+              "description": "Fetch course list for a semester",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "semester_id": "string"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "semester_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "get_notices",
+              "description": "Fetch course notices",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "course_ids": "list[string]"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "course_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "get_files",
+              "description": "Fetch course files",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "course_ids": "list[string]"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "course_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "get_assignments",
+              "description": "Fetch assignments and DDLs",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "course_ids": "list[string]"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "course_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "get_academic_calendar",
+              "description": "Fetch academic calendar events",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "start_date": "YYYYMMDD",
+                "end_date": "YYYYMMDD"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "start_date": {
+                    "type": "string"
+                  },
+                  "end_date": {
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "get_campus_activities",
+              "description": "Fetch campus activity information",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "query": "string (optional; detailed question for activity RAG answer)",
+                "keywords": "list[string] (optional)",
+                "start_date": "YYYY-MM-DD or YYYYMMDD (optional)",
+                "end_date": "YYYY-MM-DD or YYYYMMDD (optional)",
+                "limit": "integer (optional)"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "keywords": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "start_date": {
+                    "type": "string"
+                  },
+                  "end_date": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "search",
+              "description": "Search the web and summarize retrieved evidence",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": true,
+              "skill_version": "v1",
+              "args_schema": {
+                "query": "string (required)",
+                "scope": "web|all (optional)",
+                "scene": "campus|general|hybrid (optional, default hybrid)",
+                "max_results": "integer (optional)",
+                "supplemental_results": "integer (optional, only for hybrid)",
+                "domains": "list[string] (optional)",
+                "freshness_days": "integer (optional)",
+                "use_rag": "bool (optional)",
+                "language": "string (optional)"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "web",
+                      "all"
+                    ]
+                  },
+                  "scene": {
+                    "type": "string",
+                    "enum": [
+                      "campus",
+                      "general",
+                      "hybrid"
+                    ]
+                  },
+                  "max_results": {
+                    "type": "integer"
+                  },
+                  "supplemental_results": {
+                    "type": "integer"
+                  },
+                  "domains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "freshness_days": {
+                    "type": "integer"
+                  },
+                  "use_rag": {
+                    "type": "boolean"
+                  },
+                  "language": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "additionalProperties": true
+              }
+            },
+            {
+              "skill_name": "get_current_time",
+              "description": "Get current local time and timezone context for planning",
+              "category": "data",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "skill_name": "create_reminder",
+              "description": "Create a reminder item",
+              "category": "action",
+              "risk_level": "medium",
+              "requires_approval": true,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "create_calendar_event",
+              "description": "Create a system calendar event",
+              "category": "action",
+              "risk_level": "medium",
+              "requires_approval": true,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "start_time": {
+                    "type": "string"
+                  },
+                  "end_time": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "conflict_decision": {
+                    "type": "string",
+                    "enum": [
+                      "prompt_user",
+                      "skip_write",
+                      "coexist",
+                      "delete_conflicts"
+                    ]
+                  },
+                  "allow_conflict_delete": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "title",
+                  "start_time",
+                  "end_time"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "skill_name": "detect_calendar_conflicts",
+              "description": "Detect conflicts between a candidate event and existing calendar events",
+              "category": "action",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "start_time": {
+                    "type": "string"
+                  },
+                  "end_time": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "start_time",
+                  "end_time"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "skill_name": "delete_calendar_event",
+              "description": "Delete calendar events by id (destructive)",
+              "category": "action",
+              "risk_level": "high",
+              "requires_approval": true,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "event_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "confirm_delete": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "confirm_delete"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "skill_name": "set_alarm",
+              "description": "Set a system alarm",
+              "category": "action",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {
+                "time": "string",
+                "label": "string",
+                "repeat": "string",
+                "vibrate": "bool"
+              },
+              "args_json_schema": {
+                "type": "object",
+                "properties": {
+                  "time": {
+                    "type": "string",
+                    "description": "Alarm time in local-time semantics. Accepts `HH:mm` (preferred) or local ISO8601 datetime, e.g. `07:30` / `2026-04-28T07:30:00`."
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "Optional label or message for the alarm"
+                  },
+                  "repeat": {
+                    "type": "string",
+                    "description": "Optional repeat rule"
+                  },
+                  "vibrate": {
+                    "type": "boolean",
+                    "description": "Optional flag to enable vibration"
+                  }
+                },
+                "required": [
+                  "time"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "skill_name": "read_notifications",
+              "description": "Read unread system notifications",
+              "category": "action",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            {
+              "skill_name": "show_summary",
+              "description": "Display a structured summary to the user",
+              "category": "action",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "send_notification",
+              "description": "Send a local system notification",
+              "category": "action",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            },
+            {
+              "skill_name": "open_url",
+              "description": "Open a URL in-app or externally",
+              "category": "action",
+              "risk_level": "low",
+              "requires_approval": false,
+              "session_required": false,
+              "skill_version": "v1",
+              "args_schema": {},
+              "args_json_schema": {}
+            }
+          ],
+          "normalizer_source": "llm_chat_completions",
+          "planner_source": "llm"
+        }
+      },
+      "skill_plan": [
+        {
+          "skill_name": "get_current_time",
+          "request_id": "req_5dcc9f883a",
+          "task_id": "task_149d0d9d38",
+          "args": {},
+          "risk_level": "low",
+          "requires_approval": false,
+          "description": "获取当前时间，以便计算明早九点的准确时间",
+          "status": "executed"
+        },
+        {
+          "skill_name": "set_alarm",
+          "request_id": "req_300dc2f5be",
+          "task_id": "task_149d0d9d38",
+          "args": {
+            "time": "09:00",
+            "label": "明早九点的闹钟",
+            "repeat": "单次",
+            "vibrate": false
+          },
+          "risk_level": "low",
+          "requires_approval": false,
+          "description": "在智能手机上设置一个明早九点的闹钟，使用默认铃声，单次提醒，不振动",
+          "status": "executed"
+        }
+      ],
+      "approved_skills": [
+        {
+          "skill_name": "get_current_time",
+          "request_id": "req_5dcc9f883a",
+          "task_id": "task_149d0d9d38",
+          "args": {},
+          "risk_level": "low",
+          "requires_approval": false,
+          "description": "获取当前时间，以便计算明早九点的准确时间",
+          "status": "executed",
+          "risk_reason": "rule-only: used declared skill risk",
+          "risk_source": "rule"
+        },
+        {
+          "skill_name": "set_alarm",
+          "request_id": "req_300dc2f5be",
+          "task_id": "task_149d0d9d38",
+          "args": {
+            "time": "09:00",
+            "label": "明早九点的闹钟",
+            "repeat": "单次",
+            "vibrate": false
+          },
+          "risk_level": "low",
+          "requires_approval": false,
+          "description": "在智能手机上设置一个明早九点的闹钟，使用默认铃声，单次提醒，不振动",
+          "status": "executed",
+          "risk_reason": "rule-only: used declared skill risk",
+          "risk_source": "rule"
+        }
+      ],
+      "blocked_skills": [],
+      "device_results": [
+        {
+          "request_id": "req_300dc2f5be",
+          "skill_name": "set_alarm",
+          "code": "OK",
+          "success": true,
+          "message": "Alarm creation requested in background mode for 9:00",
+          "data": {
+            "status": "executed",
+            "recoverable": false,
+            "semantic": "alarm_created_background_requested",
+            "metadata": {
+              "alarm_hour": 9,
+              "alarm_minute": 0,
+              "label": "明早九点的闹钟",
+              "skip_ui": true
+            },
+            "action_id": "set_alarm"
+          },
+          "source": "android_app",
+          "from_cache": false,
+          "fetched_at": "2026-05-13T03:44:15.311084+00:00"
+        }
+      ],
+      "in_flight_request_ids": [],
+      "completed_request_ids": [
+        "req_300dc2f5be",
+        "req_5dcc9f883a"
+      ],
+      "server_results": [
+        {
+          "request_id": "req_5dcc9f883a",
+          "skill_name": "get_current_time",
+          "code": "OK",
+          "success": true,
+          "message": "OK",
+          "data": {
+            "status": "ok",
+            "local_datetime": "2026-05-13T11:44:14+08:00",
+            "local_date": "2026-05-13",
+            "local_time": "11:44",
+            "timezone": "CST",
+            "timezone_name": "CST",
+            "utc_offset": "+08:00",
+            "epoch_ms": 1778643854777
+          },
+          "source": "system_clock",
+          "from_cache": false,
+          "fetched_at": "2026-05-13T03:44:14.777806+00:00"
+        }
+      ]
+    }
+  }
+}

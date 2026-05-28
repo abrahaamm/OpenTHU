@@ -9,6 +9,7 @@ import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PendingConflictResolution
+import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
@@ -95,6 +96,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       snapshot = snapshot,
       contextSignals = snapshot.contextSignals,
       systemActions = snapshot.systemActions,
+      planningCards = snapshot.planningCards,
       safetyRecords = snapshot.safetyRecords,
       tasks = snapshot.tasks,
       memoryRecords = snapshot.memoryRecords,
@@ -125,10 +127,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = destination
   }
 
-  fun sendChatMessage(text: String) {
+  fun sendChatMessage(
+    text: String,
+    attachedFileUri: String? = null,
+    attachedFileName: String? = null,
+  ) {
     val normalized = text.trim()
-    if (normalized.isEmpty()) return
-    val planned = runtime.planGoal(normalized)
+    val normalizedUri = attachedFileUri.orEmpty().trim()
+    if (normalized.isEmpty() && normalizedUri.isEmpty()) return
+    val planned =
+      if (normalizedUri.isNotEmpty()) {
+        runtime.planGoalWithAttachment(
+          goal = normalized,
+          fileUri = normalizedUri,
+          fileName = attachedFileName.orEmpty().trim(),
+        )
+      } else {
+        runtime.planGoal(normalized)
+      }
     if (planned) {
       runtime.runActions()
     }
@@ -184,6 +200,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun executeAction(actionId: String) {
     runtime.executeAction(actionId)
+    selectedDestination = AppDestination.Planning
+  }
+
+  fun deletePlanningCard(cardId: String) {
+    runtime.deletePlanningCard(cardId)
+    selectedDestination = AppDestination.Planning
+  }
+
+  fun movePlanningCard(
+    cardId: String,
+    offset: Int,
+  ) {
+    runtime.movePlanningCard(cardId, offset)
     selectedDestination = AppDestination.Planning
   }
 
@@ -256,6 +285,7 @@ data class MainUiState(
   val snapshot: RuntimeSnapshot,
   val contextSignals: List<ContextSignal>,
   val systemActions: List<SystemAction>,
+  val planningCards: List<PlanningCard>,
   val safetyRecords: List<SafetyRecord>,
   val tasks: List<AgentTask>,
   val memoryRecords: List<MemoryRecord>,
