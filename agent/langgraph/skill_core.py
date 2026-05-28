@@ -23,6 +23,9 @@ class SkillSpec:
     session_required: bool = False
     args_schema: dict[str, str] = field(default_factory=dict)
     args_json_schema: dict[str, Any] = field(default_factory=dict)
+    when_to_use: str = ""
+    avoid_when: str = ""
+    example_utterances: list[str] = field(default_factory=list)
 
     def to_planner_dict(self) -> dict[str, Any]:
         return {
@@ -35,6 +38,9 @@ class SkillSpec:
             "skill_version": self.skill_version,
             "args_schema": self.args_schema,
             "args_json_schema": self.args_json_schema,
+            "when_to_use": self.when_to_use,
+            "avoid_when": self.avoid_when,
+            "example_utterances": self.example_utterances,
         }
 
 
@@ -159,6 +165,14 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=True,
+            when_to_use="Use when the user asks to view, fetch, check, import, or summarize their class timetable/course schedule/课表/课程表.",
+            avoid_when="Do not use for generic course catalog questions; use get_courses for course lists.",
+            example_utterances=[
+                "拉取我的课表",
+                "帮我看看今天有什么课",
+                "fetch my course schedule",
+                "show my timetable this week",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -199,6 +213,11 @@ def build_default_registry() -> SkillRegistry:
             False,
             session_required=True,
             args_schema={"course_ids": "list[string]"},
+            when_to_use="Use for assignment and deadline lists exposed by the normal course-info API, not the Android Tsinghua Learn homework crawler.",
+            example_utterances=[
+                "帮我获取当前作业和DDL",
+                "show assignment deadlines",
+            ],
         ),
         SkillSpec(
             "get_homework_cookie",
@@ -207,6 +226,12 @@ def build_default_registry() -> SkillRegistry:
             "high",
             True,
             session_required=False,
+            when_to_use="Use only when the user explicitly provides a Learn cookie, CSRF token, or pasted authentication header to load.",
+            avoid_when="Do not use just because the user wants to check homework; homework skills should return login-required if no login state is available.",
+            example_utterances=[
+                "这是网络学堂 cookie：JSESSIONID=...",
+                "load this Learn cookie for homework",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -230,6 +255,14 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=False,
+            when_to_use="Use when the user asks to check/list/fetch all Tsinghua Learn homework, assignments, due dates, homework status, or course homework records.",
+            avoid_when="If the user specifically asks for unsubmitted/not submitted/missing homework, prefer crawl_unsubmitted_homeworks.",
+            example_utterances=[
+                "帮我看看网络学堂作业",
+                "check my homework",
+                "list my homework assignments",
+                "看看最近有哪些作业",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -255,6 +288,14 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=False,
+            when_to_use="Use when the user asks to find/check/list homework that is unsubmitted, not submitted, missing, unfinished, overdue, 未提交, 未交, 没交, or 待提交.",
+            avoid_when="Do not answer with a generic AI limitation. This skill is allowed to inspect authorized homework state; if login is missing it will report that the user should log in from settings.",
+            example_utterances=[
+                "check my homework that is not submitted",
+                "find unsubmitted assignments",
+                "帮我看看还没交的作业",
+                "网络学堂有没有未提交作业",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -280,6 +321,11 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=False,
+            when_to_use="Use after a homework item is known and the user asks to view, open, parse, or check files/attachments for that homework.",
+            example_utterances=[
+                "看看这个作业有哪些附件",
+                "preview attachments for this homework",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -304,6 +350,12 @@ def build_default_registry() -> SkillRegistry:
             "medium",
             True,
             session_required=False,
+            when_to_use="Use when the user asks to upload an attached local file into a specific homework submission. Preserve attached_file.file_uri and file_name from the user message.",
+            avoid_when="Do not use for final submission without explicit submit intent; upload only stages the attachment.",
+            example_utterances=[
+                "把这个文件上传到作业",
+                "upload the attached PDF to my homework",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -333,6 +385,12 @@ def build_default_registry() -> SkillRegistry:
             "high",
             True,
             session_required=False,
+            when_to_use="Use when the user explicitly asks to submit/turn in homework content or uploaded files.",
+            avoid_when="Do not use for merely checking homework status or uploading a draft file.",
+            example_utterances=[
+                "提交这份作业",
+                "turn in this homework with the attached file",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -378,6 +436,13 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=True,
+            when_to_use="Use when the user asks about campus events, lectures, activities, notices, registration opportunities, or 校园活动/讲座/资讯.",
+            avoid_when="Do not prepend get_semesters unless the user explicitly asks about semesters or course terms.",
+            example_utterances=[
+                "帮我看看最近校内有什么与AI有关的活动",
+                "近期有什么讲座",
+                "campus events about AI",
+            ],
             args_schema={
                 "query": "string (optional; detailed question for activity RAG answer)",
                 "keywords": "list[string] (optional)",
@@ -393,6 +458,13 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=True,
+            when_to_use="Use when the user asks to search, look up, find current information, compare sources, or search 校内/校外 materials.",
+            avoid_when="Do not use for simple casual chat or questions that can be answered directly without retrieval.",
+            example_utterances=[
+                "帮我搜索这个主题",
+                "查一下校内关于AI的通知",
+                "search the web for recent information",
+            ],
             args_schema={
                 "query": "string (required)",
                 "scope": "web|all (optional)",
@@ -412,6 +484,11 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=False,
+            when_to_use="Use before alarm/reminder/calendar planning when the user uses relative time such as 明天, 后天, 今晚, tomorrow, next Monday.",
+            example_utterances=[
+                "明早八点叫我",
+                "remind me tomorrow",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {},
@@ -419,13 +496,30 @@ def build_default_registry() -> SkillRegistry:
                 "additionalProperties": False,
             },
         ),
-        SkillSpec("create_reminder", "Create a reminder item", "action", "medium", True),
+        SkillSpec(
+            "create_reminder",
+            "Create a reminder item",
+            "action",
+            "medium",
+            True,
+            when_to_use="Use when the user asks to create a reminder, todo, task, 待办, 提醒事项, or wants to be reminded about something.",
+            example_utterances=[
+                "明天提醒我交作业",
+                "create a todo for the meeting",
+            ],
+        ),
         SkillSpec(
             "create_calendar_event",
             "Create a calendar event on device for schedules, classes, deadlines, and task reminders",
             "action",
             "medium",
             True,
+            when_to_use="Use when the user asks to add/create/schedule something on the system calendar or 日历.",
+            avoid_when="Use create_reminder for lightweight todo/reminder requests that are not calendar events.",
+            example_utterances=[
+                "把这周的作业DDL加到日历",
+                "schedule this meeting on my calendar",
+            ],
             args_json_schema={
                 "type": "object",
                 "properties": {
@@ -486,6 +580,11 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "low",
             False,
+            when_to_use="Use when the user asks to set an alarm/闹钟 at a time.",
+            example_utterances=[
+                "设置明早八点的闹钟",
+                "wake me up at 7:30",
+            ],
             args_schema={
                 "time": "string",
                 "label": "string",
@@ -525,6 +624,11 @@ def build_default_registry() -> SkillRegistry:
             "action",
             "low",
             False,
+            when_to_use="Use when the user asks to read, check, summarize, or inspect unread system notifications/通知栏/未读通知.",
+            example_utterances=[
+                "读取一下未读通知",
+                "summarize my unread notifications",
+            ],
             args_schema={},
             args_json_schema={
                 "type": "object",

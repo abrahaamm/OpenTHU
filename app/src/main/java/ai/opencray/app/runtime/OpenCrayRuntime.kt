@@ -12,6 +12,7 @@ import ai.opencray.app.data.repository.RuntimeRepository
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.PendingConflictResolution
+import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.execution.ActionExecutor
@@ -102,6 +103,33 @@ class OpenCrayRuntime(
 
   fun selectConversation(conversationId: String): Boolean = chatRepository.selectConversation(conversationId)
 
+  fun deletePlanningCard(cardId: String) {
+    val current = snapshot()
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        planningCards = current.planningCards.filterNot { it.id == cardId },
+        dismissedPlanningCardIds = current.dismissedPlanningCardIds + cardId,
+        recentEvents = listOf("Planning card deleted: $cardId") + current.recentEvents,
+      ),
+    )
+  }
+
+  fun movePlanningCard(
+    cardId: String,
+    offset: Int,
+  ) {
+    if (offset == 0) return
+    val current = snapshot()
+    val cards = current.planningCards.toMutableList()
+    val fromIndex = cards.indexOfFirst { it.id == cardId }
+    if (fromIndex < 0) return
+    val toIndex = (fromIndex + offset).coerceIn(0, cards.lastIndex)
+    if (fromIndex == toIndex) return
+    val item = cards.removeAt(fromIndex)
+    cards.add(toIndex, item)
+    runtimeRepository.replaceSnapshot(current.copy(planningCards = cards))
+  }
+
   /**
    * Set a delegate so the runtime can request calendar permissions from the Activity context.
    * Call this from MainActivity.onCreate / onStart.
@@ -171,6 +199,18 @@ class OpenCrayRuntime(
     )
 
     val report = actionExecutor.execute(action, "UI Manual Invocation")
+    val now = System.currentTimeMillis()
+    val task =
+      AgentTask(
+        id = "manual_${UUID.randomUUID().toString().take(10)}",
+        goal = "UI Manual Invocation",
+        status = if (report.success) "completed" else "failed",
+        attempt = 1,
+        createdAtEpochMs = now,
+        updatedAtEpochMs = now,
+        summary = "Manual skill invocation.",
+      )
+    upsertPlanningCard(actionPlanningCard(task, action, status = if (report.success) "executed" else "failed", result = report.message))
 
     if (report.semantic == "unsupported_action") {
       chatRepository.appendMessage(ChatRole.System, "找不到 skill 或未实现: $skillId")
@@ -386,6 +426,11 @@ class OpenCrayRuntime(
 
     chatRepository.sendMessage(displayGoal)
 
+    if (maybeCreateManualPlanningCard(displayGoal)) {
+      streamAssistant("已创建规划卡片，放到规划页顶部了。你可以在那里上移、下移或删除它。")
+      return false
+    }
+
     if (gatewayRegistered) {
       handleStreamingRunViaGateway(plannerGoal)
       return false
@@ -398,6 +443,50 @@ class OpenCrayRuntime(
 
     streamAssistant(agentCoreUnavailableMessage())
     return false
+  }
+
+  private fun maybeCreateManualPlanningCard(message: String): Boolean {
+    val normalized = message.trim()
+    val lower = normalized.lowercase(Locale.getDefault())
+    val asksForCard =
+      normalized.contains("卡片") &&
+        listOf("创建", "新增", "生成", "添加", "加一个", "做一个").any { normalized.contains(it) }
+    if (!asksForCard && !lower.contains("create plan card")) return false
+
+    val content = extractManualPlanningCardContent(normalized).ifBlank { normalized }
+    val now = System.currentTimeMillis()
+    val title =
+      content
+        .lineSequence()
+        .firstOrNull()
+        .orEmpty()
+        .trim()
+        .take(28)
+        .ifBlank { "手动规划卡片" }
+    upsertPlanningCard(
+      PlanningCard(
+        id = "manual_${UUID.randomUUID().toString().take(10)}",
+        title = title,
+        body = content,
+        type = inferPlanningCardType(normalized),
+        source = "对话生成",
+        status = "planned",
+        createdAtEpochMs = now,
+        updatedAtEpochMs = now,
+      ),
+    )
+    return true
+  }
+
+  private fun extractManualPlanningCardContent(text: String): String {
+    val colonContent = text.substringAfter('：', "").ifBlank { text.substringAfter(':', "") }
+    if (colonContent.isNotBlank()) return colonContent.trim()
+    return text
+      .replace(
+        Regex("^(请|帮我|给我)?\\s*(创建|新增|生成|添加|加一个|做一个)\\s*(一张|一个)?\\s*(规划)?卡片[，,。\\s]*"),
+        "",
+      )
+      .trim()
   }
 
   private fun handleLocalChat(message: String) {
@@ -531,6 +620,9 @@ class OpenCrayRuntime(
             -> {
               val id = ensureAssistantMessage()
               chatRepository.appendEvent(id, event.toChatEvent())
+              if (event.type == "tool_call" || event.type == "tool_result") {
+                streamEventPlanningCard(event)?.let { upsertPlanningCard(it) }
+              }
               if (event.type == "tool_call" && event.status == "queued") {
                 if (event.taskId.isNotBlank()) {
                   serverSummaryTaskIds.add(event.taskId)
@@ -685,6 +777,7 @@ class OpenCrayRuntime(
   private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
     chatRepository.getMessages()
       .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+      .dropLast(1)
       .takeLast(limit)
       .map { message ->
         mapOf(
@@ -851,6 +944,7 @@ class OpenCrayRuntime(
           goal = goal,
           approveSensitive = true,
           session = buildGatewaySession(),
+          history = buildGatewayChatHistory(),
         )
       if (!result.success || result.data == null) {
         gatewayRegistered = false
@@ -895,6 +989,15 @@ class OpenCrayRuntime(
         updatedAtEpochMs = now,
         summary = "Gateway planned ${approvedActions.size} approved, ${blockedActions.size} blocked actions.",
       )
+    val planningCards =
+      allActions.fold(current.planningCards) { cards, action ->
+        val card = actionPlanningCard(task, action, status = action.status)
+        if (card.id in current.dismissedPlanningCardIds) {
+          cards
+        } else {
+          upsertPlanningCardList(cards, card)
+        }
+      }
     val memory = memoryManager.updateFromGoal(current.memoryRecords, goal)
     val audit =
       allActions.map { action ->
@@ -912,6 +1015,7 @@ class OpenCrayRuntime(
       current.copy(
         connectionStatus = "Server plan ready",
         systemActions = allActions,
+        planningCards = planningCards,
         safetyRecords = safetyRecords + current.safetyRecords,
         tasks = listOf(task) + current.tasks.filterNot { it.id == task.id }.take(9),
         memoryRecords = memory,
@@ -981,11 +1085,19 @@ class OpenCrayRuntime(
           summary = "Task received from Agent-Core queue.",
         )
     val action = dispatch.toSystemAction(status = "approved")
+    val card = actionPlanningCard(task, action, status = "running")
+    val nextPlanningCards =
+      if (card.id in before.dismissedPlanningCardIds) {
+        before.planningCards
+      } else {
+        upsertPlanningCardList(before.planningCards, card)
+      }
 
     runtimeRepository.replaceSnapshot(
       before.copy(
         tasks = listOf(task) + before.tasks.filterNot { it.id == task.id }.take(9),
         systemActions = upsertAction(before.systemActions, action),
+        planningCards = nextPlanningCards,
         recentEvents = listOf("Dispatched ${action.id} (${dispatch.requestId}).") + before.recentEvents,
       ),
     )
@@ -1160,10 +1272,18 @@ class OpenCrayRuntime(
     } else {
       null
     }
+    val card = actionPlanningCard(task, action, status = nextStatus, result = report.message)
+    val planningCards =
+      if (card.id in current.dismissedPlanningCardIds) {
+        current.planningCards
+      } else {
+        upsertPlanningCardList(current.planningCards, card)
+      }
 
     runtimeRepository.replaceSnapshot(
       current.copy(
         systemActions = updatedActions,
+        planningCards = planningCards,
         pendingConflict = pendingConflict,
         auditTrail = listOf(audit) + current.auditTrail.take(149),
         recentEvents = listOf("Action ${action.id}: ${if (report.success) "success" else if (needsConflictResolution) "conflict_pending" else "failed"}") + current.recentEvents,
@@ -1360,6 +1480,134 @@ class OpenCrayRuntime(
       existing.mapIndexed { idx, item -> if (idx == index) incoming else item }
     } else {
       listOf(incoming) + existing
+    }
+  }
+
+  private fun upsertPlanningCard(card: PlanningCard) {
+    val current = snapshot()
+    if (card.id in current.dismissedPlanningCardIds) return
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        planningCards = upsertPlanningCardList(current.planningCards, card),
+        recentEvents = listOf("Planning card updated: ${card.title}") + current.recentEvents,
+      ),
+    )
+  }
+
+  private fun upsertPlanningCardList(
+    existing: List<PlanningCard>,
+    incoming: PlanningCard,
+  ): List<PlanningCard> {
+    val index = existing.indexOfFirst { it.id == incoming.id }
+    return if (index >= 0) {
+      existing.mapIndexed { idx, item ->
+        if (idx == index) {
+          incoming.copy(createdAtEpochMs = item.createdAtEpochMs)
+        } else {
+          item
+        }
+      }
+    } else {
+      listOf(incoming) + existing
+    }
+  }
+
+  private fun actionPlanningCard(
+    task: AgentTask,
+    action: SystemAction,
+    status: String = action.status,
+    result: String? = null,
+  ): PlanningCard {
+    val now = System.currentTimeMillis()
+    val skillName = action.id.substringBefore("#")
+    val title = planningCardTitle(skillName, action.title)
+    val body =
+      buildString {
+        append(action.summary.ifBlank { action.explain.ifBlank { action.title } })
+        if (!result.isNullOrBlank()) {
+          append("\n结果：")
+          append(result.take(220))
+        }
+      }
+    return PlanningCard(
+      id = planningCardId(task.id, action.requestId, skillName),
+      title = title,
+      body = body,
+      type = inferPlanningCardType(skillName + " " + action.title + " " + action.summary),
+      source = "Skill 调用",
+      status = status,
+      createdAtEpochMs = now,
+      updatedAtEpochMs = now,
+      actionId = action.id,
+      taskId = task.id,
+      metadata = mapOf("skill" to skillName),
+    )
+  }
+
+  private fun streamEventPlanningCard(event: AgentStreamEvent): PlanningCard? {
+    val skillName = event.skillName.ifBlank { return null }
+    val now = System.currentTimeMillis()
+    val title = planningCardTitle(skillName, event.title)
+    return PlanningCard(
+      id = planningCardId(event.taskId, event.requestId, skillName),
+      title = title,
+      body = event.content.ifBlank { "正在调用 $skillName。" }.take(360),
+      type = inferPlanningCardType(skillName + " " + event.title + " " + event.content),
+      source = "Agent-Core",
+      status = if (event.type == "tool_result") event.status.ifBlank { "completed" } else event.status.ifBlank { "running" },
+      createdAtEpochMs = now,
+      updatedAtEpochMs = now,
+      actionId = skillName,
+      taskId = event.taskId.ifBlank { null },
+      metadata = mapOf("skill" to skillName),
+    )
+  }
+
+  private fun planningCardId(
+    taskId: String,
+    requestId: String?,
+    skillName: String,
+  ): String {
+    val taskPart = taskId.ifBlank { "local" }
+    val requestPart = requestId.orEmpty().ifBlank { skillName }
+    return "skill_${taskPart}_${requestPart}".replace(Regex("[^A-Za-z0-9_\\-]"), "_")
+  }
+
+  private fun planningCardTitle(
+    skillName: String,
+    fallback: String,
+  ): String {
+    val label =
+      when (skillName) {
+        "set_alarm" -> "闹钟提醒"
+        "create_reminder" -> "待办提醒"
+        "get_course_schedule" -> "课表拉取"
+        "get_courses" -> "课程列表"
+        "get_semesters" -> "学期信息"
+        "get_academic_calendar" -> "校历信息"
+        "crawl_course_homeworks" -> "作业列表"
+        "crawl_unsubmitted_homeworks" -> "未交作业"
+        "create_calendar_event" -> "日历事项"
+        "read_notifications" -> "未读通知"
+        "get_campus_activities" -> "校园活动"
+        "search" -> "搜索结果"
+        "show_summary" -> "结果总结"
+        else -> fallback.ifBlank { skillName }
+      }
+    return label.take(32)
+  }
+
+  private fun inferPlanningCardType(text: String): String {
+    val normalized = text.lowercase(Locale.getDefault())
+    return when {
+      normalized.contains("create_reminder") || normalized.contains("todo") || text.contains("待办") -> "todo"
+      normalized.contains("alarm") || text.contains("闹钟") || text.contains("提醒") -> "alarm"
+      normalized.contains("course") || normalized.contains("semester") || text.contains("课表") || text.contains("课程") -> "course"
+      normalized.contains("homework") || text.contains("作业") -> "homework"
+      normalized.contains("calendar") || text.contains("日历") || text.contains("校历") -> "calendar"
+      normalized.contains("notification") || text.contains("通知") || text.contains("未读") -> "notification"
+      normalized.contains("search") || text.contains("搜索") -> "search"
+      else -> "plan"
     }
   }
 

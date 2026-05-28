@@ -385,6 +385,28 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/planning_cards_title"
+                            android:textColor="@color/opencray_ink"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <LinearLayout
+                            android:id="@+id/planning_cards_container"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="vertical" />
+                    </LinearLayout>
+
+                    <LinearLayout
                         android:id="@+id/context_panel"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -420,7 +442,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="开发者上下文"
+                                android:text="规划上下文"
                                 android:textColor="@color/opencray_ink"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -536,7 +558,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="内部执行流程"
+                                android:text="执行流程详情"
                                 android:textColor="@color/opencray_ink"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
@@ -574,7 +596,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
-                            android:text="显示开发者信息" />
+                            android:text="@string/planning_details_show" />
 
                         <TextView
                             android:id="@+id/action_summary_text"
@@ -747,6 +769,13 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/capability_safety"
+                            android:textColor="@color/opencray_ink" />
+
+                        <CheckBox
+                            android:id="@+id/capability_planning_details_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/capability_planning_details"
                             android:textColor="@color/opencray_ink" />
                     </LinearLayout>
 

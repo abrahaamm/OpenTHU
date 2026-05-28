@@ -35,6 +35,9 @@
 
     <string name="capability_notification">允许通知感知</string>
     <string name="capability_safety">启用安全审查与回滚</string>
+    <string name="capability_planning_details">显示规划详情</string>
+    <string name="planning_details_show">显示规划详情</string>
+    <string name="planning_details_hide">隐藏规划详情</string>
     <string name="connect_button">连接校园数据源</string>
     <string name="host_hint">校园数据源 Host，例如 192.168.0.88</string>
     <string name="port_hint">端口，例如 18789</string>
@@ -45,6 +48,11 @@
     <string name="preference_waiting">偏好文件入口已预留，后续会接入真实存储。</string>
 
     <string name="planning_snapshot_title">学习与执行快照</string>
+    <string name="planning_cards_title">规划卡片</string>
+    <string name="planning_cards_empty">还没有规划卡片。调用闹钟、待办、课表等能力，或在对话中说“创建一个卡片：……”即可生成。</string>
+    <string name="planning_card_move_up">上移</string>
+    <string name="planning_card_move_down">下移</string>
+    <string name="planning_card_delete">删除</string>
     <string name="planning_schedule_title">课程与日程</string>
     <string name="planning_alarm_title">提醒与闹钟</string>
     <string name="planning_todo_title">待办事项</string>

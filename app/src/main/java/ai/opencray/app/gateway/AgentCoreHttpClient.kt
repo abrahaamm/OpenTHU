@@ -114,6 +114,7 @@ class AgentCoreHttpClient {
     goal: String,
     approveSensitive: Boolean = true,
     session: Map<String, Any?> = emptyMap(),
+    history: List<Map<String, String>> = emptyList(),
   ): GatewayResult<PlanTaskData> {
     val payload =
       JSONObject()
@@ -122,6 +123,7 @@ class AgentCoreHttpClient {
         .put("goal", goal)
         .put("approve_sensitive", approveSensitive)
         .put("session", session.toJsonObject())
+        .put("history", history.map { it.toJsonObject() }.toJsonArray())
 
     val result = requestJson(config, "POST", "/api/v1/agent/tasks/plan", payload)
     if (!result.success || result.data == null) {
