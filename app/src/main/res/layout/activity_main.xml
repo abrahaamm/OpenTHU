@@ -140,35 +140,64 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
                     android:background="@drawable/chat_composer_surface"
-                    android:gravity="bottom"
-                    android:orientation="horizontal"
+                    android:orientation="vertical"
                     android:padding="10dp">
 
-                    <EditText
-                        android:id="@+id/chat_input"
-                        android:layout_width="0dp"
+                    <TextView
+                        android:id="@+id/chat_attachment_text"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:background="@drawable/chat_input_surface"
-                        android:gravity="top|start"
-                        android:hint="@string/chat_input_hint"
-                        android:minHeight="56dp"
-                        android:paddingStart="16dp"
-                        android:paddingTop="14dp"
-                        android:paddingEnd="16dp"
-                        android:paddingBottom="14dp"
-                        android:textColor="@color/opencray_ink"
-                        android:textColorHint="@color/opencray_muted"
-                        android:textSize="15sp" />
+                        android:layout_marginBottom="8dp"
+                        android:background="@drawable/chat_status_chip_surface"
+                        android:paddingStart="12dp"
+                        android:paddingTop="7dp"
+                        android:paddingEnd="12dp"
+                        android:paddingBottom="7dp"
+                        android:textColor="@color/opencray_primary_dark"
+                        android:textSize="12sp"
+                        android:visibility="gone" />
 
-                    <Button
-                        android:id="@+id/chat_send_button"
-                        style="@style/OpenCray.PrimaryButton"
-                        android:layout_width="72dp"
-                        android:layout_height="56dp"
-                        android:layout_marginStart="10dp"
-                        android:minWidth="0dp"
-                        android:text="@string/chat_send" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="bottom"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/chat_attach_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="64dp"
+                            android:layout_height="56dp"
+                            android:minWidth="0dp"
+                            android:text="@string/chat_attach_file" />
+
+                        <EditText
+                            android:id="@+id/chat_input"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="10dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/chat_input_surface"
+                            android:gravity="top|start"
+                            android:hint="@string/chat_input_hint"
+                            android:minHeight="56dp"
+                            android:paddingStart="16dp"
+                            android:paddingTop="14dp"
+                            android:paddingEnd="16dp"
+                            android:paddingBottom="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted"
+                            android:textSize="15sp" />
+
+                        <Button
+                            android:id="@+id/chat_send_button"
+                            style="@style/OpenCray.PrimaryButton"
+                            android:layout_width="72dp"
+                            android:layout_height="56dp"
+                            android:layout_marginStart="10dp"
+                            android:minWidth="0dp"
+                            android:text="@string/chat_send" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
 
@@ -919,6 +948,71 @@
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
                             android:hint="@string/setting_webvpn_csrf_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_learn_base_url_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_learn_base_url_description" />
+
+                        <EditText
+                            android:id="@+id/setting_learn_base_url_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_learn_base_url_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <Button
+                            android:id="@+id/setting_learn_cookie_login_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="48dp"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/setting_learn_cookie_login" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_homework_cookie_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_homework_cookie_description" />
+
+                        <EditText
+                            android:id="@+id/setting_homework_cookie_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_homework_cookie_hint"
+                            android:padding="14dp"
+                            android:textColor="@color/opencray_ink"
+                            android:textColorHint="@color/opencray_muted" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldTitle"
+                            android:text="@string/setting_homework_csrf_label" />
+
+                        <TextView
+                            style="@style/OpenCraySettingsFieldHelp"
+                            android:text="@string/setting_homework_csrf_description" />
+
+                        <EditText
+                            android:id="@+id/setting_homework_csrf_input"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:background="@drawable/input_field_surface"
+                            android:hint="@string/setting_homework_csrf_hint"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted" />

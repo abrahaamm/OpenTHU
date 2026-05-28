@@ -966,6 +966,131 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
                 lines.append(line)
         return "\n".join(lines)
 
+    if skill_name == "get_semesters":
+        semesters = data.get("semesters", [])
+        if not isinstance(semesters, list):
+            semesters = []
+        current = str(data.get("current_semester", "")).strip()
+        lines = ["### 学期信息"]
+        if current:
+            lines.append(f"当前学期：{current}")
+        lines.append(f"共找到 {len(semesters)} 个学期。")
+        for item in semesters[:6]:
+            if isinstance(item, dict):
+                label = str(item.get("semester_name") or item.get("semester_id") or "").strip()
+                first_day = str(item.get("first_day", "")).strip()
+                if label:
+                    lines.append(f"- {label}" + (f"（教学周从 {first_day} 开始）" if first_day else ""))
+            elif item:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+
+    if skill_name in {"get_courses", "get_course_schedule"}:
+        courses = data.get("courses", [])
+        if not isinstance(courses, list):
+            courses = []
+        schedule_entries = data.get("schedule_entries", [])
+        schedule_count = len(schedule_entries) if isinstance(schedule_entries, list) else 0
+        title = "课表" if skill_name == "get_course_schedule" else "课程列表"
+        lines = [f"### {title}", f"共找到 {len(courses)} 门课程。"]
+        if schedule_count:
+            lines.append(f"按日期展开的课表条目：{schedule_count} 条。")
+        for item in courses[:8]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("course_name") or "未命名课程").strip()
+            teacher = str(item.get("teacher_name", "")).strip()
+            time_blocks = item.get("time_and_location", [])
+            details = []
+            if teacher:
+                details.append(teacher)
+            if isinstance(time_blocks, list) and time_blocks:
+                block = time_blocks[0]
+                if isinstance(block, dict):
+                    weekday = block.get("weekday")
+                    period = block.get("period", [])
+                    location = str(block.get("location", "")).strip()
+                    time_label = ""
+                    if weekday:
+                        time_label += f"周{weekday}"
+                    if isinstance(period, list) and len(period) >= 2:
+                        time_label += f" 第{period[0]}-{period[1]}节"
+                    if location:
+                        time_label += f" {location}"
+                    if time_label.strip():
+                        details.append(time_label.strip())
+            line = f"- {name}"
+            if details:
+                line += f"（{'，'.join(details)}）"
+            lines.append(line)
+        warnings = data.get("warnings", [])
+        if isinstance(warnings, list) and warnings:
+            lines.append("提示：" + "；".join(str(item) for item in warnings[:3]))
+        return "\n".join(lines)
+
+    if skill_name in {"crawl_course_homeworks", "crawl_unsubmitted_homeworks"}:
+        homeworks = data.get("homeworks", [])
+        if not isinstance(homeworks, list):
+            homeworks = []
+        count_value = data.get("count", len(homeworks))
+        try:
+            count = int(count_value)
+        except (TypeError, ValueError):
+            count = len(homeworks)
+        title = "未提交作业" if skill_name == "crawl_unsubmitted_homeworks" else "作业列表"
+        lines = [f"### {title}", f"共找到 {max(count, len(homeworks))} 条作业记录。"]
+        for item in homeworks[:8]:
+            if not isinstance(item, dict):
+                continue
+            homework_title = str(item.get("title") or item.get("homework_title") or "未命名作业").strip()
+            course_name = str(item.get("course_name", "")).strip()
+            deadline = str(item.get("deadline", "")).strip()
+            submitted = item.get("submitted")
+            details = []
+            if course_name:
+                details.append(course_name)
+            if deadline:
+                details.append(f"截止：{deadline}")
+            if isinstance(submitted, bool):
+                details.append("已提交" if submitted else "未提交")
+            line = f"- {homework_title}"
+            if details:
+                line += f"（{'，'.join(details)}）"
+            detail_url = str(item.get("detail_url", "")).strip()
+            if detail_url:
+                line += f"：{detail_url}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name == "preview_homework_attachments":
+        attachments = data.get("attachments", [])
+        if not isinstance(attachments, list):
+            attachments = []
+        lines = ["### 作业附件", f"找到 {len(attachments)} 个附件。"]
+        for item in attachments[:8]:
+            if not isinstance(item, dict):
+                continue
+            file_name = str(item.get("file_name", "未命名附件")).strip()
+            url = str(item.get("preview_url") or item.get("download_url") or "").strip()
+            line = f"- {file_name}"
+            if url:
+                line += f"：{url}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    if skill_name in {"upload_homework_attachment", "submit_homework", "get_homework_cookie"}:
+        status = str(data.get("status", "")).strip()
+        message = str(data.get("message", "")).strip()
+        if skill_name == "get_homework_cookie":
+            if status == "cookie_ready":
+                return "### 网络学堂登录态\nLearn Cookie 已加载，后续作业操作可以继续使用。"
+            return f"### 网络学堂登录态\n{message or status or 'Cookie 未配置。'}"
+        if skill_name == "upload_homework_attachment":
+            file_name = str(data.get("file_name", "")).strip()
+            return "### 作业附件上传\n" + (f"附件 {file_name} 已上传。" if status == "uploaded" else (message or status))
+        if skill_name == "submit_homework":
+            return "### 作业提交\n" + ("作业已提交。" if status == "submitted" else (message or status))
+
     if skill_name.startswith("get_"):
         message = str(data.get("message", "")).strip()
         warnings = data.get("warnings", [])

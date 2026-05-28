@@ -50,6 +50,8 @@ private data class CalendarEventBrief(
 class ActionExecutor(
   private val appContext: Context,
 ) {
+  private val homeworkSkillExecutor = HomeworkSkillExecutor(appContext)
+
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     val actionId = action.id.substringBefore("#")
     return when (actionId) {
@@ -57,6 +59,12 @@ class ActionExecutor(
       "create_calendar_event" -> executeCreateCalendarEvent(action, goal)
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
+      "get_homework_cookie",
+      "crawl_course_homeworks",
+      "crawl_unsubmitted_homeworks",
+      "preview_homework_attachments",
+      "upload_homework_attachment",
+      "submit_homework" -> homeworkSkillExecutor.execute(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
       "create_reminder" -> executeCreateReminder(action, goal)
       "get_campus_activities" -> executeGetCampusActivities()

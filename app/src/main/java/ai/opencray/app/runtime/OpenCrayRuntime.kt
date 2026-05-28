@@ -347,15 +347,52 @@ class OpenCrayRuntime(
     val normalizedGoal = goal.trim()
     if (normalizedGoal.isEmpty()) return false
 
-    chatRepository.sendMessage(normalizedGoal)
+    return planGoalInternal(plannerGoal = normalizedGoal, displayGoal = normalizedGoal)
+  }
+
+  fun planGoalWithAttachment(
+    goal: String,
+    fileUri: String,
+    fileName: String,
+  ): Boolean {
+    val normalizedGoal = goal.trim().ifEmpty { "请处理这个附件" }
+    val normalizedFileUri = fileUri.trim()
+    if (normalizedFileUri.isEmpty()) return planGoal(normalizedGoal)
+    val normalizedFileName = fileName.trim()
+    val displayName = normalizedFileName.ifBlank { "已选择文件" }
+    val displayGoal = "$normalizedGoal\n\n附件：$displayName"
+    val plannerGoal =
+      buildString {
+        append(normalizedGoal)
+        append("\n\n[attached_file]\n")
+        append("file_uri: ").append(normalizedFileUri).append('\n')
+        if (normalizedFileName.isNotBlank()) {
+          append("file_name: ").append(normalizedFileName).append('\n')
+        }
+        append(
+          "instruction: The user selected this local Android file in chat. " +
+            "When uploading or submitting homework, pass file_uri and file_name to " +
+            "upload_homework_attachment or submit_homework.",
+        )
+      }
+    return planGoalInternal(plannerGoal = plannerGoal, displayGoal = displayGoal)
+  }
+
+  private fun planGoalInternal(
+    plannerGoal: String,
+    displayGoal: String,
+  ): Boolean {
+    if (plannerGoal.isBlank() || displayGoal.isBlank()) return false
+
+    chatRepository.sendMessage(displayGoal)
 
     if (gatewayRegistered) {
-      handleStreamingRunViaGateway(normalizedGoal)
+      handleStreamingRunViaGateway(plannerGoal)
       return false
     }
 
-    if (!shouldPlanLocally(normalizedGoal)) {
-      handleLocalChat(normalizedGoal)
+    if (!shouldPlanLocally(plannerGoal)) {
+      handleLocalChat(plannerGoal)
       return false
     }
 
@@ -723,8 +760,17 @@ class OpenCrayRuntime(
     listOf(
       "get_current_time",
       "set_alarm",
+      "get_semesters",
+      "get_courses",
+      "get_course_schedule",
       "get_campus_activities",
       "search",
+      "get_homework_cookie",
+      "crawl_course_homeworks",
+      "crawl_unsubmitted_homeworks",
+      "preview_homework_attachments",
+      "upload_homework_attachment",
+      "submit_homework",
       "create_calendar_event",
       "detect_calendar_conflicts",
       "delete_calendar_event",
@@ -748,6 +794,9 @@ class OpenCrayRuntime(
     val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
     val cookie = pref.getString("webvpn_cookie", "").orEmpty().trim()
     val csrf = pref.getString("webvpn_csrf", "").orEmpty().trim()
+    val homeworkCookie = pref.getString("homework_cookie", "").orEmpty().trim()
+    val homeworkCsrf = pref.getString("homework_csrf", "").orEmpty().trim()
+    val learnBaseUrl = pref.getString("learn_base_url", "").orEmpty().trim()
     val openAiKey = pref.getString("openai_api_key", "").orEmpty().trim()
     val model = pref.getString("llm_model", "").orEmpty().trim()
     val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
@@ -769,6 +818,15 @@ class OpenCrayRuntime(
       session["csrf"] = csrf
       session["csrf_token"] = csrf
     }
+    if (homeworkCookie.isNotEmpty()) {
+      session["homework_cookie"] = homeworkCookie
+      session["learn_cookie"] = homeworkCookie
+    }
+    if (homeworkCsrf.isNotEmpty()) {
+      session["homework_csrf"] = homeworkCsrf
+      session["learn_csrf"] = homeworkCsrf
+    }
+    if (learnBaseUrl.isNotEmpty()) session["learn_base_url"] = learnBaseUrl
     if (openAiKey.isNotEmpty()) session["openai_api_key"] = openAiKey
     if (model.isNotEmpty()) session["llm_model"] = model
     if (baseUrl.isNotEmpty()) session["llm_base_url"] = baseUrl
@@ -1251,15 +1309,29 @@ class OpenCrayRuntime(
     val reason = report.metadata["reason"] as? String
     if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
     if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
+    if (reason == "confirm_submit_required") return "APPROVAL_REQUIRED"
+    if (reason == "login_required" || report.semantic == "homework_cookie_login_required") return "NOT_CONFIGURED"
 
-    if (message.contains("confirm_delete=true", ignoreCase = true)) return "APPROVAL_REQUIRED"
+    if (message.contains("confirm_delete=true", ignoreCase = true) ||
+      message.contains("confirm_submit=true", ignoreCase = true)
+    ) {
+      return "APPROVAL_REQUIRED"
+    }
     if (actionId == "create_calendar_event" &&
       (message.contains("skip_write / coexist / delete_conflicts", ignoreCase = true) ||
         message.contains("请选择策略", ignoreCase = true))
     ) {
       return "APPROVAL_REQUIRED"
     }
-    if (message.contains("Invalid", ignoreCase = true) ||
+    if (reason == "missing_auth" ||
+      reason == "missing_credentials" ||
+      reason == "invalid_cookies" ||
+      reason == "credential_login_not_implemented" ||
+      reason == "missing_homework_id" ||
+      reason == "missing_course_id" ||
+      reason == "missing_submission_content" ||
+      reason == "missing_file" ||
+      message.contains("Invalid", ignoreCase = true) ||
       message.contains("Missing", ignoreCase = true) ||
       message.contains("requires event_id/event_ids", ignoreCase = true) ||
       message.contains("requires explicit confirmation", ignoreCase = true) ||

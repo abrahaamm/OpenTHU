@@ -12,6 +12,9 @@
     <string name="chat_empty_body">例如：帮我整理本周课程 DDL，并把重要事项加入日历。</string>
     <string name="chat_input_hint">给 OpenTHU 发送消息…</string>
     <string name="chat_send">发送</string>
+    <string name="chat_attach_file">文件</string>
+    <string name="chat_attachment_selected">附件：%1$s</string>
+    <string name="chat_attachment_empty_file">已选择文件</string>
     <string name="chat_new_conversation">新建对话</string>
     <string name="chat_conversation_list_title">会话列表</string>
     <string name="chat_quick_skills_toggle_expand">展开</string>
@@ -52,6 +55,21 @@
     <string name="settings_connection_test">检查配置有效性</string>
     <string name="settings_health_ok">当前配置检查通过</string>
     <string name="settings_health_warn">检测到潜在缺失项</string>
+    <string name="setting_learn_cookie_login">清华统一登录</string>
+    <string name="setting_learn_cookie_login_success">登录状态已更新</string>
+    <string name="setting_learn_cookie_login_failed">没有获取到可用登录状态</string>
+    <string name="learn_login_close">关闭</string>
+    <string name="learn_login_status_loading">正在打开清华统一登录…</string>
+    <string name="learn_login_save_cookie">保存</string>
+    <string name="learn_login_clear">清除登录态</string>
+    <string name="learn_login_unified">统一登录</string>
+    <string name="learn_login_open_learn">网络学堂</string>
+    <string name="learn_login_status_page">当前页面：%1$s</string>
+    <string name="learn_login_status_captured">已获取：%1$s</string>
+    <string name="learn_login_cookie_not_ready">还没有检测到可用的登录态</string>
+    <string name="learn_login_cookie_cleared">已清除 WebView Cookie</string>
+    <string name="learn_login_status_no_cookie">当前页面没有可用登录态，请先完成统一登录。</string>
+    <string name="learn_login_status_saved">已保存登录状态</string>
 
     <string name="host_label">服务地址</string>
     <string name="port_label">服务端口</string>
@@ -61,6 +79,9 @@
     <string name="setting_user_id_label">用户标识</string>
     <string name="setting_webvpn_cookie_label">WebVPN Cookie</string>
     <string name="setting_webvpn_csrf_label">WebVPN CSRF</string>
+    <string name="setting_learn_base_url_label">网络学堂地址</string>
+    <string name="setting_homework_cookie_label">网络学堂 Cookie</string>
+    <string name="setting_homework_csrf_label">网络学堂 CSRF</string>
     <string name="setting_campus_file_label">校园活动文件</string>
     <string name="setting_search_provider_label">搜索提供方</string>
     <string name="setting_search_endpoint_label">搜索接口地址</string>
@@ -83,8 +104,11 @@
     <string name="setting_llm_base_url_description">自定义模型服务地址；使用官方 OpenAI 接口时通常可留空。</string>
     <string name="setting_openai_key_description">用于访问 OpenAI 或兼容接口的 API Key。</string>
     <string name="setting_user_id_description">用于区分不同用户的会话与记忆命名空间。</string>
-    <string name="setting_webvpn_cookie_description">用于抓取校内资讯的登录态 Cookie，缺失时会降级为非登录数据。</string>
+    <string name="setting_webvpn_cookie_description">用于抓取校内资讯与完整课表的 WebVPN 登录态，可通过清华统一登录自动获取。</string>
     <string name="setting_webvpn_csrf_description">部分校内接口需要的 CSRF Token，没有时可以先留空。</string>
+    <string name="setting_learn_base_url_description">作业 skill 请求网络学堂时使用的基础地址，默认是 learn.tsinghua.edu.cn。</string>
+    <string name="setting_homework_cookie_description">用于网络学堂作业抓取、上传和提交的 Learn Cookie；可通过清华统一登录自动获取。</string>
+    <string name="setting_homework_csrf_description">网络学堂接口需要时使用的 XSRF/CSRF Token，可以从 Cookie 中自动提取时留空。</string>
     <string name="setting_campus_file_description">校园活动本地数据文件路径，供活动读取能力做兜底使用。</string>
     <string name="setting_search_provider_description">搜索提供方名称，当前建议填写 duckduckgo 或 brave。</string>
     <string name="setting_search_endpoint_description">搜索请求地址；只有更换 provider 或代理时才需要调整。</string>
@@ -107,6 +131,9 @@
     <string name="setting_user_id_hint">用户 ID（用于记忆隔离）</string>
     <string name="setting_webvpn_cookie_hint">OPENTHU_WEBVPN_COOKIE</string>
     <string name="setting_webvpn_csrf_hint">OPENTHU_WEBVPN_CSRF（可选）</string>
+    <string name="setting_learn_base_url_hint">https://learn.tsinghua.edu.cn</string>
+    <string name="setting_homework_cookie_hint">LEARN_COOKIE / JSESSIONID=...</string>
+    <string name="setting_homework_csrf_hint">XSRF-TOKEN（可选）</string>
     <string name="setting_campus_file_hint">OPENTHU_CAMPUS_ACTIVITIES_FILE</string>
     <string name="setting_search_provider_hint">OPENTHU_SEARCH_PROVIDER（duckduckgo 或 brave）</string>
     <string name="setting_search_endpoint_hint">OPENTHU_SEARCH_ENDPOINT</string>

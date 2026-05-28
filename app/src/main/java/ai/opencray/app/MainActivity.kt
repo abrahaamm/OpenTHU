@@ -1,10 +1,14 @@
 package ai.opencray.app
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -19,6 +23,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -74,6 +79,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var conversationTabsContainer: LinearLayout
   private lateinit var newConversationButton: Button
   private lateinit var chatInput: EditText
+  private lateinit var chatAttachButton: Button
+  private lateinit var chatAttachmentView: TextView
   private lateinit var chatSendButton: Button
   private lateinit var preferenceInput: EditText
   private lateinit var preferenceAddButton: Button
@@ -108,6 +115,10 @@ class MainActivity : AppCompatActivity() {
   private lateinit var userIdInput: EditText
   private lateinit var webvpnCookieInput: EditText
   private lateinit var webvpnCsrfInput: EditText
+  private lateinit var learnBaseUrlInput: EditText
+  private lateinit var homeworkCookieInput: EditText
+  private lateinit var homeworkCsrfInput: EditText
+  private lateinit var learnCookieLoginButton: Button
   private lateinit var campusFileInput: EditText
   private lateinit var searchProviderInput: EditText
   private lateinit var searchEndpointInput: EditText
@@ -123,6 +134,37 @@ class MainActivity : AppCompatActivity() {
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneInput: EditText
   private var showPlanningDeveloperInfo: Boolean = false
+  private var selectedChatFileUri: Uri? = null
+  private var selectedChatFileName: String = ""
+
+  private val learnCookieLoginLauncher =
+    registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+      if (result.resultCode == Activity.RESULT_OK) {
+        val data = result.data
+        val cookie = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_COOKIE).orEmpty()
+        val csrf = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_CSRF).orEmpty()
+        val webvpnCookie = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_WEBVPN_COOKIE).orEmpty()
+        val baseUrl = data?.getStringExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL).orEmpty()
+        if (baseUrl.isNotBlank()) learnBaseUrlInput.setText(baseUrl)
+        if (cookie.isNotBlank()) homeworkCookieInput.setText(cookie)
+        if (csrf.isNotBlank()) homeworkCsrfInput.setText(csrf)
+        if (webvpnCookie.isNotBlank()) webvpnCookieInput.setText(webvpnCookie)
+        Toast.makeText(this, getString(R.string.setting_learn_cookie_login_success), Toast.LENGTH_SHORT).show()
+      } else {
+        Toast.makeText(this, getString(R.string.setting_learn_cookie_login_failed), Toast.LENGTH_SHORT).show()
+      }
+    }
+
+  private val chatFilePickerLauncher =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri == null) return@registerForActivityResult
+      runCatching {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      selectedChatFileUri = uri
+      selectedChatFileName = resolveDisplayName(uri)
+      renderChatAttachment()
+    }
 
   private val uiRefreshHandler = Handler(Looper.getMainLooper())
   private val uiRefreshTicker =
@@ -197,6 +239,8 @@ class MainActivity : AppCompatActivity() {
     conversationTabsContainer = findViewById(R.id.conversation_tabs_container)
     newConversationButton = findViewById(R.id.new_conversation_button)
     chatInput = findViewById(R.id.chat_input)
+    chatAttachButton = findViewById(R.id.chat_attach_button)
+    chatAttachmentView = findViewById(R.id.chat_attachment_text)
     chatSendButton = findViewById(R.id.chat_send_button)
     preferenceInput = findViewById(R.id.preference_input)
     preferenceAddButton = findViewById(R.id.preference_add_button)
@@ -231,6 +275,10 @@ class MainActivity : AppCompatActivity() {
     userIdInput = findViewById(R.id.setting_user_id_input)
     webvpnCookieInput = findViewById(R.id.setting_webvpn_cookie_input)
     webvpnCsrfInput = findViewById(R.id.setting_webvpn_csrf_input)
+    learnBaseUrlInput = findViewById(R.id.setting_learn_base_url_input)
+    homeworkCookieInput = findViewById(R.id.setting_homework_cookie_input)
+    homeworkCsrfInput = findViewById(R.id.setting_homework_csrf_input)
+    learnCookieLoginButton = findViewById(R.id.setting_learn_cookie_login_button)
     campusFileInput = findViewById(R.id.setting_campus_file_input)
     searchProviderInput = findViewById(R.id.setting_search_provider_input)
     searchEndpointInput = findViewById(R.id.setting_search_endpoint_input)
@@ -398,10 +446,25 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
+    chatAttachButton.setOnClickListener {
+      chatFilePickerLauncher.launch(arrayOf("*/*"))
+    }
+    chatAttachmentView.setOnClickListener {
+      clearChatAttachment()
+    }
+    chatAttachmentView.setOnLongClickListener {
+      clearChatAttachment()
+      true
+    }
     chatSendButton.setOnClickListener {
       val text = chatInput.text.toString()
-      viewModel.sendChatMessage(text)
+      viewModel.sendChatMessage(
+        text = text,
+        attachedFileUri = selectedChatFileUri?.toString(),
+        attachedFileName = selectedChatFileName,
+      )
       chatInput.setText("")
+      clearChatAttachment()
       drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
@@ -455,6 +518,17 @@ class MainActivity : AppCompatActivity() {
         }
       Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
+    learnCookieLoginButton.setOnClickListener {
+      val learnBaseUrl = learnBaseUrlInput.text.toString().trim().ifEmpty { "https://learn.tsinghua.edu.cn" }
+      getSharedPreferences("openthu_settings", MODE_PRIVATE)
+        .edit()
+        .putString("learn_base_url", learnBaseUrl)
+        .apply()
+      learnCookieLoginLauncher.launch(
+        Intent(this, LearnCookieLoginActivity::class.java)
+          .putExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL, learnBaseUrl),
+      )
+    }
 
     runAgentButton.setOnClickListener {
       viewModel.runAgentPlan()
@@ -502,6 +576,40 @@ class MainActivity : AppCompatActivity() {
 
     hostInput.syncToViewModel { value -> viewModel.updateHost(value) }
     portInput.syncToViewModel { value -> viewModel.updatePort(value) }
+  }
+
+  private fun renderChatAttachment() {
+    val name =
+      selectedChatFileName
+        .takeIf { it.isNotBlank() }
+        ?: getString(R.string.chat_attachment_empty_file)
+    chatAttachmentView.text = getString(R.string.chat_attachment_selected, name)
+    chatAttachmentView.visibility = View.VISIBLE
+  }
+
+  private fun clearChatAttachment() {
+    selectedChatFileUri = null
+    selectedChatFileName = ""
+    chatAttachmentView.text = ""
+    chatAttachmentView.visibility = View.GONE
+  }
+
+  private fun resolveDisplayName(uri: Uri): String {
+    val queried =
+      runCatching {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+          if (cursor.moveToFirst()) {
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) cursor.getString(index).orEmpty() else ""
+          } else {
+            ""
+          }
+        }.orEmpty()
+      }.getOrDefault("")
+    return queried.ifBlank {
+      uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+        ?: getString(R.string.chat_attachment_empty_file)
+    }
   }
 
   private fun render() {
@@ -1151,6 +1259,9 @@ class MainActivity : AppCompatActivity() {
     userIdInput.setText(pref.getString("user_id", "demo_user"))
     webvpnCookieInput.setText(pref.getString("webvpn_cookie", ""))
     webvpnCsrfInput.setText(pref.getString("webvpn_csrf", ""))
+    learnBaseUrlInput.setText(pref.getString("learn_base_url", "https://learn.tsinghua.edu.cn"))
+    homeworkCookieInput.setText(pref.getString("homework_cookie", ""))
+    homeworkCsrfInput.setText(pref.getString("homework_csrf", ""))
     campusFileInput.setText(pref.getString("campus_file", ""))
     searchProviderInput.setText(pref.getString("search_provider", "duckduckgo"))
     searchEndpointInput.setText(pref.getString("search_endpoint", "https://duckduckgo.com/html/"))
@@ -1177,6 +1288,9 @@ class MainActivity : AppCompatActivity() {
       .putString("user_id", userIdInput.text.toString().trim())
       .putString("webvpn_cookie", webvpnCookieInput.text.toString().trim())
       .putString("webvpn_csrf", webvpnCsrfInput.text.toString().trim())
+      .putString("learn_base_url", learnBaseUrlInput.text.toString().trim().ifEmpty { "https://learn.tsinghua.edu.cn" })
+      .putString("homework_cookie", homeworkCookieInput.text.toString().trim())
+      .putString("homework_csrf", homeworkCsrfInput.text.toString().trim())
       .putString("campus_file", campusFileInput.text.toString().trim())
       .putString("search_provider", searchProviderInput.text.toString().trim().ifEmpty { "duckduckgo" })
       .putString("search_endpoint", searchEndpointInput.text.toString().trim())
@@ -1199,6 +1313,7 @@ class MainActivity : AppCompatActivity() {
     val warnings = mutableListOf<String>()
     if (openAiKeyInput.text.toString().trim().isEmpty()) warnings += "缺少 OPENAI_API_KEY"
     if (webvpnCookieInput.text.toString().trim().isEmpty()) warnings += "缺少 WebVPN Cookie（校园资讯真实抓取会降级）"
+    if (homeworkCookieInput.text.toString().trim().isEmpty()) warnings += "缺少网络学堂 Cookie（作业 skill 需要手动提供 Cookie）"
     if (
       searchProviderInput.text.toString().trim().equals("brave", ignoreCase = true) &&
       searchApiKeyInput.text.toString().trim().isEmpty()
