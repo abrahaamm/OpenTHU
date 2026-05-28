@@ -33,6 +33,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
+import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.AgentEvent
 import ai.opencray.app.feature.chat.AgentEventOption
@@ -43,6 +44,7 @@ import ai.opencray.app.feature.chat.ChatRole
 class MainActivity : AppCompatActivity() {
   companion object {
     private const val CALENDAR_PERMISSION_REQUEST = 1201
+    private const val PREF_SHOW_PLANNING_DETAILS = "show_planning_details"
   }
 
   private lateinit var viewModel: MainViewModel
@@ -71,6 +73,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var safetyPanel: LinearLayout
   private lateinit var chatPanel: LinearLayout
   private lateinit var planningPage: ScrollView
+  private lateinit var planningCardsContainer: LinearLayout
   private lateinit var settingsPage: ScrollView
   private lateinit var chatHistoryScroll: ScrollView
   private lateinit var chatHistoryContainer: LinearLayout
@@ -98,6 +101,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var settingsTab: Button
   private lateinit var notificationToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
+  private lateinit var planningDetailsToggle: CheckBox
   private lateinit var connectButton: Button
   private lateinit var saveSettingsButton: Button
   private lateinit var testSettingsButton: Button
@@ -133,7 +137,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneInput: EditText
-  private var showPlanningDeveloperInfo: Boolean = false
+  private var showPlanningDetails: Boolean = false
   private var selectedChatFileUri: Uri? = null
   private var selectedChatFileName: String = ""
 
@@ -231,6 +235,7 @@ class MainActivity : AppCompatActivity() {
     safetyPanel = findViewById(R.id.safety_panel)
     chatPanel = findViewById(R.id.chat_panel)
     planningPage = findViewById(R.id.planning_page)
+    planningCardsContainer = findViewById(R.id.planning_cards_container)
     settingsPage = findViewById(R.id.settings_page)
     chatHistoryScroll = findViewById(R.id.chat_history_scroll)
     chatHistoryContainer = findViewById(R.id.chat_history_container)
@@ -258,6 +263,7 @@ class MainActivity : AppCompatActivity() {
     settingsTab = findViewById(R.id.settings_tab)
     notificationToggle = findViewById(R.id.capability_notification_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
+    planningDetailsToggle = findViewById(R.id.capability_planning_details_toggle)
     connectButton = findViewById(R.id.connect_button)
     saveSettingsButton = findViewById(R.id.save_settings_button)
     testSettingsButton = findViewById(R.id.test_settings_button)
@@ -479,7 +485,11 @@ class MainActivity : AppCompatActivity() {
       syncQuickSkillsToggle()
     }
     planningDeveloperToggleButton.setOnClickListener {
-      showPlanningDeveloperInfo = !showPlanningDeveloperInfo
+      setPlanningDetailsVisible(!showPlanningDetails)
+      render()
+    }
+    planningDetailsToggle.setOnCheckedChangeListener { _, isChecked ->
+      setPlanningDetailsVisible(isChecked)
       render()
     }
 
@@ -629,14 +639,17 @@ class MainActivity : AppCompatActivity() {
     planningTab.isEnabled = state.currentDestination != AppDestination.Planning
     settingsTab.isEnabled = state.currentDestination != AppDestination.Settings
     syncQuickSkillsToggle()
-    planningDeveloperContextSection.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
-    planningDeveloperFlowSection.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
-    actionFeedView.visibility = if (showPlanningDeveloperInfo) View.VISIBLE else View.GONE
+    planningDeveloperContextSection.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
+    planningDeveloperFlowSection.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
+    actionFeedView.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
+    if (planningDetailsToggle.isChecked != showPlanningDetails) {
+      planningDetailsToggle.isChecked = showPlanningDetails
+    }
     planningDeveloperToggleButton.text =
-      if (showPlanningDeveloperInfo) {
-        "隐藏开发者信息"
+      if (showPlanningDetails) {
+        getString(R.string.planning_details_hide)
       } else {
-        "显示开发者信息"
+        getString(R.string.planning_details_show)
       }
 
     statusView.text = "Agent 状态：${state.snapshot.connectionStatus}"
@@ -767,6 +780,7 @@ class MainActivity : AppCompatActivity() {
             .ifBlank { "• 暂无待办任务，先在对话页提交目标。" }
         append(content)
       }
+    renderPlanningCards(state.planningCards)
 
     val conflict = state.pendingConflict
     if (conflict != null) {
@@ -911,6 +925,165 @@ class MainActivity : AppCompatActivity() {
       conversationTabsContainer.addView(row, params)
     }
   }
+
+  private fun renderPlanningCards(cards: List<PlanningCard>) {
+    planningCardsContainer.removeAllViews()
+    if (cards.isEmpty()) {
+      planningCardsContainer.addView(
+        TextView(this).apply {
+          text = getString(R.string.planning_cards_empty)
+          textSize = 13f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+          setBackgroundResource(R.drawable.chat_section_surface)
+          setPadding(dp(14), dp(12), dp(14), dp(12))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+        },
+      )
+      return
+    }
+
+    cards.forEachIndexed { index, card ->
+      val cardView =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.VERTICAL
+          setBackgroundResource(R.drawable.chat_section_surface)
+          setPadding(dp(14), dp(12), dp(14), dp(12))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              if (index > 0) topMargin = dp(10)
+            }
+        }
+
+      cardView.addView(
+        TextView(this).apply {
+          text = card.title
+          textSize = 15f
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+        },
+      )
+      cardView.addView(
+        TextView(this).apply {
+          text = planningCardMeta(card)
+          textSize = 12f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_primary_dark))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(6)
+            }
+        },
+      )
+      cardView.addView(
+        TextView(this).apply {
+          text = card.body
+          textSize = 13f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(8)
+            }
+        },
+      )
+
+      val buttonRow =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.HORIZONTAL
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(10)
+            }
+        }
+      buttonRow.addView(planningCardButton(getString(R.string.planning_card_move_up), index > 0) {
+        viewModel.movePlanningCard(card.id, -1)
+        render()
+      })
+      buttonRow.addView(planningCardButton(getString(R.string.planning_card_move_down), index < cards.lastIndex) {
+        viewModel.movePlanningCard(card.id, 1)
+        render()
+      })
+      buttonRow.addView(planningCardButton(getString(R.string.planning_card_delete), true) {
+        viewModel.deletePlanningCard(card.id)
+        render()
+      })
+      cardView.addView(buttonRow)
+      planningCardsContainer.addView(cardView)
+    }
+  }
+
+  private fun planningCardButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+  ): Button =
+    Button(this).apply {
+      this.text = text
+      isEnabled = enabled
+      alpha = if (enabled) 1f else 0.45f
+      minWidth = 0
+      setBackgroundResource(R.drawable.button_secondary_selector)
+      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+      stateListAnimator = null
+      elevation = dp(3).toFloat()
+      setOnClickListener { onClick() }
+      layoutParams =
+        LinearLayout.LayoutParams(
+          0,
+          dp(42),
+          1f,
+        ).apply {
+          marginEnd = dp(8)
+        }
+    }
+
+  private fun planningCardMeta(card: PlanningCard): String =
+    listOf(
+      planningCardTypeLabel(card.type),
+      planningCardStatusLabel(card.status),
+      card.source.ifBlank { "规划页" },
+    ).joinToString(" · ")
+
+  private fun planningCardTypeLabel(type: String): String =
+    when (type) {
+      "alarm" -> "闹钟"
+      "todo" -> "待办"
+      "course" -> "课表"
+      "calendar" -> "日历"
+      "homework" -> "作业"
+      "notification" -> "通知"
+      "search" -> "搜索"
+      else -> "规划"
+    }
+
+  private fun planningCardStatusLabel(status: String): String =
+    when (status) {
+      "planned" -> "待执行"
+      "approved" -> "待执行"
+      "pending_approval" -> "待确认"
+      "queued" -> "等待端侧"
+      "ok" -> "已完成"
+      "running" -> "执行中"
+      "executed" -> "已完成"
+      "completed" -> "已完成"
+      "failed" -> "未成功"
+      "conflict_pending" -> "需处理冲突"
+      else -> status.ifBlank { "待处理" }
+    }
 
   private fun syncQuickSkillsToggle() {
     quickSkillsToggle.text =
@@ -1268,6 +1441,8 @@ class MainActivity : AppCompatActivity() {
     searchApiKeyInput.setText(pref.getString("search_api_key", ""))
     searchSceneInput.setText(pref.getString("search_scene", "hybrid"))
     searchTtlInput.setText(pref.getString("search_ttl", "3600"))
+    showPlanningDetails = pref.getBoolean(PREF_SHOW_PLANNING_DETAILS, false)
+    planningDetailsToggle.isChecked = showPlanningDetails
     memoryFileInput.setText(pref.getString("memory_file", "agent/langgraph/memory_store.json"))
     memoryLongTtlInput.setText(pref.getString("memory_long_ttl", "365"))
     memoryMidTtlInput.setText(pref.getString("memory_mid_ttl", "30"))
@@ -1297,6 +1472,7 @@ class MainActivity : AppCompatActivity() {
       .putString("search_api_key", searchApiKeyInput.text.toString().trim())
       .putString("search_scene", searchSceneInput.text.toString().trim().lowercase().ifEmpty { "hybrid" })
       .putString("search_ttl", searchTtlInput.text.toString().trim())
+      .putBoolean(PREF_SHOW_PLANNING_DETAILS, showPlanningDetails)
       .putString("memory_file", memoryFileInput.text.toString().trim())
       .putString("memory_long_ttl", memoryLongTtlInput.text.toString().trim())
       .putString("memory_mid_ttl", memoryMidTtlInput.text.toString().trim())
@@ -1307,6 +1483,14 @@ class MainActivity : AppCompatActivity() {
       .putString("timezone", timezoneInput.text.toString().trim())
       .apply()
     return true
+  }
+
+  private fun setPlanningDetailsVisible(visible: Boolean) {
+    showPlanningDetails = visible
+    getSharedPreferences("openthu_settings", MODE_PRIVATE)
+      .edit()
+      .putBoolean(PREF_SHOW_PLANNING_DETAILS, visible)
+      .apply()
   }
 
   private fun buildSettingsWarnings(): List<String> {

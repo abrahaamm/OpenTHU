@@ -6,6 +6,7 @@ import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PendingConflictResolution
+import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 
@@ -21,6 +22,8 @@ data class RuntimeSnapshot(
   val capabilities: List<AgentCapability>,
   val contextSignals: List<ContextSignal>,
   val systemActions: List<SystemAction>,
+  val planningCards: List<PlanningCard> = emptyList(),
+  val dismissedPlanningCardIds: Set<String> = emptySet(),
   val safetyRecords: List<SafetyRecord>,
   val tasks: List<AgentTask>,
   val memoryRecords: List<MemoryRecord>,

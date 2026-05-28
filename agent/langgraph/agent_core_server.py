@@ -51,6 +51,11 @@ class DeviceRegisterRequest(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
 
 
+class ChatMessageItem(BaseModel):
+    role: str
+    text: str
+
+
 class PlanTaskRequest(BaseModel):
     device_id: str
     user_id: str = "demo_user"
@@ -58,11 +63,7 @@ class PlanTaskRequest(BaseModel):
     approve_sensitive: bool = False
     semester_id: str = ""
     session: dict[str, Any] = Field(default_factory=dict)
-
-
-class ChatMessageItem(BaseModel):
-    role: str
-    text: str
+    history: list[ChatMessageItem] = Field(default_factory=list)
 
 
 class ChatTurnRequest(BaseModel):
@@ -1117,6 +1118,41 @@ def _final_content_from_task(task_doc: dict[str, Any]) -> str:
     return "我没有找到需要执行的步骤。你可以补充一下目标，我再继续。"
 
 
+def _planned_skill_items(task_doc: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for key in ("approved_skills", "blocked_skills"):
+        values = task_doc.get(key, [])
+        for item in values if isinstance(values, list) else []:
+            if isinstance(item, dict):
+                items.append(item)
+    if items:
+        return items
+    plan_only = task_doc.get("plan_only_response", {})
+    data = plan_only.get("data", {}) if isinstance(plan_only, dict) else {}
+    skill_plan = data.get("skill_plan", []) if isinstance(data, dict) else []
+    return [item for item in skill_plan if isinstance(item, dict)]
+
+
+def _plan_preview_text(task_doc: dict[str, Any]) -> str:
+    items = _planned_skill_items(task_doc)
+    if not items:
+        return "我没有拆出可执行步骤，会直接给你说明。"
+    lines = ["计划如下："]
+    for idx, item in enumerate(items[:8], start=1):
+        skill_name = str(item.get("skill_name", "unknown_skill")).strip() or "unknown_skill"
+        description = str(item.get("description", "")).strip()
+        risk = str(item.get("risk_level", "")).strip()
+        status = str(item.get("status", "")).strip()
+        suffix = " / ".join(part for part in (risk, status) if part)
+        line = f"{idx}. {skill_name}"
+        if description:
+            line += f"：{description}"
+        if suffix:
+            line += f"（{suffix}）"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
     app = FastAPI(title="OpenTHU Agent Core Server", version="0.1.0")
 
@@ -1160,6 +1196,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             approve_sensitive=payload.approve_sensitive,
             session=payload.session,
             semester_id=payload.semester_id,
+            history=[item.dict() for item in payload.history],
         )
         logger.debug(
             "[api] plan_only finished request_id=%s code=%s",
@@ -1244,13 +1281,15 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
         def event_stream():
             try:
                 yield encode_ndjson(agent_event("assistant_delta", content="我先理解你的意思。"))
-                chat_response = agent.chat_turn(
+                decision_response = agent.decide_turn(
                     user_input=payload.message,
                     user_id=payload.user_id,
+                    approve_sensitive=payload.approve_sensitive,
                     session=payload.session,
                     history=[item.dict() for item in payload.history],
+                    semester_id=payload.semester_id,
                 )
-                chat_data = chat_response.get("data", {}) if isinstance(chat_response.get("data"), dict) else {}
+                chat_data = decision_response.get("data", {}) if isinstance(decision_response.get("data"), dict) else {}
                 reply = str(chat_data.get("reply", "")).strip()
                 should_plan = bool(chat_data.get("should_plan", False))
                 if reply:
@@ -1266,20 +1305,43 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     )
                     return
 
-                yield encode_ndjson(agent_event("assistant_delta", content="我会把需要执行的步骤拆出来。"))
-                plan_response = agent.run_plan_only(
-                    user_input=payload.message,
-                    user_id=payload.user_id,
-                    approve_sensitive=payload.approve_sensitive,
-                    session=payload.session,
-                    semester_id=payload.semester_id,
-                )
+                plan_response = chat_data.get("plan_response", {})
+                if not isinstance(plan_response, dict) or not isinstance(plan_response.get("data"), dict):
+                    plan_response = agent.run_plan_only(
+                        user_input=payload.message,
+                        user_id=payload.user_id,
+                        approve_sensitive=payload.approve_sensitive,
+                        session=payload.session,
+                        semester_id=payload.semester_id,
+                        history=[item.dict() for item in payload.history],
+                    )
                 task_doc = store.create_planned_task(
                     plan_response=plan_response,
                     device_id=payload.device_id,
                     user_id=payload.user_id,
                     goal=payload.message,
                 )
+                task_id = str(task_doc.get("task_id", ""))
+                yield encode_ndjson(agent_event("assistant_delta", content=_plan_preview_text(task_doc)))
+                for planned_skill in _planned_skill_items(task_doc):
+                    skill_name = str(planned_skill.get("skill_name", ""))
+                    if not skill_name:
+                        continue
+                    yield encode_ndjson(
+                        agent_event(
+                            "tool_call",
+                            title=f"计划 {skill_name}",
+                            content=str(planned_skill.get("description", "")).strip(),
+                            task_id=task_id,
+                            request_id=str(planned_skill.get("request_id", "")),
+                            skill_name=skill_name,
+                            status="planned",
+                            data={
+                                "risk_level": planned_skill.get("risk_level", ""),
+                                "description": planned_skill.get("description", ""),
+                            },
+                        )
+                    )
                 task_doc = store.suppress_show_summary_for_stream(task_id=str(task_doc.get("task_id", "")))
                 task_doc = execute_server_side_data_skills(
                     agent=agent,
@@ -1444,6 +1506,9 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         session=summary_session,
                         task_doc=task_doc,
                         fallback_summary=final_content,
+                        conversation_context=plan_response.get("data", {}).get("conversation_context", {})
+                        if isinstance(plan_response.get("data"), dict)
+                        else {},
                     )
                     task_doc = store.set_final_summary(task_id=task_id, summary=final_content)
                 yield encode_ndjson(

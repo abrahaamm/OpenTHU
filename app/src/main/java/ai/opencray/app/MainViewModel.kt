@@ -9,6 +9,7 @@ import ai.opencray.app.domain.model.AuditEntry
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PendingConflictResolution
+import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.ChatMessage
@@ -95,6 +96,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       snapshot = snapshot,
       contextSignals = snapshot.contextSignals,
       systemActions = snapshot.systemActions,
+      planningCards = snapshot.planningCards,
       safetyRecords = snapshot.safetyRecords,
       tasks = snapshot.tasks,
       memoryRecords = snapshot.memoryRecords,
@@ -201,6 +203,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = AppDestination.Planning
   }
 
+  fun deletePlanningCard(cardId: String) {
+    runtime.deletePlanningCard(cardId)
+    selectedDestination = AppDestination.Planning
+  }
+
+  fun movePlanningCard(
+    cardId: String,
+    offset: Int,
+  ) {
+    runtime.movePlanningCard(cardId, offset)
+    selectedDestination = AppDestination.Planning
+  }
+
   fun approvePendingActions() {
     runtime.approvePendingActions()
     selectedDestination = AppDestination.Planning
@@ -270,6 +285,7 @@ data class MainUiState(
   val snapshot: RuntimeSnapshot,
   val contextSignals: List<ContextSignal>,
   val systemActions: List<SystemAction>,
+  val planningCards: List<PlanningCard>,
   val safetyRecords: List<SafetyRecord>,
   val tasks: List<AgentTask>,
   val memoryRecords: List<MemoryRecord>,
