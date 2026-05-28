@@ -71,6 +71,13 @@ def normalize_risk(risk_level: str) -> str:
     return risk if risk in {"low", "medium", "high"} else "medium"
 
 
+def _preview_text_for_log(text: str, limit: int = 1200) -> str:
+    preview = str(text).strip()
+    if len(preview) <= limit:
+        return preview
+    return preview[:limit] + "...<truncated>"
+
+
 class RequirementLLM:
     """Normalize user requirement into a stable prompt structure."""
 
@@ -1044,6 +1051,12 @@ class OpenTHULangGraphAgent:
     def _synthesize_summary(self, state: AgentState) -> dict[str, Any]:
         user_input = state.get("user_input", "")
         skill_results = state.get("skill_results", [])
+
+        logger.info(
+            "[node.synthesize_summary] arrived task_id=%s skill_result_count=%d",
+            state.get("task_id", ""),
+            len(skill_results),
+        )
         
         if not skill_results:
             return {"final_summary_text": ""}
@@ -1074,6 +1087,11 @@ class OpenTHULangGraphAgent:
                 max_tokens=2048,
             )
             final_summary = response.choices[0].message.content or "操作已完成。"
+            logger.info(
+                "[node.synthesize_summary] llm_beautified_text task_id=%s text=%s",
+                state.get("task_id", ""),
+                _preview_text_for_log(final_summary),
+            )
             return {
                 "final_summary_text": final_summary.strip(),
                 "trace_log": self._append_trace(
@@ -1139,6 +1157,14 @@ class OpenTHULangGraphAgent:
         task_doc: dict[str, Any],
         fallback_summary: str,
     ) -> str:
+        server_results = task_doc.get("server_results", [])
+        device_results = task_doc.get("device_results", [])
+        logger.info(
+            "[agent.summary] arrived task_id=%s server_result_count=%d device_result_count=%d",
+            task_doc.get("task_id", ""),
+            len(server_results) if isinstance(server_results, list) else 0,
+            len(device_results) if isinstance(device_results, list) else 0,
+        )
         api_key, model, base_url = self._llm_config_from_session(session if isinstance(session, dict) else {})
         if not api_key:
             return fallback_summary
@@ -1188,6 +1214,11 @@ class OpenTHULangGraphAgent:
                 temperature=0.35,
             )
             text = (completion.choices[0].message.content or "").strip()
+            logger.info(
+                "[agent.summary] llm_beautified_text task_id=%s text=%s",
+                task_doc.get("task_id", ""),
+                _preview_text_for_log(text),
+            )
             return text or fallback_summary
         except Exception as exc:
             logger.warning("[agent.summary] final synthesis failed: %s", exc)
@@ -1245,7 +1276,7 @@ class OpenTHULangGraphAgent:
             "Prefer data skills before action skills. "
             "Do not invent backend calls. Keep the plan between 1 and 8 skills. "
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
-            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
+            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before other skills. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses."
         )
 
