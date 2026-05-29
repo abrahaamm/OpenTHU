@@ -859,8 +859,6 @@ class OpenCrayRuntime(
       "get_campus_activities",
       "search",
       "get_homework_cookie",
-      "crawl_course_homeworks",
-      "crawl_unsubmitted_homeworks",
       "preview_homework_attachments",
       "upload_homework_attachment",
       "submit_homework",
@@ -1128,7 +1126,23 @@ class OpenCrayRuntime(
       return
     }
 
-    val report = actionExecutor.execute(action, goal)
+    val report =
+      runCatching {
+        actionExecutor.execute(action, goal)
+      }.getOrElse { throwable ->
+        runtimeRepository.appendEvent("Execution crashed for ${action.id}: ${throwable.message ?: throwable.javaClass.simpleName}")
+        ActionExecutionReport(
+          success = false,
+          message = "端侧执行 ${action.id} 时发生异常：${throwable.message ?: throwable.javaClass.simpleName}",
+          recoverable = true,
+          semantic = "device_skill_execution_exception",
+          metadata =
+            mapOf(
+              "reason" to "device_execution_exception",
+              "exception" to (throwable.message ?: throwable.javaClass.simpleName),
+            ),
+        )
+      }
     applyExecutionReport(task = task, action = action, report = report, submitGatewayResult = true)
   }
 
@@ -1375,7 +1389,7 @@ class OpenCrayRuntime(
         }
         put("metadata", report.metadata)
       }
-      val result =
+      var result =
         gatewayClient.submitResult(
           config = currentGatewayConfig(),
           taskId = taskId,
@@ -1386,6 +1400,22 @@ class OpenCrayRuntime(
           message = report.message,
           data = submitData,
         )
+      var attempt = 1
+      while (!result.success && attempt < 3) {
+        attempt += 1
+        Thread.sleep(800L * attempt)
+        result =
+          gatewayClient.submitResult(
+            config = currentGatewayConfig(),
+            taskId = taskId,
+            deviceId = deviceId,
+            requestId = requestId,
+            skillName = action.id,
+            code = code,
+            message = report.message,
+            data = submitData,
+          )
+      }
       val current = snapshot()
       if (result.success) {
         val taskStatus = result.data?.taskStatus.orEmpty()
@@ -1410,7 +1440,7 @@ class OpenCrayRuntime(
       } else {
         runtimeRepository.replaceSnapshot(
           current.copy(
-            recentEvents = listOf("Result submit failed for ${action.id}: ${result.code}") + current.recentEvents,
+            recentEvents = listOf("Result submit failed for ${action.id}: ${result.code} ${result.message}") + current.recentEvents,
           ),
         )
       }
