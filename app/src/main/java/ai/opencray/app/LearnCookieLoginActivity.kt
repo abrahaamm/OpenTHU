@@ -4,7 +4,9 @@ import android.app.Activity
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -32,6 +34,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
   private var capturedLearnCsrf: String = ""
   private var capturedWebvpnCookie: String = ""
   private var attemptedDirectLearnAfterWebvpn: Boolean = false
+  private var lastMainFrameHttpError: Int? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -50,7 +53,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     setupCookieManager()
     setupWebView()
     bindActions()
-    loadUnifiedLogin()
+    startFreshUnifiedLogin()
   }
 
   override fun onDestroy() {
@@ -78,6 +81,27 @@ class LearnCookieLoginActivity : AppCompatActivity() {
           view: WebView,
           request: WebResourceRequest,
         ): Boolean = false
+
+        override fun onPageStarted(
+          view: WebView,
+          url: String,
+          favicon: android.graphics.Bitmap?,
+        ) {
+          lastMainFrameHttpError = null
+          super.onPageStarted(view, url, favicon)
+        }
+
+        override fun onReceivedHttpError(
+          view: WebView,
+          request: WebResourceRequest,
+          errorResponse: WebResourceResponse,
+        ) {
+          if (request.isForMainFrame) {
+            lastMainFrameHttpError = errorResponse.statusCode
+            statusText.text = getString(R.string.learn_login_status_http_error, errorResponse.statusCode)
+          }
+          super.onReceivedHttpError(view, request, errorResponse)
+        }
 
         override fun onPageFinished(
           view: WebView,
@@ -117,19 +141,11 @@ class LearnCookieLoginActivity : AppCompatActivity() {
       }
     }
     findViewById<Button>(R.id.learn_login_clear_button).setOnClickListener {
-      cookieManager.removeAllCookies {
-        cookieManager.flush()
-        capturedLearnCookie = ""
-        capturedLearnCsrf = ""
-        capturedWebvpnCookie = ""
-        attemptedDirectLearnAfterWebvpn = false
-        Toast.makeText(this, R.string.learn_login_cookie_cleared, Toast.LENGTH_SHORT).show()
-        loadUnifiedLogin()
-      }
+      Toast.makeText(this, R.string.learn_login_cookie_cleared, Toast.LENGTH_SHORT).show()
+      startFreshUnifiedLogin()
     }
     findViewById<Button>(R.id.learn_login_reload_button).setOnClickListener {
-      attemptedDirectLearnAfterWebvpn = false
-      loadUnifiedLogin()
+      startFreshUnifiedLogin()
     }
     findViewById<Button>(R.id.learn_login_open_learn_button).setOnClickListener {
       attemptedDirectLearnAfterWebvpn = true
@@ -151,22 +167,21 @@ class LearnCookieLoginActivity : AppCompatActivity() {
   private fun captureSessionIfReady(currentUrl: String): Boolean {
     val learnHost = hostOf(learnBaseUrl)
     val currentHost = hostOf(currentUrl)
-    val onLearnPage = learnHost.isNotBlank() && currentHost == learnHost && currentUrl.contains("/wlxt/")
-    val learnCookie = cookieFor(learnBaseUrl)
     val currentCookie = cookieFor(currentUrl)
-    val nextLearnCookie =
-      normalizeCookieHeader(
-        if (learnCookie.isNotBlank()) {
-          learnCookie
-        } else if (onLearnPage) {
-          currentCookie
-        } else {
-          ""
-        },
+    if (isAuthenticatedLearnPage(currentUrl)) {
+      val nextLearnCookie =
+        normalizeCookieHeader(
+          firstNonBlank(
+            if (currentHost == learnHost) currentCookie else "",
+            cookieFor(learnBaseUrl),
+          ),
       )
-    if (nextLearnCookie.isNotBlank()) {
-      capturedLearnCookie = nextLearnCookie
-      capturedLearnCsrf = extractCookieValue(nextLearnCookie, "XSRF-TOKEN")
+      if (hasUsableLearnCookie(nextLearnCookie)) {
+        capturedLearnCookie = nextLearnCookie
+        capturedLearnCsrf = extractLearnCsrf(nextLearnCookie)
+      } else if (nextLearnCookie.isNotBlank()) {
+        statusText.text = getString(R.string.learn_login_status_missing_csrf)
+      }
     }
 
     val webvpnCookie =
@@ -181,6 +196,28 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     }
 
     return capturedLearnCookie.isNotBlank() || capturedWebvpnCookie.isNotBlank()
+  }
+
+  private fun resetCapturedSession() {
+    capturedLearnCookie = ""
+    capturedLearnCsrf = ""
+    capturedWebvpnCookie = ""
+    attemptedDirectLearnAfterWebvpn = false
+    lastMainFrameHttpError = null
+  }
+
+  private fun startFreshUnifiedLogin() {
+    statusText.text = getString(R.string.learn_login_status_loading)
+    resetCapturedSession()
+    webView.stopLoading()
+    webView.clearCache(true)
+    webView.clearHistory()
+    webView.clearFormData()
+    WebStorage.getInstance().deleteAllData()
+    cookieManager.removeAllCookies {
+      cookieManager.flush()
+      runOnUiThread { loadUnifiedLogin() }
+    }
   }
 
   private fun saveCapturedSession(finishOnSuccess: Boolean): Boolean {
@@ -238,16 +275,31 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     cookieHeader: String,
     cookieName: String,
   ): String {
-    val prefix = "$cookieName="
     return cookieHeader.split(';')
       .map { it.trim() }
-      .firstOrNull { it.startsWith(prefix) }
+      .firstOrNull { token ->
+        token.substringBefore('=', "").trim().equals(cookieName, ignoreCase = true)
+      }
       ?.substringAfter('=')
       ?.trim()
       .orEmpty()
   }
 
+  private fun extractLearnCsrf(cookieHeader: String): String =
+    firstNonBlank(
+      extractCookieValue(cookieHeader, "XSRF-TOKEN"),
+      extractCookieValue(cookieHeader, "XSRFToken"),
+      extractCookieValue(cookieHeader, "XSRFtoken"),
+      extractCookieValue(cookieHeader, "_csrf"),
+    )
+
   private fun updateStatus(url: String) {
+    lastMainFrameHttpError?.let { statusCode ->
+      if (capturedLearnCookie.isBlank()) {
+        statusText.text = getString(R.string.learn_login_status_http_error, statusCode)
+        return
+      }
+    }
     val capturedLabels =
       listOfNotNull(
         "WebVPN".takeIf { capturedWebvpnCookie.isNotBlank() },
@@ -266,9 +318,32 @@ class LearnCookieLoginActivity : AppCompatActivity() {
 
   private fun isLikelyCompletedWebvpnLogin(url: String): Boolean {
     if (hostOf(url) != hostOf(WEBVPN_ROOT_URL)) return false
+    val statusCode = lastMainFrameHttpError
     return !url.contains("/login", ignoreCase = true) &&
-      !url.contains("oauth_login", ignoreCase = true)
+      !url.contains("oauth_login", ignoreCase = true) &&
+      !url.contains("error", ignoreCase = true) &&
+      (statusCode == null || statusCode in 200..399)
   }
+
+  private fun isAuthenticatedLearnPage(url: String): Boolean {
+    if (hostOf(url) != hostOf(learnBaseUrl)) return false
+    val statusCode = lastMainFrameHttpError
+    if (statusCode != null && statusCode !in 200..399) return false
+    val lowerUrl = url.lowercase()
+    if (
+      lowerUrl.contains("login") ||
+      lowerUrl.contains("authserver") ||
+      lowerUrl.contains("oauth") ||
+      lowerUrl.contains("error")
+    ) {
+      return false
+    }
+    return lowerUrl.contains("/f/wlxt/") || lowerUrl.contains("/b/wlxt/")
+  }
+
+  private fun hasUsableLearnCookie(cookieHeader: String): Boolean =
+    extractCookieValue(cookieHeader, "JSESSIONID").isNotBlank() &&
+      extractLearnCsrf(cookieHeader).isNotBlank()
 
   private fun compactUrl(url: String): String =
     runCatching {

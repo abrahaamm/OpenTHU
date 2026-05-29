@@ -78,6 +78,8 @@
     <string name="learn_login_cookie_cleared">已清除 WebView Cookie</string>
     <string name="learn_login_status_no_cookie">当前页面没有可用登录态，请先完成统一登录。</string>
     <string name="learn_login_status_saved">已保存登录状态</string>
+    <string name="learn_login_status_http_error">当前登录页面返回 HTTP %1$d，请重新统一登录。</string>
+    <string name="learn_login_status_missing_csrf">已进入网络学堂，但没有检测到 XSRF-TOKEN，请刷新网络学堂或重新统一登录。</string>
 
     <string name="host_label">服务地址</string>
     <string name="port_label">服务端口</string>
