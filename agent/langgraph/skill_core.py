@@ -250,8 +250,8 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "crawl_course_homeworks",
-            "Crawl homework records from Tsinghua Learn on the Android device",
-            "action",
+            "Crawl homework records from Tsinghua Learn on the Agent-Core server",
+            "data",
             "low",
             False,
             session_required=False,
@@ -283,8 +283,8 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "crawl_unsubmitted_homeworks",
-            "Crawl unsubmitted homework records from Tsinghua Learn on the Android device",
-            "action",
+            "Crawl unsubmitted homework records from Tsinghua Learn on the Agent-Core server",
+            "data",
             "low",
             False,
             session_required=False,

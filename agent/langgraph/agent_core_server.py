@@ -530,6 +530,71 @@ class AgentCoreStore:
             )
             return dict(task_doc)
 
+    def mark_device_results_timeout(
+        self,
+        *,
+        task_id: str,
+        request_ids: list[str],
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+
+            pending = {str(item) for item in request_ids if str(item)}
+            completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
+            in_flight = set(str(item) for item in task_doc.get("in_flight_request_ids", []))
+            approved_by_request_id = {
+                str(item.get("request_id", "")): item
+                for item in task_doc.get("approved_skills", [])
+                if isinstance(item, dict)
+            }
+            results = task_doc.get("device_results", [])
+            if not isinstance(results, list):
+                results = []
+
+            changed = False
+            for request_id in sorted(pending):
+                if request_id in completed:
+                    continue
+                skill = approved_by_request_id.get(request_id, {})
+                skill_name = str(skill.get("skill_name", "unknown"))
+                result_item = {
+                    "request_id": request_id,
+                    "skill_name": skill_name,
+                    "code": "DEVICE_RESULT_TIMEOUT",
+                    "success": False,
+                    "message": "手机端执行结果超时未返回。请确认 App 仍在运行、网络可达，然后重新发起任务。",
+                    "data": {
+                        "status": "timeout",
+                        "reason": "device_result_timeout",
+                    },
+                    "source": "agent_core",
+                    "from_cache": False,
+                    "fetched_at": utc_now(),
+                }
+                results.append(result_item)
+                completed.add(request_id)
+                in_flight.discard(request_id)
+                self._mark_skill_status(task_doc, request_id, "failed")
+                changed = True
+                logger.warning(
+                    "[result] device timeout task_id=%s request_id=%s skill_name=%s",
+                    task_id,
+                    request_id,
+                    skill_name,
+                )
+
+            if changed:
+                task_doc["device_results"] = results
+                task_doc["completed_request_ids"] = sorted(completed)
+                task_doc["in_flight_request_ids"] = sorted(in_flight)
+                self._refresh_task_status_locked(task_doc)
+                task_doc["updated_at"] = utc_now()
+                self._save_locked()
+                self._condition.notify_all()
+            return dict(task_doc)
+
     def apply_skill_decision(
         self,
         *,
@@ -1477,6 +1542,14 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                             )
 
                     task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
+                    timed_out_ids = pending_runtime_request_ids(task_doc)
+                    if timed_out_ids:
+                        task_doc = store.mark_device_results_timeout(
+                            task_id=task_id,
+                            request_ids=timed_out_ids,
+                        )
+                        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
 
                     device_results = task_doc.get("device_results", [])
                     for result in device_results if isinstance(device_results, list) else []:
