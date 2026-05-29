@@ -111,7 +111,7 @@ class HomeworkSkillExecutor(
           recoverable = false,
         )
       }
-      val csrf = providedCsrf.ifBlank { extractCookieValue(normalizedCookie, "XSRF-TOKEN") }
+      val csrf = providedCsrf.ifBlank { extractCsrfFromCookie(normalizedCookie) }
       cachedHomeworkAuth =
         HomeworkAuth(
           ok = true,
@@ -238,7 +238,10 @@ class HomeworkSkillExecutor(
           ),
       )
     }.getOrElse { throwable ->
-      homeworkFailure(
+      homeworkAuthFailure(
+        throwable,
+        extra = mapOf("course_ids" to requestedCourseIds),
+      ) ?: homeworkFailure(
         message = "Homework crawl failed: ${throwable.message ?: "unknown"}",
         reason = "crawl_failed",
         recoverable = true,
@@ -289,7 +292,10 @@ class HomeworkSkillExecutor(
           ),
       )
     }.getOrElse { throwable ->
-      homeworkFailure(
+      homeworkAuthFailure(
+        throwable,
+        extra = mapOf("homework_id" to homeworkId),
+      ) ?: homeworkFailure(
         message = "Preview homework attachments failed: ${throwable.message ?: "unknown"}",
         reason = "preview_failed",
         recoverable = true,
@@ -392,7 +398,10 @@ class HomeworkSkillExecutor(
           ),
       )
     }.getOrElse { throwable ->
-      homeworkFailure(
+      homeworkAuthFailure(
+        throwable,
+        extra = mapOf("homework_id" to requestedId, "xszyid" to xszyid),
+      ) ?: homeworkFailure(
         message = "Upload homework attachment failed: ${throwable.message ?: "unknown"}",
         reason = "upload_failed",
         recoverable = true,
@@ -512,7 +521,15 @@ class HomeworkSkillExecutor(
           ),
       )
     }.getOrElse { throwable ->
-      homeworkFailure(
+      homeworkAuthFailure(
+        throwable,
+        extra =
+          mapOf(
+            "homework_id" to zyid,
+            "xszyid" to xszyid,
+            "wlkcid" to wlkcid,
+          ),
+      ) ?: homeworkFailure(
         message = "Submit homework failed: ${throwable.message ?: "unknown"}",
         reason = "submit_failed",
         recoverable = true,
@@ -571,7 +588,7 @@ class HomeworkSkillExecutor(
         readActionString(action, "csrf_token"),
         readActionString(action, "homework_csrf"),
         readActionString(action, "learn_csrf"),
-        extractCookieValue(cookie, "XSRF-TOKEN"),
+        extractCsrfFromCookie(cookie),
         cachedHomeworkAuth?.csrf.orEmpty(),
         readHomeworkSetting("homework_csrf"),
         readHomeworkSetting("learn_csrf"),
@@ -580,6 +597,12 @@ class HomeworkSkillExecutor(
       return HomeworkAuth(
         ok = false,
         message = "网络学堂登录态未配置。请去设置页的「清华统一登录」完成登录后再重试。",
+      )
+    }
+    if (csrf.isEmpty()) {
+      return HomeworkAuth(
+        ok = false,
+        message = "网络学堂登录态缺少 XSRF-TOKEN。请去设置页的「清华统一登录」重新登录后再重试。",
       )
     }
     return HomeworkAuth(ok = true, message = "ok", baseUrl = baseUrl, cookie = cookie, csrf = csrf)
@@ -755,9 +778,7 @@ class HomeworkSkillExecutor(
       "User-Agent",
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     )
-    if (auth.csrf.isNotBlank()) {
-      conn.setRequestProperty("X-XSRF-TOKEN", auth.csrf)
-    }
+    setCsrfHeaders(conn, auth.csrf)
     conn.outputStream.use { os ->
       os.write(body.toByteArray(StandardCharsets.UTF_8))
     }
@@ -805,9 +826,7 @@ class HomeworkSkillExecutor(
       conn.setRequestProperty("Origin", originFrom(auth.baseUrl))
       conn.setRequestProperty("X-Requested-With", "XMLHttpRequest")
     }
-    if (auth.csrf.isNotBlank()) {
-      conn.setRequestProperty("X-XSRF-TOKEN", auth.csrf)
-    }
+    setCsrfHeaders(conn, auth.csrf)
     val code = conn.responseCode
     val stream = if (code in 200..299) conn.inputStream else conn.errorStream
     val raw = readResponseText(conn, stream)
@@ -847,9 +866,7 @@ class HomeworkSkillExecutor(
       "User-Agent",
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0",
     )
-    if (auth.csrf.isNotBlank()) {
-      conn.setRequestProperty("X-XSRF-TOKEN", auth.csrf)
-    }
+    setCsrfHeaders(conn, auth.csrf)
 
     DataOutputStream(BufferedOutputStream(conn.outputStream)).use { out ->
       textParts.forEach { (name, value) ->
@@ -1137,6 +1154,30 @@ class HomeworkSkillExecutor(
         ) + extra,
     )
 
+  private fun homeworkAuthFailure(
+    throwable: Throwable,
+    extra: Map<String, Any?> = emptyMap(),
+  ): ActionExecutionReport? {
+    val exception = throwable.message ?: throwable.javaClass.simpleName
+    if (!isHomeworkAuthFailure(exception)) return null
+    return homeworkFailure(
+      message = "网络学堂登录态已失效或不完整。请去设置页的「清华统一登录」重新登录后再重试。",
+      reason = "login_required",
+      recoverable = false,
+      semantic = "homework_cookie_login_required",
+      extra = extra + mapOf("exception" to exception),
+    )
+  }
+
+  private fun isHomeworkAuthFailure(message: String): Boolean {
+    val lower = message.lowercase()
+    return lower.contains("http 401") ||
+      lower.contains("http 403") ||
+      Regex("""http 30[12378]\b""").containsMatchIn(lower) ||
+      lower.contains("authserver") ||
+      lower.contains("login")
+  }
+
   private fun normalizeCookieHeader(raw: String): String {
     if (raw.isBlank()) return ""
     return raw
@@ -1150,13 +1191,32 @@ class HomeworkSkillExecutor(
     cookieHeader: String,
     cookieName: String,
   ): String {
-    val prefix = "$cookieName="
     return cookieHeader.split(';')
       .map { it.trim() }
-      .firstOrNull { it.startsWith(prefix) }
+      .firstOrNull { token ->
+        token.substringBefore('=', "").trim().equals(cookieName, ignoreCase = true)
+      }
       ?.substringAfter('=')
       ?.trim()
       .orEmpty()
+  }
+
+  private fun extractCsrfFromCookie(cookieHeader: String): String =
+    firstNonBlank(
+      extractCookieValue(cookieHeader, "XSRF-TOKEN"),
+      extractCookieValue(cookieHeader, "XSRFToken"),
+      extractCookieValue(cookieHeader, "XSRFtoken"),
+      extractCookieValue(cookieHeader, "_csrf"),
+    )
+
+  private fun setCsrfHeaders(
+    conn: HttpURLConnection,
+    csrf: String,
+  ) {
+    if (csrf.isBlank()) return
+    conn.setRequestProperty("X-XSRF-TOKEN", csrf)
+    conn.setRequestProperty("X-CSRF-TOKEN", csrf)
+    conn.setRequestProperty("X-XSRFToken", csrf)
   }
 
   private fun cookieNames(cookieHeader: String): List<String> =
