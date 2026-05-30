@@ -15,7 +15,9 @@
     <string name="chat_attach_file">文件</string>
     <string name="chat_attachment_selected">附件：%1$s</string>
     <string name="chat_attachment_empty_file">已选择文件</string>
+    <string name="chat_attachment_remove">移除附件</string>
     <string name="chat_new_conversation">新建对话</string>
+    <string name="chat_delete_conversation">删除</string>
     <string name="chat_conversation_list_title">会话列表</string>
     <string name="chat_quick_skills_toggle_expand">展开</string>
     <string name="chat_quick_skills_toggle_collapse">收起</string>

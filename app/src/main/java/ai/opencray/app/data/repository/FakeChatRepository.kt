@@ -46,6 +46,28 @@ class FakeChatRepository : ChatRepository {
   }
 
   @Synchronized
+  override fun deleteConversation(conversationId: String): Boolean {
+    if (!conversations.containsKey(conversationId)) return false
+    conversations.remove(conversationId)
+    if (conversations.isEmpty()) {
+      conversations[DEFAULT_CONVERSATION_ID] =
+        listOf(
+          ChatMessage(
+            id = UUID.randomUUID().toString(),
+            role = ChatRole.Assistant,
+            text = "新对话开始了。你可以随便聊，也可以直接说要我完成什么。",
+          ),
+        )
+      activeConversationId = DEFAULT_CONVERSATION_ID
+      return true
+    }
+    if (activeConversationId == conversationId) {
+      activeConversationId = conversations.keys.last()
+    }
+    return true
+  }
+
+  @Synchronized
   override fun sendMessage(text: String) {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return

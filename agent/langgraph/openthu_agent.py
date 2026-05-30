@@ -653,7 +653,7 @@ class OpenTHULangGraphAgent:
             "Use get_homework_cookie only when the user explicitly provides a cookie/token/header. "
             "For requests about unsubmitted/not submitted/missing homework or 未交/未提交作业, "
             "prefer crawl_unsubmitted_homeworks. For all homework lists, use crawl_course_homeworks. "
-            "For class timetable/课表, use get_course_schedule. For campus events/活动/讲座, "
+            "For class timetable/课表, use get_semesters first, then get_course_schedule. For campus events/活动/讲座, "
             "use get_campus_activities. For web or campus retrieval searches, use search. "
             "For alarms/reminders/calendar writes, plan the relevant action and let the safety layer ask "
             "for confirmation if needed. "
@@ -1429,7 +1429,7 @@ class OpenTHULangGraphAgent:
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
             "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
-            "For class timetable or 课表 requests, prefer `get_course_schedule`; for course catalog/list requests, use `get_semesters` then `get_courses`. "
+            "For class timetable or 课表 requests, use `get_semesters` before `get_course_schedule`; for course catalog/list requests, use `get_semesters` then `get_courses`. "
             "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "
             "phrases like `check my homework that is not submitted`, `unsubmitted assignments`, `未交作业`, `未提交作业` map to crawl_unsubmitted_homeworks; "
             "use get_homework_cookie only when the user provides a Learn cookie. "
@@ -1540,6 +1540,21 @@ class OpenTHULangGraphAgent:
                 for item in normalized
                 if item.get("skill_name") != "get_semesters"
             ]
+
+        has_schedule = any(item.get("skill_name") == "get_course_schedule" for item in normalized)
+        has_semesters = any(item.get("skill_name") == "get_semesters" for item in normalized)
+        if has_schedule and not has_semesters:
+            semester_probe = self._build_skill_invocation(
+                skill_name="get_semesters",
+                task_id=task_id,
+                args={},
+                description="Resolve available semesters before fetching the course schedule",
+            )
+            first_schedule_index = next(
+                (index for index, item in enumerate(normalized) if item.get("skill_name") == "get_course_schedule"),
+                0,
+            )
+            normalized.insert(first_schedule_index, semester_probe)
 
         return normalized[:8]
 
