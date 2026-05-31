@@ -165,7 +165,7 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=True,
-            when_to_use="Use when the user asks to view, fetch, check, import, or summarize their class timetable/course schedule/课表/课程表.",
+            when_to_use="Use when the user asks to view, fetch, check, import, or summarize their class timetable/course schedule/课表/课程表. Always run get_semesters before this skill in the same plan unless the plan already contains a resolved semester_id.",
             avoid_when="Do not use for generic course catalog questions; use get_courses for course lists.",
             example_utterances=[
                 "拉取我的课表",

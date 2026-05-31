@@ -143,19 +143,38 @@
                     android:orientation="vertical"
                     android:padding="10dp">
 
-                    <TextView
-                        android:id="@+id/chat_attachment_text"
+                    <LinearLayout
+                        android:id="@+id/chat_attachment_row"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginBottom="8dp"
-                        android:background="@drawable/chat_status_chip_surface"
-                        android:paddingStart="12dp"
-                        android:paddingTop="7dp"
-                        android:paddingEnd="12dp"
-                        android:paddingBottom="7dp"
-                        android:textColor="@color/opencray_primary_dark"
-                        android:textSize="12sp"
-                        android:visibility="gone" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/chat_attachment_text"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:background="@drawable/chat_status_chip_surface"
+                            android:paddingStart="12dp"
+                            android:paddingTop="7dp"
+                            android:paddingEnd="12dp"
+                            android:paddingBottom="7dp"
+                            android:textColor="@color/opencray_primary_dark"
+                            android:textSize="12sp" />
+
+                        <Button
+                            android:id="@+id/chat_attachment_clear_button"
+                            style="@style/OpenCray.SecondaryButton"
+                            android:layout_width="92dp"
+                            android:layout_height="40dp"
+                            android:layout_marginStart="8dp"
+                            android:minWidth="0dp"
+                            android:text="@string/chat_attachment_remove"
+                            android:textSize="12sp" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -958,6 +977,7 @@
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
                             android:hint="@string/setting_webvpn_cookie_hint"
+                            android:inputType="textPassword"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted" />
@@ -977,6 +997,7 @@
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
                             android:hint="@string/setting_webvpn_csrf_hint"
+                            android:inputType="textPassword"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted" />
@@ -1023,6 +1044,7 @@
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
                             android:hint="@string/setting_homework_cookie_hint"
+                            android:inputType="textPassword"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted" />
@@ -1042,6 +1064,7 @@
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
                             android:hint="@string/setting_homework_csrf_hint"
+                            android:inputType="textPassword"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted" />
@@ -1353,11 +1376,13 @@
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"
-                            android:text="@string/setting_adb_bin_label" />
+                            android:text="@string/setting_adb_bin_label"
+                            android:visibility="gone" />
 
                         <TextView
                             style="@style/OpenCraySettingsFieldHelp"
-                            android:text="@string/setting_adb_bin_description" />
+                            android:text="@string/setting_adb_bin_description"
+                            android:visibility="gone" />
 
                         <EditText
                             android:id="@+id/setting_adb_bin_input"
@@ -1368,15 +1393,18 @@
                             android:hint="@string/setting_adb_bin_hint"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
-                            android:textColorHint="@color/opencray_muted" />
+                            android:textColorHint="@color/opencray_muted"
+                            android:visibility="gone" />
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"
-                            android:text="@string/setting_adb_serial_label" />
+                            android:text="@string/setting_adb_serial_label"
+                            android:visibility="gone" />
 
                         <TextView
                             style="@style/OpenCraySettingsFieldHelp"
-                            android:text="@string/setting_adb_serial_description" />
+                            android:text="@string/setting_adb_serial_description"
+                            android:visibility="gone" />
 
                         <EditText
                             android:id="@+id/setting_adb_serial_input"
@@ -1387,7 +1415,8 @@
                             android:hint="@string/setting_adb_serial_hint"
                             android:padding="14dp"
                             android:textColor="@color/opencray_ink"
-                            android:textColorHint="@color/opencray_muted" />
+                            android:textColorHint="@color/opencray_muted"
+                            android:visibility="gone" />
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"

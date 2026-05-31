@@ -103,6 +103,8 @@ class OpenCrayRuntime(
 
   fun selectConversation(conversationId: String): Boolean = chatRepository.selectConversation(conversationId)
 
+  fun deleteConversation(conversationId: String): Boolean = chatRepository.deleteConversation(conversationId)
+
   fun deletePlanningCard(cardId: String) {
     val current = snapshot()
     runtimeRepository.replaceSnapshot(
@@ -426,6 +428,10 @@ class OpenCrayRuntime(
 
     chatRepository.sendMessage(displayGoal)
 
+    if (maybeDeleteManualPlanningCard(displayGoal)) {
+      return false
+    }
+
     if (maybeCreateManualPlanningCard(displayGoal)) {
       streamAssistant("已创建规划卡片，放到规划页顶部了。你可以在那里上移、下移或删除它。")
       return false
@@ -443,6 +449,38 @@ class OpenCrayRuntime(
 
     streamAssistant(agentCoreUnavailableMessage())
     return false
+  }
+
+  private fun maybeDeleteManualPlanningCard(message: String): Boolean {
+    val normalized = message.trim()
+    val lower = normalized.lowercase(Locale.getDefault())
+    val asksDelete =
+      (normalized.contains("卡片") || lower.contains("plan card")) &&
+        listOf("删除", "移除", "删掉", "取消", "remove", "delete").any { lower.contains(it.lowercase(Locale.getDefault())) }
+    if (!asksDelete) return false
+
+    val rawTarget =
+      normalized
+        .replace(Regex("^(请|帮我|给我)?\\s*(删除|移除|删掉|取消)\\s*"), "")
+        .replace(Regex("(这张|这个|一个|一张)?\\s*(规划)?卡片"), "")
+        .trim(' ', '：', ':', '，', ',', '。')
+    val current = snapshot()
+    val target =
+      if (rawTarget.isBlank() || listOf("最新", "最后", "刚才").any { normalized.contains(it) }) {
+        current.planningCards.maxByOrNull { it.updatedAtEpochMs }
+      } else {
+        current.planningCards.firstOrNull { card ->
+          card.title.contains(rawTarget, ignoreCase = true) ||
+            card.body.contains(rawTarget, ignoreCase = true)
+        }
+      }
+    if (target == null) {
+      streamAssistant("我没有找到匹配的规划卡片。你可以换个更具体的标题，或在规划页直接点删除。")
+      return true
+    }
+    deletePlanningCard(target.id)
+    streamAssistant("已删除规划卡片：${target.title}")
+    return true
   }
 
   private fun maybeCreateManualPlanningCard(message: String): Boolean {
@@ -1322,7 +1360,23 @@ class OpenCrayRuntime(
         report.message.contains("permission", ignoreCase = true) ->
           "这个操作需要系统权限。请先授权后我会继续。"
         else ->
-          "这个操作没有成功，我已经记录原因并会尝试给你替代方案。"
+          buildString {
+            append("这个操作没有成功。")
+            if (report.message.isNotBlank()) {
+              append("\n原因：").append(report.message)
+            }
+            val reason = report.metadata["reason"]?.toString().orEmpty()
+            when {
+              reason == "login_required" || report.semantic.contains("login", ignoreCase = true) ->
+                append("\n下一步：请到设置页重新完成清华统一登录后再试。")
+              reason.contains("missing", ignoreCase = true) ->
+                append("\n下一步：请补充缺少的信息后重新发起。")
+              report.recoverable ->
+                append("\n下一步：你可以调整参数或重新登录后再试。")
+              else ->
+                append("\n下一步：我已保留失败记录，你可以换一种说法重新执行。")
+            }
+          }
       }
     if (userFacingMessage.isNotBlank()) {
       streamAssistant(userFacingMessage)

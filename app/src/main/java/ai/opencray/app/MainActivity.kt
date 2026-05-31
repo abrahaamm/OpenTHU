@@ -83,7 +83,9 @@ class MainActivity : AppCompatActivity() {
   private lateinit var newConversationButton: Button
   private lateinit var chatInput: EditText
   private lateinit var chatAttachButton: Button
+  private lateinit var chatAttachmentRow: LinearLayout
   private lateinit var chatAttachmentView: TextView
+  private lateinit var chatAttachmentClearButton: Button
   private lateinit var chatSendButton: Button
   private lateinit var preferenceInput: EditText
   private lateinit var preferenceAddButton: Button
@@ -245,7 +247,9 @@ class MainActivity : AppCompatActivity() {
     newConversationButton = findViewById(R.id.new_conversation_button)
     chatInput = findViewById(R.id.chat_input)
     chatAttachButton = findViewById(R.id.chat_attach_button)
+    chatAttachmentRow = findViewById(R.id.chat_attachment_row)
     chatAttachmentView = findViewById(R.id.chat_attachment_text)
+    chatAttachmentClearButton = findViewById(R.id.chat_attachment_clear_button)
     chatSendButton = findViewById(R.id.chat_send_button)
     preferenceInput = findViewById(R.id.preference_input)
     preferenceAddButton = findViewById(R.id.preference_add_button)
@@ -462,6 +466,9 @@ class MainActivity : AppCompatActivity() {
       clearChatAttachment()
       true
     }
+    chatAttachmentClearButton.setOnClickListener {
+      clearChatAttachment()
+    }
     chatSendButton.setOnClickListener {
       val text = chatInput.text.toString()
       viewModel.sendChatMessage(
@@ -594,14 +601,14 @@ class MainActivity : AppCompatActivity() {
         .takeIf { it.isNotBlank() }
         ?: getString(R.string.chat_attachment_empty_file)
     chatAttachmentView.text = getString(R.string.chat_attachment_selected, name)
-    chatAttachmentView.visibility = View.VISIBLE
+    chatAttachmentRow.visibility = View.VISIBLE
   }
 
   private fun clearChatAttachment() {
     selectedChatFileUri = null
     selectedChatFileName = ""
     chatAttachmentView.text = ""
-    chatAttachmentView.visibility = View.GONE
+    chatAttachmentRow.visibility = View.GONE
   }
 
   private fun resolveDisplayName(uri: Uri): String {
@@ -666,6 +673,7 @@ class MainActivity : AppCompatActivity() {
         AppDestination.Planning -> "把线索、日程、待办和执行建议收拢成一个真正可读的计划工作台。"
         AppDestination.Settings -> "管理能力开关、数据源、模型配置与运行参数。"
       }
+    onboardingView.visibility = View.GONE
 
     renderChatHistory(state.chatMessages)
     renderConversationTabs(state.conversationSummaries)
@@ -865,7 +873,8 @@ class MainActivity : AppCompatActivity() {
     conversations.forEach { summary ->
       val row =
         LinearLayout(this).apply {
-          orientation = LinearLayout.VERTICAL
+          orientation = LinearLayout.HORIZONTAL
+          gravity = Gravity.CENTER_VERTICAL
           setPadding(dp(14), dp(12), dp(14), dp(12))
           setBackgroundResource(
             if (summary.selected) {
@@ -882,6 +891,17 @@ class MainActivity : AppCompatActivity() {
             drawerLayout.closeDrawer(GravityCompat.START)
             render()
           }
+        }
+
+      val textColumn =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.VERTICAL
+          layoutParams =
+            LinearLayout.LayoutParams(
+              0,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+              1f,
+            )
         }
 
       val titleView =
@@ -912,8 +932,34 @@ class MainActivity : AppCompatActivity() {
           )
         }
 
-      row.addView(titleView)
-      row.addView(subtitleView)
+      val deleteButton =
+        Button(this).apply {
+          text = getString(R.string.chat_delete_conversation)
+          textSize = 11f
+          minWidth = 0
+          minimumWidth = 0
+          minHeight = dp(34)
+          minimumHeight = dp(34)
+          setPadding(dp(10), dp(2), dp(10), dp(2))
+          setBackgroundResource(R.drawable.button_secondary_selector)
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+          setOnClickListener {
+            viewModel.deleteConversation(summary.id)
+            render()
+          }
+          layoutParams =
+            LinearLayout.LayoutParams(
+              dp(56),
+              dp(34),
+            ).apply {
+              marginStart = dp(8)
+            }
+        }
+
+      textColumn.addView(titleView)
+      textColumn.addView(subtitleView)
+      row.addView(textColumn)
+      row.addView(deleteButton)
 
       val params =
         LinearLayout.LayoutParams(

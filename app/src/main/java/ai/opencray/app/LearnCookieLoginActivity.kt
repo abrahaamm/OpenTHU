@@ -13,7 +13,9 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.concurrent.thread
 
 class LearnCookieLoginActivity : AppCompatActivity() {
   companion object {
@@ -24,6 +26,8 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     private const val DEFAULT_LEARN_BASE_URL = "https://learn.tsinghua.edu.cn"
     private const val WEBVPN_ROOT_URL = "https://webvpn.tsinghua.edu.cn"
     private const val WEBVPN_OAUTH_LOGIN_URL = "https://webvpn.tsinghua.edu.cn/login?oauth_login=true"
+    private const val USER_AGENT =
+      "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 OpenTHU/1.0"
   }
 
   private lateinit var webView: WebView
@@ -34,6 +38,9 @@ class LearnCookieLoginActivity : AppCompatActivity() {
   private var capturedLearnCsrf: String = ""
   private var capturedWebvpnCookie: String = ""
   private var attemptedDirectLearnAfterWebvpn: Boolean = false
+  private var attemptedLearnSsoLogin: Boolean = false
+  private var validatingLearnCookie: Boolean = false
+  private var pendingLearnCookie: String = ""
   private var lastMainFrameHttpError: Int? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,8 +79,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
       javaScriptEnabled = true
       domStorageEnabled = true
       cacheMode = WebSettings.LOAD_DEFAULT
-      userAgentString =
-        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36 OpenTHU/1.0"
+      userAgentString = USER_AGENT
     }
     webView.webViewClient =
       object : WebViewClient() {
@@ -109,6 +115,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
         ) {
           super.onPageFinished(view, url)
           captureSessionIfReady(url)
+          maybeContinueLearnSso(url)
           if (
             capturedWebvpnCookie.isNotBlank() &&
             capturedLearnCookie.isBlank() &&
@@ -159,7 +166,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
   }
 
   private fun loadDirectLearnHome() {
-    val target = "${learnBaseUrl.trimEnd('/')}/f/wlxt/index/course/student/index"
+    val target = learnBaseUrl.trimEnd('/').ifBlank { DEFAULT_LEARN_BASE_URL }
     statusText.text = getString(R.string.learn_login_status_loading)
     webView.loadUrl(target)
   }
@@ -168,7 +175,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     val learnHost = hostOf(learnBaseUrl)
     val currentHost = hostOf(currentUrl)
     val currentCookie = cookieFor(currentUrl)
-    if (isAuthenticatedLearnPage(currentUrl)) {
+    if (isPotentialLearnSessionPage(currentUrl)) {
       val nextLearnCookie =
         normalizeCookieHeader(
           firstNonBlank(
@@ -177,8 +184,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
           ),
       )
       if (hasUsableLearnCookie(nextLearnCookie)) {
-        capturedLearnCookie = nextLearnCookie
-        capturedLearnCsrf = extractLearnCsrf(nextLearnCookie)
+        validateAndCaptureLearnCookie(nextLearnCookie)
       } else if (nextLearnCookie.isNotBlank()) {
         statusText.text = getString(R.string.learn_login_status_missing_csrf)
       }
@@ -203,6 +209,9 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     capturedLearnCsrf = ""
     capturedWebvpnCookie = ""
     attemptedDirectLearnAfterWebvpn = false
+    attemptedLearnSsoLogin = false
+    validatingLearnCookie = false
+    pendingLearnCookie = ""
     lastMainFrameHttpError = null
   }
 
@@ -294,6 +303,10 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     )
 
   private fun updateStatus(url: String) {
+    if (validatingLearnCookie) {
+      statusText.text = getString(R.string.learn_login_status_validating)
+      return
+    }
     lastMainFrameHttpError?.let { statusCode ->
       if (capturedLearnCookie.isBlank()) {
         statusText.text = getString(R.string.learn_login_status_http_error, statusCode)
@@ -325,7 +338,7 @@ class LearnCookieLoginActivity : AppCompatActivity() {
       (statusCode == null || statusCode in 200..399)
   }
 
-  private fun isAuthenticatedLearnPage(url: String): Boolean {
+  private fun isPotentialLearnSessionPage(url: String): Boolean {
     if (hostOf(url) != hostOf(learnBaseUrl)) return false
     val statusCode = lastMainFrameHttpError
     if (statusCode != null && statusCode !in 200..399) return false
@@ -338,12 +351,137 @@ class LearnCookieLoginActivity : AppCompatActivity() {
     ) {
       return false
     }
-    return lowerUrl.contains("/f/wlxt/") || lowerUrl.contains("/b/wlxt/")
+    return lowerUrl.contains("/f/wlxt/") ||
+      lowerUrl.contains("/b/wlxt/") ||
+      lowerUrl.contains("/f/redirectbystuorteacher")
   }
 
   private fun hasUsableLearnCookie(cookieHeader: String): Boolean =
     extractCookieValue(cookieHeader, "JSESSIONID").isNotBlank() &&
       extractLearnCsrf(cookieHeader).isNotBlank()
+
+  private fun maybeContinueLearnSso(url: String) {
+    if (hostOf(url) != hostOf(learnBaseUrl)) return
+    val statusCode = lastMainFrameHttpError
+    if (statusCode != null && statusCode !in 200..399) return
+    val lowerUrl = url.lowercase()
+    if (
+      attemptedLearnSsoLogin ||
+      capturedLearnCookie.isNotBlank() ||
+      !(
+        lowerUrl.endsWith("/f/login") ||
+          lowerUrl.contains("/f/login?") ||
+          lowerUrl.endsWith("/f/redirectbystuorteacher")
+      )
+    ) {
+      return
+    }
+    attemptedLearnSsoLogin = true
+    statusText.text = getString(R.string.learn_login_status_continue_learn)
+    webView.evaluateJavascript(
+      """
+      (function() {
+        var loginButton = document.getElementById('loginButtonId');
+        if (loginButton) {
+          loginButton.click();
+          return true;
+        }
+        var candidates = Array.prototype.slice.call(document.querySelectorAll('a,button,input[type=button],input[type=submit]'));
+        var target = candidates.find(function(el) {
+          var text = (el.innerText || el.value || el.textContent || '').trim();
+          return text.indexOf('登录') >= 0 || text.indexOf('网络学堂') >= 0;
+        });
+        if (target) {
+          target.click();
+          return true;
+        }
+        return false;
+      })();
+      """.trimIndent(),
+      null,
+    )
+  }
+
+  private fun validateAndCaptureLearnCookie(cookieHeader: String) {
+    if (
+      cookieHeader == capturedLearnCookie ||
+      cookieHeader == pendingLearnCookie ||
+      validatingLearnCookie
+    ) {
+      return
+    }
+    pendingLearnCookie = cookieHeader
+    validatingLearnCookie = true
+    statusText.text = getString(R.string.learn_login_status_validating)
+    thread(name = "learn-cookie-validator") {
+      val validation = validateLearnCookie(cookieHeader)
+      runOnUiThread {
+        validatingLearnCookie = false
+        if (validation) {
+          capturedLearnCookie = cookieHeader
+          capturedLearnCsrf = extractLearnCsrf(cookieHeader)
+          saveCapturedSession(finishOnSuccess = true)
+        } else {
+          if (pendingLearnCookie == cookieHeader) pendingLearnCookie = ""
+          capturedLearnCookie = ""
+          capturedLearnCsrf = ""
+          statusText.text = getString(R.string.learn_login_status_unverified_cookie)
+        }
+      }
+    }
+  }
+
+  private fun validateLearnCookie(cookieHeader: String): Boolean {
+    val base = learnBaseUrl.trimEnd('/').ifBlank { DEFAULT_LEARN_BASE_URL }
+    val csrf = extractLearnCsrf(cookieHeader)
+    val validationUrl = "$base/b/wlxt/kc/v_wlkc_xs_xktjb_coassb/queryxnxq"
+    return runCatching {
+      val connection = URL(validationUrl).openConnection() as HttpURLConnection
+      connection.instanceFollowRedirects = false
+      connection.connectTimeout = 5000
+      connection.readTimeout = 5000
+      connection.requestMethod = "GET"
+      connection.setRequestProperty("User-Agent", USER_AGENT)
+      connection.setRequestProperty("Accept", "application/json, text/javascript, */*; q=0.01")
+      connection.setRequestProperty("X-Requested-With", "XMLHttpRequest")
+      connection.setRequestProperty("Referer", "$base/f/wlxt/index/course/student/")
+      connection.setRequestProperty("Cookie", cookieHeader)
+      if (csrf.isNotBlank()) {
+        connection.setRequestProperty("X-XSRF-TOKEN", csrf)
+        connection.setRequestProperty("X-CSRF-TOKEN", csrf)
+        connection.setRequestProperty("X-XSRFToken", csrf)
+      }
+      val statusCode = connection.responseCode
+      val body =
+        (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+          ?.bufferedReader(Charsets.UTF_8)
+          ?.use { it.readText().take(4096) }
+          .orEmpty()
+      connection.disconnect()
+      isValidLearnValidationResponse(statusCode, body)
+    }.getOrDefault(false)
+  }
+
+  private fun isValidLearnValidationResponse(
+    statusCode: Int,
+    body: String,
+  ): Boolean {
+    if (statusCode !in 200..299) return false
+    val trimmed = body.trim()
+    if (trimmed.isBlank()) return false
+    val lower = trimmed.lowercase()
+    if (
+      lower.contains("<html") ||
+      lower.contains("登录页") ||
+      lower.contains("未登录") ||
+      lower.contains("登录失效") ||
+      lower.contains("authserver") ||
+      lower.contains("j_spring_security")
+    ) {
+      return false
+    }
+    return trimmed.startsWith("[") || trimmed.startsWith("{")
+  }
 
   private fun compactUrl(url: String): String =
     runCatching {

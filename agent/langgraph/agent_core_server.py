@@ -905,16 +905,35 @@ def build_server_data_summary(results: Any) -> str:
         return ""
     sections: list[str] = []
     for result in results:
-        if not isinstance(result, dict) or result.get("code") != "OK":
+        if not isinstance(result, dict):
             continue
         skill_name = str(result.get("skill_name", ""))
         data = result.get("data", {})
         if not isinstance(data, dict):
             continue
-        section = _summarize_data_result(skill_name, data, message=str(result.get("message", "")))
+        if result.get("code") != "OK":
+            section = _summarize_failed_result(skill_name, data, code=str(result.get("code", "")), message=str(result.get("message", "")))
+        else:
+            section = _summarize_data_result(skill_name, data, message=str(result.get("message", "")))
         if section:
             sections.append(section)
     return "\n\n".join(sections)
+
+
+def _summarize_failed_result(skill_name: str, data: dict[str, Any], *, code: str, message: str = "") -> str:
+    title = skill_name or "skill"
+    detail = str(data.get("message", "") or message or code or "执行失败").strip()
+    reason = str(data.get("reason", "") or data.get("status", "")).strip()
+    lines = [f"### {title} 未完成", detail]
+    if reason and reason not in detail:
+        lines.append(f"原因：{reason}")
+    if code == "NOT_CONFIGURED" or reason == "login_required":
+        lines.append("下一步：请在设置页完成清华统一登录后重新发起。")
+    elif code == "DEVICE_RESULT_TIMEOUT":
+        lines.append("下一步：请确认手机 App 仍在运行、网络可达，然后重新执行。")
+    else:
+        lines.append("下一步：请检查参数或登录状态后重试。")
+    return "\n".join(line for line in lines if line)
 
 
 def _display_message_from_result(
