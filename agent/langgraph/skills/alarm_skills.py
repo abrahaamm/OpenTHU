@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from ..skill_core import SkillHandler, SkillInvocation, SkillResult
@@ -41,6 +42,32 @@ def _parse_local_alarm_time(raw: str) -> tuple[int, int] | None:
     return None
 
 
+def _timezone_from_session(session: dict[str, Any], args: dict[str, Any]) -> tuple[timezone | ZoneInfo | None, str, str]:
+    for key in ("timezone", "local_timezone", "timezone_id", "tz"):
+        raw = args.get(key)
+        if raw is None:
+            raw = session.get(key)
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        if value.lower() in {"local", "system"}:
+            return None, value, ""
+        try:
+            return ZoneInfo(value), value, ""
+        except ZoneInfoNotFoundError:
+            pass
+
+        match = re.match(r"^([+-])([01]\d|2[0-3]):?([0-5]\d)$", value)
+        if match:
+            sign, hours, minutes = match.groups()
+            delta = timedelta(hours=int(hours), minutes=int(minutes))
+            if sign == "-":
+                delta = -delta
+            return timezone(delta), value, ""
+        return None, value, f"Invalid timezone `{value}`; using server local timezone."
+    return None, "", ""
+
+
 class GetCurrentTimeSkill(SkillHandler):
     def invoke(
         self,
@@ -48,12 +75,15 @@ class GetCurrentTimeSkill(SkillHandler):
         session: dict[str, Any],
         state: dict[str, Any],
     ) -> SkillResult:
-        now_local = datetime.now().astimezone()
+        args = dict(invocation.args or {})
+        configured_tz, configured_tz_id, timezone_warning = _timezone_from_session(session, args)
+        now_local = datetime.now(configured_tz).astimezone(configured_tz) if configured_tz else datetime.now().astimezone()
         tzinfo = now_local.tzinfo
         tz_name = now_local.tzname() or "local"
         tz_id = getattr(tzinfo, "key", None) or tz_name
         offset = now_local.strftime("%z")
         offset_fmt = f"{offset[:3]}:{offset[3:]}" if len(offset) == 5 else offset
+        warnings = [timezone_warning] if timezone_warning else []
         return SkillResult(
             skill_name=invocation.skill_name,
             request_id=invocation.request_id,
@@ -67,6 +97,9 @@ class GetCurrentTimeSkill(SkillHandler):
                 "timezone_name": tz_name,
                 "utc_offset": offset_fmt,
                 "epoch_ms": int(now_local.timestamp() * 1000),
+                "timezone_source": "session" if configured_tz_id and not timezone_warning else "server",
+                "configured_timezone": configured_tz_id,
+                "warnings": warnings,
             },
             from_cache=False,
             fetched_at=_utc_now(),

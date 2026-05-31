@@ -897,6 +897,8 @@ class OpenCrayRuntime(
       "get_campus_activities",
       "search",
       "get_homework_cookie",
+      "crawl_course_homeworks",
+      "crawl_unsubmitted_homeworks",
       "preview_homework_attachments",
       "upload_homework_attachment",
       "submit_homework",
@@ -936,6 +938,7 @@ class OpenCrayRuntime(
     val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
     val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
+    val timezone = pref.getString("timezone", "").orEmpty().trim()
 
     val session = linkedMapOf<String, Any?>()
     if (cookie.isNotEmpty()) {
@@ -960,13 +963,23 @@ class OpenCrayRuntime(
     if (model.isNotEmpty()) session["llm_model"] = model
     if (baseUrl.isNotEmpty()) session["llm_base_url"] = baseUrl
     if (userId.isNotEmpty()) session["user_id"] = userId
-    if (campusFile.isNotEmpty()) session["campus_file"] = campusFile
+    if (timezone.isNotEmpty()) session["timezone"] = timezone
+    if (campusFile.isNotEmpty()) {
+      session["campus_file"] = campusFile
+      readSmallUtf8File(campusFile)?.let { session["campus_activities_json"] = it }
+    }
     if (searchProvider.isNotEmpty()) session["search_provider"] = searchProvider
     if (searchEndpoint.isNotEmpty()) session["search_endpoint"] = searchEndpoint
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
     if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
     return session
+  }
+
+  private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
+    val file = File(path)
+    if (!file.isFile || !file.canRead() || file.length() > maxBytes) return null
+    return runCatching { file.readText(Charsets.UTF_8).trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
   }
 
   private fun planGoalViaGateway(goal: String) {
