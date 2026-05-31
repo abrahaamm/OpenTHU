@@ -51,7 +51,29 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _activity_records_from_loaded(loaded: Any) -> list[Any]:
+    records = loaded.get("activities", loaded) if isinstance(loaded, dict) else loaded
+    if not isinstance(records, list):
+        raise ValueError("campus activities source must contain a list or an object with `activities`")
+    return records
+
+
+def _coerce_configured_activities(records: list[Any]) -> list[dict[str, Any]]:
+    return [
+        activity
+        for idx, item in enumerate(records, start=1)
+        if (activity := coerce_activity(item, idx)) is not None
+    ]
+
+
 def _load_configured_activities(session: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    for key in ("campus_activities", "campus_activities_json", "campus_activities_data"):
+        raw_value = session.get(key)
+        if raw_value is None or raw_value == "":
+            continue
+        loaded = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        return _coerce_configured_activities(_activity_records_from_loaded(loaded)), f"session:{key}"
+
     raw_path = ""
     for key in ("campus_file", "campus_activities_file"):
         value = session.get(key)
@@ -65,16 +87,7 @@ def _load_configured_activities(session: dict[str, Any]) -> tuple[list[dict[str,
 
     path = Path(raw_path)
     loaded = json.loads(path.read_text(encoding="utf-8"))
-    records = loaded.get("activities", loaded) if isinstance(loaded, dict) else loaded
-    if not isinstance(records, list):
-        raise ValueError("campus activities file must contain a list or an object with `activities`")
-
-    activities = [
-        activity
-        for idx, item in enumerate(records, start=1)
-        if (activity := coerce_activity(item, idx)) is not None
-    ]
-    return activities, str(path)
+    return _coerce_configured_activities(_activity_records_from_loaded(loaded)), str(path)
 
 
 def _coerce_keywords(args: dict[str, Any]) -> list[str]:

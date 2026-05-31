@@ -103,6 +103,8 @@ class OpenCrayRuntime(
 
   fun selectConversation(conversationId: String): Boolean = chatRepository.selectConversation(conversationId)
 
+  fun deleteConversation(conversationId: String): Boolean = chatRepository.deleteConversation(conversationId)
+
   fun deletePlanningCard(cardId: String) {
     val current = snapshot()
     runtimeRepository.replaceSnapshot(
@@ -426,6 +428,10 @@ class OpenCrayRuntime(
 
     chatRepository.sendMessage(displayGoal)
 
+    if (maybeDeleteManualPlanningCard(displayGoal)) {
+      return false
+    }
+
     if (maybeCreateManualPlanningCard(displayGoal)) {
       streamAssistant("已创建规划卡片，放到规划页顶部了。你可以在那里上移、下移或删除它。")
       return false
@@ -443,6 +449,38 @@ class OpenCrayRuntime(
 
     streamAssistant(agentCoreUnavailableMessage())
     return false
+  }
+
+  private fun maybeDeleteManualPlanningCard(message: String): Boolean {
+    val normalized = message.trim()
+    val lower = normalized.lowercase(Locale.getDefault())
+    val asksDelete =
+      (normalized.contains("卡片") || lower.contains("plan card")) &&
+        listOf("删除", "移除", "删掉", "取消", "remove", "delete").any { lower.contains(it.lowercase(Locale.getDefault())) }
+    if (!asksDelete) return false
+
+    val rawTarget =
+      normalized
+        .replace(Regex("^(请|帮我|给我)?\\s*(删除|移除|删掉|取消)\\s*"), "")
+        .replace(Regex("(这张|这个|一个|一张)?\\s*(规划)?卡片"), "")
+        .trim(' ', '：', ':', '，', ',', '。')
+    val current = snapshot()
+    val target =
+      if (rawTarget.isBlank() || listOf("最新", "最后", "刚才").any { normalized.contains(it) }) {
+        current.planningCards.maxByOrNull { it.updatedAtEpochMs }
+      } else {
+        current.planningCards.firstOrNull { card ->
+          card.title.contains(rawTarget, ignoreCase = true) ||
+            card.body.contains(rawTarget, ignoreCase = true)
+        }
+      }
+    if (target == null) {
+      streamAssistant("我没有找到匹配的规划卡片。你可以换个更具体的标题，或在规划页直接点删除。")
+      return true
+    }
+    deletePlanningCard(target.id)
+    streamAssistant("已删除规划卡片：${target.title}")
+    return true
   }
 
   private fun maybeCreateManualPlanningCard(message: String): Boolean {
@@ -900,6 +938,7 @@ class OpenCrayRuntime(
     val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
     val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
+    val timezone = pref.getString("timezone", "").orEmpty().trim()
 
     val session = linkedMapOf<String, Any?>()
     if (cookie.isNotEmpty()) {
@@ -924,13 +963,23 @@ class OpenCrayRuntime(
     if (model.isNotEmpty()) session["llm_model"] = model
     if (baseUrl.isNotEmpty()) session["llm_base_url"] = baseUrl
     if (userId.isNotEmpty()) session["user_id"] = userId
-    if (campusFile.isNotEmpty()) session["campus_file"] = campusFile
+    if (timezone.isNotEmpty()) session["timezone"] = timezone
+    if (campusFile.isNotEmpty()) {
+      session["campus_file"] = campusFile
+      readSmallUtf8File(campusFile)?.let { session["campus_activities_json"] = it }
+    }
     if (searchProvider.isNotEmpty()) session["search_provider"] = searchProvider
     if (searchEndpoint.isNotEmpty()) session["search_endpoint"] = searchEndpoint
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
     if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
     return session
+  }
+
+  private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
+    val file = File(path)
+    if (!file.isFile || !file.canRead() || file.length() > maxBytes) return null
+    return runCatching { file.readText(Charsets.UTF_8).trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
   }
 
   private fun planGoalViaGateway(goal: String) {
@@ -1128,7 +1177,23 @@ class OpenCrayRuntime(
       return
     }
 
-    val report = actionExecutor.execute(action, goal)
+    val report =
+      runCatching {
+        actionExecutor.execute(action, goal)
+      }.getOrElse { throwable ->
+        runtimeRepository.appendEvent("Execution crashed for ${action.id}: ${throwable.message ?: throwable.javaClass.simpleName}")
+        ActionExecutionReport(
+          success = false,
+          message = "端侧执行 ${action.id} 时发生异常：${throwable.message ?: throwable.javaClass.simpleName}",
+          recoverable = true,
+          semantic = "device_skill_execution_exception",
+          metadata =
+            mapOf(
+              "reason" to "device_execution_exception",
+              "exception" to (throwable.message ?: throwable.javaClass.simpleName),
+            ),
+        )
+      }
     applyExecutionReport(task = task, action = action, report = report, submitGatewayResult = true)
   }
 
@@ -1308,7 +1373,23 @@ class OpenCrayRuntime(
         report.message.contains("permission", ignoreCase = true) ->
           "这个操作需要系统权限。请先授权后我会继续。"
         else ->
-          "这个操作没有成功，我已经记录原因并会尝试给你替代方案。"
+          buildString {
+            append("这个操作没有成功。")
+            if (report.message.isNotBlank()) {
+              append("\n原因：").append(report.message)
+            }
+            val reason = report.metadata["reason"]?.toString().orEmpty()
+            when {
+              reason == "login_required" || report.semantic.contains("login", ignoreCase = true) ->
+                append("\n下一步：请到设置页重新完成清华统一登录后再试。")
+              reason.contains("missing", ignoreCase = true) ->
+                append("\n下一步：请补充缺少的信息后重新发起。")
+              report.recoverable ->
+                append("\n下一步：你可以调整参数或重新登录后再试。")
+              else ->
+                append("\n下一步：我已保留失败记录，你可以换一种说法重新执行。")
+            }
+          }
       }
     if (userFacingMessage.isNotBlank()) {
       streamAssistant(userFacingMessage)
@@ -1375,7 +1456,7 @@ class OpenCrayRuntime(
         }
         put("metadata", report.metadata)
       }
-      val result =
+      var result =
         gatewayClient.submitResult(
           config = currentGatewayConfig(),
           taskId = taskId,
@@ -1386,6 +1467,22 @@ class OpenCrayRuntime(
           message = report.message,
           data = submitData,
         )
+      var attempt = 1
+      while (!result.success && attempt < 3) {
+        attempt += 1
+        Thread.sleep(800L * attempt)
+        result =
+          gatewayClient.submitResult(
+            config = currentGatewayConfig(),
+            taskId = taskId,
+            deviceId = deviceId,
+            requestId = requestId,
+            skillName = action.id,
+            code = code,
+            message = report.message,
+            data = submitData,
+          )
+      }
       val current = snapshot()
       if (result.success) {
         val taskStatus = result.data?.taskStatus.orEmpty()
@@ -1410,7 +1507,7 @@ class OpenCrayRuntime(
       } else {
         runtimeRepository.replaceSnapshot(
           current.copy(
-            recentEvents = listOf("Result submit failed for ${action.id}: ${result.code}") + current.recentEvents,
+            recentEvents = listOf("Result submit failed for ${action.id}: ${result.code} ${result.message}") + current.recentEvents,
           ),
         )
       }

@@ -15,7 +15,9 @@
     <string name="chat_attach_file">文件</string>
     <string name="chat_attachment_selected">附件：%1$s</string>
     <string name="chat_attachment_empty_file">已选择文件</string>
+    <string name="chat_attachment_remove">移除附件</string>
     <string name="chat_new_conversation">新建对话</string>
+    <string name="chat_delete_conversation">删除</string>
     <string name="chat_conversation_list_title">会话列表</string>
     <string name="chat_quick_skills_toggle_expand">展开</string>
     <string name="chat_quick_skills_toggle_collapse">收起</string>
@@ -78,6 +80,11 @@
     <string name="learn_login_cookie_cleared">已清除 WebView Cookie</string>
     <string name="learn_login_status_no_cookie">当前页面没有可用登录态，请先完成统一登录。</string>
     <string name="learn_login_status_saved">已保存登录状态</string>
+    <string name="learn_login_status_http_error">当前登录页面返回 HTTP %1$d，请重新统一登录。</string>
+    <string name="learn_login_status_missing_csrf">已进入网络学堂，但没有检测到 XSRF-TOKEN，请刷新网络学堂或重新统一登录。</string>
+    <string name="learn_login_status_continue_learn">正在进入网络学堂认证…</string>
+    <string name="learn_login_status_validating">正在验证网络学堂登录态…</string>
+    <string name="learn_login_status_unverified_cookie">检测到的网络学堂 Cookie 未通过接口验证，请点击页面里的登录按钮完成网络学堂认证。</string>
 
     <string name="host_label">服务地址</string>
     <string name="port_label">服务端口</string>

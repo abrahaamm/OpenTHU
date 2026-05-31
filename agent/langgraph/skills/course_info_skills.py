@@ -320,6 +320,17 @@ def _parse_semester(raw: Any) -> SemesterInfo | None:
     )
 
 
+def _infer_current_semester_id(today: date | None = None) -> str:
+    current = today or date.today()
+    year = current.year
+    month = current.month
+    if 2 <= month <= 7:
+        return f"{year - 1}-{year}-2"
+    if month == 1:
+        return f"{year - 1}-{year}-1"
+    return f"{year}-{year + 1}-1"
+
+
 def _extract_list(raw: Any, *paths: tuple[str, ...] | str) -> list[Any]:
     if isinstance(raw, list):
         return raw
@@ -706,8 +717,8 @@ def _current_semester_id(client: CourseInfoHttpClient, state: dict[str, Any]) ->
             if semester:
                 return semester.semester_id
     except Exception:
-        return ""
-    return ""
+        return _infer_current_semester_id()
+    return _infer_current_semester_id()
 
 
 def _fetch_courses(
@@ -811,6 +822,7 @@ def _semester_for_schedule(
             first_day=first_day,
             week_count=int(week_count_raw),
         )
+    inferred_semester_id = semester_id or _infer_current_semester_id()
     csrf = client.csrf_token
     if not csrf:
         csrf = client.fetch_learn_csrf()
@@ -826,7 +838,14 @@ def _semester_for_schedule(
             parsed = _parse_semester(item)
             if parsed and parsed.semester_id == semester_id:
                 return parsed
-    return current
+    return current or SemesterInfo(
+        semester_id=inferred_semester_id,
+        semester_name=inferred_semester_id,
+        start_date="",
+        end_date="",
+        first_day="",
+        week_count=0,
+    )
 
 
 def _fetch_primary_schedule(
@@ -955,36 +974,29 @@ class GetCourseScheduleSkill(_BaseCourseInfoSkill):
             try:
                 semester = _semester_for_schedule(client, invocation.args, state)
                 if semester is None or not semester.first_day or not semester.week_count:
+                    warnings.append("webvpn_semester_unresolved")
+                else:
+                    entries = _fetch_primary_schedule(client, semester, graduate)
+                    if include_secondary and not graduate:
+                        try:
+                            entries.extend(_fetch_secondary_schedule(client, semester))
+                        except Exception:
+                            warnings.append("secondary_schedule_unavailable")
+                    entries = _dedupe_schedule_entries(entries)
                     return _result(
                         invocation,
-                        "INVALID_PARAM",
+                        "OK",
                         {
-                            "status": "invalid_param",
-                            "message": "first_day/week_count are required when current semester cannot be resolved.",
+                            "status": "ok",
+                            "source": "webvpn_teaching_calendar",
+                            "semester": semester.to_dict(),
+                            "schedule_entries": entries,
+                            "schedule_count": len(entries),
+                            "courses": _schedule_summary(entries),
+                            "warnings": warnings,
                         },
-                        "course_schedule",
+                        "webvpn.tsinghua.edu.cn",
                     )
-                entries = _fetch_primary_schedule(client, semester, graduate)
-                if include_secondary and not graduate:
-                    try:
-                        entries.extend(_fetch_secondary_schedule(client, semester))
-                    except Exception:
-                        warnings.append("secondary_schedule_unavailable")
-                entries = _dedupe_schedule_entries(entries)
-                return _result(
-                    invocation,
-                    "OK",
-                    {
-                        "status": "ok",
-                        "source": "webvpn_teaching_calendar",
-                        "semester": semester.to_dict(),
-                        "schedule_entries": entries,
-                        "schedule_count": len(entries),
-                        "courses": _schedule_summary(entries),
-                        "warnings": warnings,
-                    },
-                    "webvpn.tsinghua.edu.cn",
-                )
             except Exception as exc:
                 warnings.append(f"webvpn_schedule_failed: {exc}")
 

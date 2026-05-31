@@ -275,6 +275,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       selectedDestination = AppDestination.Chat
     }
   }
+
+  fun deleteConversation(conversationId: String) {
+    conversations.remove(conversationId)
+    if (runtime.deleteConversation(conversationId)) {
+      selectedConversationId = runtime.activeConversationId()
+      selectedDestination = AppDestination.Chat
+    }
+  }
 }
 
 data class MainUiState(

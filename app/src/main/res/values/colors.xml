@@ -6,14 +6,14 @@
     <color name="opencray_surface">#F7FFFFFF</color>
     <color name="opencray_ink">#FF24113D</color>
     <color name="opencray_muted">#FF716382</color>
-    <color name="opencray_primary">#FF7C3AED</color>
-    <color name="opencray_primary_dark">#FF4C1D95</color>
+    <color name="opencray_primary">#FF5B5FC7</color>
+    <color name="opencray_primary_dark">#FF383B84</color>
     <color name="opencray_primary_soft">#FFEDE4FF</color>
-    <color name="opencray_accent">#FFFF7AC8</color>
+    <color name="opencray_accent">#FF7C8AD8</color>
     <color name="opencray_card">#FFFFFFFF</color>
     <color name="opencray_card_soft">#FFFBF8FF</color>
-    <color name="opencray_user_bubble">#FF7C3AED</color>
+    <color name="opencray_user_bubble">#FF5B5FC7</color>
     <color name="opencray_assistant_bubble">#FFFFFFFF</color>
     <color name="opencray_system_bubble">#FFF0E8FF</color>
-    <color name="opencray_border">#2E7C3AED</color>
+    <color name="opencray_border">#2E5B5FC7</color>
 </resources>

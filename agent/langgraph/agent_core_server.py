@@ -36,10 +36,105 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("agent_core_server")
 DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS = 8.0
 DEVICE_RESULT_WAIT_TIMEOUT_SECONDS = 300.0
+DEBUG_LOG_VALUE_LIMIT = 6000
+DEVICE_EXECUTED_SKILLS = {
+    "get_homework_cookie",
+    "crawl_course_homeworks",
+    "crawl_unsubmitted_homeworks",
+    "preview_homework_attachments",
+    "upload_homework_attachment",
+    "submit_homework",
+}
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_debug_value(value: Any, *, limit: int = DEBUG_LOG_VALUE_LIMIT) -> str:
+    """Serialize debug payloads without leaking credentials or cookies."""
+    sensitive_keys = {
+        "cookie",
+        "cookies",
+        "session_cookie",
+        "learn_cookie",
+        "homework_cookie",
+        "password",
+        "token",
+        "csrf_token",
+        "xsrf-token",
+        "x-xsrf-token",
+    }
+
+    def scrub(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            cleaned: dict[str, Any] = {}
+            for key, item in obj.items():
+                key_text = str(key)
+                key_lower = key_text.lower()
+                if key_lower in sensitive_keys or any(part in key_lower for part in ("cookie", "password", "token")):
+                    cleaned[key_text] = f"<redacted:{len(str(item))} chars>"
+                else:
+                    cleaned[key_text] = scrub(item)
+            return cleaned
+        if isinstance(obj, list):
+            return [scrub(item) for item in obj]
+        return obj
+
+    try:
+        text = json.dumps(scrub(value), ensure_ascii=False, default=str)
+    except Exception:
+        text = str(value)
+    if len(text) > limit:
+        return text[:limit] + f"...<truncated {len(text) - limit} chars>"
+    return text
+
+
+def _log_tool_result_debug(prefix: str, *, task_id: str, result_item: dict[str, Any], task_status: str = "") -> None:
+    logger.debug(
+        "%s task_id=%s request_id=%s skill_name=%s code=%s success=%s source=%s task_status=%s message=%r data=%s",
+        prefix,
+        task_id,
+        result_item.get("request_id", ""),
+        result_item.get("skill_name", ""),
+        result_item.get("code", ""),
+        result_item.get("success", ""),
+        result_item.get("source", ""),
+        task_status,
+        result_item.get("message", ""),
+        _safe_debug_value(result_item.get("data", {})),
+    )
+
+
+def _log_plan_chain_debug(task_doc: dict[str, Any]) -> None:
+    task_id = str(task_doc.get("task_id", ""))
+    logger.debug(
+        "[plan.debug] task_id=%s status=%s approved=%d blocked=%d",
+        task_id,
+        task_doc.get("status", ""),
+        len(task_doc.get("approved_skills", [])) if isinstance(task_doc.get("approved_skills", []), list) else 0,
+        len(task_doc.get("blocked_skills", [])) if isinstance(task_doc.get("blocked_skills", []), list) else 0,
+    )
+    for collection_key in ("skill_plan", "approved_skills", "blocked_skills"):
+        items = task_doc.get(collection_key, [])
+        if not isinstance(items, list):
+            continue
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            logger.debug(
+                "[plan.debug.%s] task_id=%s order=%02d skill_name=%s request_id=%s status=%s risk_level=%s requires_approval=%s description=%r args=%s",
+                collection_key,
+                task_id,
+                index,
+                item.get("skill_name", ""),
+                item.get("request_id", ""),
+                item.get("status", ""),
+                item.get("risk_level", ""),
+                item.get("requires_approval", ""),
+                str(item.get("description", ""))[:300],
+                _safe_debug_value(item.get("args", {})),
+            )
 
 
 class DeviceRegisterRequest(BaseModel):
@@ -348,6 +443,12 @@ class AgentCoreStore:
             task_doc["updated_at"] = utc_now()
             self._save_locked()
             self._condition.notify_all()
+            _log_tool_result_debug(
+                "[result.debug.server]",
+                task_id=task_id,
+                result_item=result_item,
+                task_status=str(task_doc.get("status", "")),
+            )
             return dict(task_doc)
 
     def suppress_show_summary_for_stream(self, *, task_id: str) -> dict[str, Any]:
@@ -527,6 +628,83 @@ class AgentCoreStore:
                 len(task_doc["completed_request_ids"]),
                 len([item for item in task_doc.get("approved_skills", []) if isinstance(item, dict)]),
             )
+            _log_tool_result_debug(
+                "[result.debug.device]",
+                task_id=task_id,
+                result_item=result_item,
+                task_status=str(task_doc.get("status", "")),
+            )
+            return dict(task_doc)
+
+    def mark_device_results_timeout(
+        self,
+        *,
+        task_id: str,
+        request_ids: list[str],
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+
+            pending = {str(item) for item in request_ids if str(item)}
+            completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
+            in_flight = set(str(item) for item in task_doc.get("in_flight_request_ids", []))
+            approved_by_request_id = {
+                str(item.get("request_id", "")): item
+                for item in task_doc.get("approved_skills", [])
+                if isinstance(item, dict)
+            }
+            results = task_doc.get("device_results", [])
+            if not isinstance(results, list):
+                results = []
+
+            changed = False
+            for request_id in sorted(pending):
+                if request_id in completed:
+                    continue
+                skill = approved_by_request_id.get(request_id, {})
+                skill_name = str(skill.get("skill_name", "unknown"))
+                result_item = {
+                    "request_id": request_id,
+                    "skill_name": skill_name,
+                    "code": "DEVICE_RESULT_TIMEOUT",
+                    "success": False,
+                    "message": "手机端执行结果超时未返回。请确认 App 仍在运行、网络可达，然后重新发起任务。",
+                    "data": {
+                        "status": "timeout",
+                        "reason": "device_result_timeout",
+                    },
+                    "source": "agent_core",
+                    "from_cache": False,
+                    "fetched_at": utc_now(),
+                }
+                results.append(result_item)
+                completed.add(request_id)
+                in_flight.discard(request_id)
+                self._mark_skill_status(task_doc, request_id, "failed")
+                changed = True
+                logger.warning(
+                    "[result] device timeout task_id=%s request_id=%s skill_name=%s",
+                    task_id,
+                    request_id,
+                    skill_name,
+                )
+                _log_tool_result_debug(
+                    "[result.debug.timeout]",
+                    task_id=task_id,
+                    result_item=result_item,
+                    task_status=str(task_doc.get("status", "")),
+                )
+
+            if changed:
+                task_doc["device_results"] = results
+                task_doc["completed_request_ids"] = sorted(completed)
+                task_doc["in_flight_request_ids"] = sorted(in_flight)
+                self._refresh_task_status_locked(task_doc)
+                task_doc["updated_at"] = utc_now()
+                self._save_locked()
+                self._condition.notify_all()
             return dict(task_doc)
 
     def apply_skill_decision(
@@ -739,6 +917,15 @@ def execute_server_side_data_skills(
         if not isinstance(skill, dict):
             continue
         skill_name = str(skill.get("skill_name", ""))
+        if skill_name in DEVICE_EXECUTED_SKILLS:
+            logger.debug(
+                "[server-skill] skip device-executed skill task_id=%s request_id=%s skill_name=%s args=%s",
+                task_id,
+                str(skill.get("request_id", "")),
+                skill_name,
+                _safe_debug_value(skill.get("args", {})),
+            )
+            continue
         spec = agent.skill_manager.get_spec(skill_name)
         if spec is None or spec.category != "data":
             continue
@@ -748,12 +935,28 @@ def execute_server_side_data_skills(
         invocation_payload = dict(skill)
         invocation_payload["task_id"] = task_id
         invocation = _skill_invocation_from_dict(invocation_payload)
+        logger.debug(
+            "[server-skill] executing task_id=%s request_id=%s skill_name=%s args=%s",
+            task_id,
+            invocation.request_id,
+            invocation.skill_name,
+            _safe_debug_value(invocation.args),
+        )
         result = agent.skill_manager.execute(invocation, current_session, state)
         result["task_id"] = task_id
         result["status"] = "executed" if result.get("code") == "OK" else "failed"
         result["success"] = result.get("code") == "OK"
         result["skill_name"] = invocation.skill_name
         result["description"] = invocation.description
+        logger.debug(
+            "[server-skill] result task_id=%s request_id=%s skill_name=%s code=%s success=%s data=%s",
+            task_id,
+            invocation.request_id,
+            invocation.skill_name,
+            result.get("code", ""),
+            result.get("success", False),
+            _safe_debug_value(result.get("data", {})),
+        )
         current_task = store.record_server_result(task_id=task_id, result=result)
         maybe_session = result.get("data", {}).get("session")
         if isinstance(maybe_session, dict):
@@ -826,16 +1029,35 @@ def build_server_data_summary(results: Any) -> str:
         return ""
     sections: list[str] = []
     for result in results:
-        if not isinstance(result, dict) or result.get("code") != "OK":
+        if not isinstance(result, dict):
             continue
         skill_name = str(result.get("skill_name", ""))
         data = result.get("data", {})
         if not isinstance(data, dict):
             continue
-        section = _summarize_data_result(skill_name, data, message=str(result.get("message", "")))
+        if result.get("code") != "OK":
+            section = _summarize_failed_result(skill_name, data, code=str(result.get("code", "")), message=str(result.get("message", "")))
+        else:
+            section = _summarize_data_result(skill_name, data, message=str(result.get("message", "")))
         if section:
             sections.append(section)
     return "\n\n".join(sections)
+
+
+def _summarize_failed_result(skill_name: str, data: dict[str, Any], *, code: str, message: str = "") -> str:
+    title = skill_name or "skill"
+    detail = str(data.get("message", "") or message or code or "执行失败").strip()
+    reason = str(data.get("reason", "") or data.get("status", "")).strip()
+    lines = [f"### {title} 未完成", detail]
+    if reason and reason not in detail:
+        lines.append(f"原因：{reason}")
+    if code == "NOT_CONFIGURED" or reason == "login_required":
+        lines.append("下一步：请在设置页完成清华统一登录后重新发起。")
+    elif code == "DEVICE_RESULT_TIMEOUT":
+        lines.append("下一步：请确认手机 App 仍在运行、网络可达，然后重新执行。")
+    else:
+        lines.append("下一步：请检查参数或登录状态后重试。")
+    return "\n".join(line for line in lines if line)
 
 
 def _display_message_from_result(
@@ -1218,6 +1440,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             else {},
         )
         task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+        _log_plan_chain_debug(task_doc)
         logger.info(
             "[api] plan complete task_id=%s task_status=%s approved=%d blocked=%d",
             task_doc["task_id"],
@@ -1352,6 +1575,7 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     else {},
                 )
                 task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+                _log_plan_chain_debug(task_doc)
 
                 task_id = str(task_doc.get("task_id", ""))
                 server_results = task_doc.get("server_results", [])
@@ -1463,6 +1687,14 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                             )
 
                     task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
+                    timed_out_ids = pending_runtime_request_ids(task_doc)
+                    if timed_out_ids:
+                        task_doc = store.mark_device_results_timeout(
+                            task_id=task_id,
+                            request_ids=timed_out_ids,
+                        )
+                        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
 
                     device_results = task_doc.get("device_results", [])
                     for result in device_results if isinstance(device_results, list) else []:
@@ -1602,8 +1834,15 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             len(task_doc.get("device_results", [])),
             payload.message or "",
         )
+        logger.debug(
+            "[api] result payload task_id=%s request_id=%s skill_name=%s data=%s",
+            task_doc.get("task_id", ""),
+            payload.request_id,
+            payload.skill_name,
+            _safe_debug_value(payload.data),
+        )
         if payload.data:
-            logger.info("[api] result data task_id=%s %s", task_doc.get("task_id", ""), payload.data)
+            logger.info("[api] result data task_id=%s %s", task_doc.get("task_id", ""), _safe_debug_value(payload.data, limit=2000))
         return {
             "code": "OK",
             "message": "Result accepted",

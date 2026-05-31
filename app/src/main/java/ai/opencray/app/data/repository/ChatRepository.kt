@@ -18,6 +18,8 @@ interface ChatRepository {
 
   fun selectConversation(conversationId: String): Boolean
 
+  fun deleteConversation(conversationId: String): Boolean
+
   fun sendMessage(text: String)
 
   fun appendMessage(
