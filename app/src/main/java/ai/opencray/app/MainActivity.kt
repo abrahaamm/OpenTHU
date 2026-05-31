@@ -11,6 +11,7 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
+import android.text.method.LinkMovementMethod
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -40,6 +41,9 @@ import ai.opencray.app.feature.chat.AgentEventOption
 import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
+import io.noties.markwon.Markwon
+import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.image.ImagesPlugin
 
 class MainActivity : AppCompatActivity() {
   companion object {
@@ -48,6 +52,7 @@ class MainActivity : AppCompatActivity() {
   }
 
   private lateinit var viewModel: MainViewModel
+  private lateinit var markwon: Markwon
   private var pendingCalendarActionId: String? = null
 
   private lateinit var drawerLayout: DrawerLayout
@@ -186,6 +191,11 @@ class MainActivity : AppCompatActivity() {
     enableEdgeToEdge()
     setContentView(R.layout.activity_main)
     viewModel = ViewModelProvider(this)[MainViewModel::class.java]
+    markwon =
+      Markwon.builder(this)
+        .usePlugin(TablePlugin.create(this))
+        .usePlugin(ImagesPlugin.create())
+        .build()
 
     viewModel.setCalendarPermissionDelegate {
       ActivityCompat.requestPermissions(
@@ -1225,12 +1235,20 @@ class MainActivity : AppCompatActivity() {
         ChatRole.Assistant -> "助手"
         ChatRole.System -> "系统"
       }
+    val shouldRenderMarkdown = message.role == ChatRole.Assistant || message.role == ChatRole.System
+    val markdownText = "**$label**\n\n${message.text}"
 
     return TextView(this).apply {
-      text = "$label\n${message.text}"
       textSize = 14f
       setLineSpacing(2f, 1.0f)
       setPadding(dp(14), dp(10), dp(14), dp(10))
+      if (shouldRenderMarkdown) {
+        movementMethod = LinkMovementMethod.getInstance()
+        linksClickable = true
+        markwon.setMarkdown(this, markdownText)
+      } else {
+        text = "$label\n${message.text}"
+      }
       setTextColor(
         ContextCompat.getColor(
           this@MainActivity,

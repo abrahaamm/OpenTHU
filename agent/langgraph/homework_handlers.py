@@ -10,6 +10,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
+try:
+    import requests
+except ImportError:  # pragma: no cover - urllib fallback keeps minimal installs usable.
+    requests = None
+
 
 class HomeworkBridgeError(RuntimeError):
     pass
@@ -85,19 +90,34 @@ def _extract_cookie_value(cookie_header: str, cookie_name: str) -> str:
     return ""
 
 
-def _learn_cookie_from_session(session: dict[str, Any], args: dict[str, Any]) -> str:
-    return _normalize_cookie_header(
-        _first_nonblank(
-            args.get("session_cookie"),
-            args.get("cookies"),
-            args.get("homework_cookie"),
-            args.get("learn_cookie"),
-            session.get("homework_cookie"),
-            session.get("learn_cookie"),
-            session.get("session_cookie"),
-            session.get("cookies"),
-        )
+def _looks_like_learn_cookie(cookie_header: str) -> bool:
+    return bool(
+        _extract_cookie_value(cookie_header, "JSESSIONID")
+        or _extract_cookie_value(cookie_header, "XSRF-TOKEN")
+        or _extract_cookie_value(cookie_header, "XSRFToken")
     )
+
+
+def _learn_cookie_from_session(session: dict[str, Any], args: dict[str, Any]) -> str:
+    for value in (
+        args.get("session_cookie"),
+        args.get("cookies"),
+        args.get("homework_cookie"),
+        args.get("learn_cookie"),
+        session.get("homework_cookie"),
+        session.get("learn_cookie"),
+        session.get("session_cookie"),
+        session.get("cookies"),
+    ):
+        cookie = _normalize_cookie_header(value)
+        if cookie:
+            return cookie
+
+    for value in (args.get("cookie"), session.get("cookie")):
+        cookie = _normalize_cookie_header(value)
+        if cookie and _looks_like_learn_cookie(cookie):
+            return cookie
+    return ""
 
 
 def _csrf_from_session(session: dict[str, Any], args: dict[str, Any], cookie: str) -> str:
@@ -111,6 +131,8 @@ def _csrf_from_session(session: dict[str, Any], args: dict[str, Any], cookie: st
         _extract_cookie_value(cookie, "XSRF-TOKEN"),
         _extract_cookie_value(cookie, "XSRFToken"),
         _extract_cookie_value(cookie, "_csrf"),
+        args.get("csrf"),
+        session.get("csrf"),
     )
 
 
@@ -172,6 +194,7 @@ class LearnHomeworkHttpClient:
             else "application/json, text/javascript, */*; q=0.01",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Cache-Control": "no-cache",
+            "Connection": "close",
             "Pragma": "no-cache",
             "Cookie": self.cookie,
             "User-Agent": "Mozilla/5.0 OpenTHU-AgentCore/1.0",
@@ -187,6 +210,37 @@ class LearnHomeworkHttpClient:
             headers["X-XSRFToken"] = self.csrf
         if body is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+        if requests is not None:
+            last_error: Exception | None = None
+            attempts = 5 if method.upper() == "POST" else 3
+            for attempt in range(attempts):
+                try:
+                    response = requests.request(
+                        method,
+                        url,
+                        data=body,
+                        headers=headers,
+                        timeout=12,
+                        allow_redirects=False,
+                    )
+                    break
+                except requests.RequestException as exc:
+                    last_error = exc
+                    if attempt < attempts - 1:
+                        time.sleep(0.4 * (attempt + 1))
+                        continue
+                    raise LearnHomeworkHttpError(f"network_error for {url}: {exc}") from exc
+            else:
+                raise LearnHomeworkHttpError(f"network_error for {url}: {last_error}")
+
+            text = _decode_response(response.content, response.headers.get("Content-Type", ""))
+            if 200 <= response.status_code <= 299:
+                return text
+            location = response.headers.get("Location", "")
+            raise LearnHomeworkHttpError(
+                f"HTTP {response.status_code} for {url}{f' location={location}' if location else ''}: {text[:512]}"
+            )
+
         request = Request(url, data=body, headers=headers, method=method)
         try:
             with urlopen(request, timeout=24) as response:
@@ -396,6 +450,8 @@ def _load_homework_courses(client: LearnHomeworkHttpClient, invocation: Any) -> 
                 "class_no": _normalize_text(item.get("kxhnumber")),
                 "teacher_name": _normalize_text(item.get("jsm")),
                 "time_location": _normalize_text(item.get("sjddb")),
+                "homework_total": _normalize_text(item.get("zyzs")),
+                "homework_unsubmitted": _normalize_text(item.get("wjzys")),
                 "course_url": f"{client.base_url}/f/wlxt/index/course/student/course?wlkcid={course_id}",
                 "homework_page_url": f"{client.base_url}/f/wlxt/kczy/zy/student/beforePageList?wlkcid={course_id}",
             }
@@ -413,6 +469,10 @@ def _extract_homework_records(
     if not isinstance(raw, dict):
         return []
     rows = raw.get("aaData") or raw.get("data") or raw.get("resultList") or raw.get("rows")
+    if not isinstance(rows, list):
+        nested = raw.get("object")
+        if isinstance(nested, dict):
+            rows = nested.get("aaData") or nested.get("data") or nested.get("resultList") or nested.get("rows")
     if not isinstance(rows, list):
         rows = []
     records: list[dict[str, Any]] = []
@@ -470,6 +530,13 @@ def _homework_auth_failure_message(message: str) -> bool:
     )
 
 
+def _positive_int(value: Any) -> bool:
+    try:
+        return int(str(value or "0").strip()) > 0
+    except ValueError:
+        return False
+
+
 def _crawl_homeworks_on_server(invocation: Any, session: dict[str, Any], *, unsubmitted_only: bool) -> Any:
     try:
         from .skill_core import SkillResult
@@ -501,9 +568,19 @@ def _crawl_homeworks_on_server(invocation: Any, session: dict[str, Any], *, unsu
         courses = _load_homework_courses(client, invocation)
         if requested_course_ids:
             courses = [course for course in courses if str(course.get("wlkcid", "")) in requested_course_ids]
+        elif unsubmitted_only:
+            courses = [course for course in courses if _positive_int(course.get("homework_unsubmitted"))]
         records: list[dict[str, Any]] = []
+        warnings: list[str] = []
         for course in courses:
-            client.get_text(str(course["homework_page_url"]), referer=str(course["course_url"]), html=True)
+            try:
+                client.get_text(str(course["homework_page_url"]), referer=str(course["course_url"]), html=True)
+            except Exception as exc:
+                if _homework_auth_failure_message(str(exc)):
+                    raise
+                warnings.append(
+                    f"Skipped homework page prefetch for {course.get('course_name', course.get('wlkcid', 'unknown'))}: {exc}"
+                )
             for endpoint_type in endpoint_types:
                 endpoint = endpoint_map[endpoint_type]
                 raw = client.post_form(endpoint, _datatable_payload(str(course["wlkcid"])), referer=str(course["homework_page_url"]))
@@ -527,6 +604,7 @@ def _crawl_homeworks_on_server(invocation: Any, session: dict[str, Any], *, unsu
                 "course_count": len(courses),
                 "course_ids": sorted(requested_course_ids),
                 "learn_base_url": client.base_url,
+                "warnings": warnings,
             },
             from_cache=False,
             fetched_at=_utc_now_iso(),

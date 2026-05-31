@@ -241,6 +241,16 @@ class OpenTHULangGraphAgent:
             history=history,
         )
         if not self._llm_config_from_state(initial)[0]:
+            deterministic_update = self._deterministic_plan_update(initial)
+            if deterministic_update:
+                initial.update(deterministic_update)
+                for node_fn in (self._safety_check, self._execute_skills):
+                    initial.update(node_fn(initial))
+                if initial.get("needs_replan"):
+                    initial.update(self._replan_failed(initial))
+                for node_fn in (self._audit_record, self._memory_update, self._finalize):
+                    initial.update(node_fn(initial))
+                return initial
             return {
                 "final_response": self._plan_error_response(
                     initial,
@@ -286,6 +296,17 @@ class OpenTHULangGraphAgent:
             state["request_id"],
         )
         if not self._llm_config_from_state(state)[0]:
+            deterministic_update = self._deterministic_plan_update(state)
+            if deterministic_update:
+                state.update(deterministic_update)
+                for node_fn in (
+                    self._safety_check,
+                    self._audit_record,
+                    self._memory_update,
+                ):
+                    state.update(node_fn(state))
+                code, message = self._set_plan_only_status(state)
+                return self._plan_only_response_from_state(state, code=code, message=message)
             return self._plan_error_response(
                 state,
                 code="LLM_NOT_CONFIGURED",
@@ -432,6 +453,31 @@ class OpenTHULangGraphAgent:
             history=history,
         )
         if not self._llm_config_from_state(state)[0]:
+            deterministic_update = self._deterministic_plan_update(state)
+            if deterministic_update:
+                state.update(deterministic_update)
+                for node_fn in (
+                    self._safety_check,
+                    self._audit_record,
+                    self._memory_update,
+                ):
+                    state.update(node_fn(state))
+                code, message = self._set_plan_only_status(state)
+                plan_response = self._plan_only_response_from_state(state, code=code, message=message)
+                return {
+                    "request_id": f"chat_{uuid4().hex[:12]}",
+                    "code": "OK",
+                    "message": "turn decision generated",
+                    "data": {
+                        "mode": "task",
+                        "should_plan": True,
+                        "reply": "我来检查网络学堂里还没有完成的作业。",
+                        "confidence": 0.9,
+                        "source": "deterministic",
+                        "user_id": user_id,
+                        "plan_response": plan_response,
+                    },
+                }
             return self._chat_error_response(
                 code="LLM_NOT_CONFIGURED",
                 message=self._llm_not_configured_message(),
@@ -786,6 +832,63 @@ class OpenTHULangGraphAgent:
         }
         return json.dumps(payload, ensure_ascii=False)
 
+    def _deterministic_plan_update(self, state: AgentState) -> dict[str, Any] | None:
+        text = str(state.get("user_input", "") or "").strip()
+        lowered = text.lower()
+        homework_terms = ("作业", "homework", "assignment", "assignments", "ddl", "deadline")
+        if not any(term in lowered for term in homework_terms):
+            return None
+
+        unsubmitted_terms = (
+            "未完成",
+            "未提交",
+            "未交",
+            "没交",
+            "待提交",
+            "待完成",
+            "unsubmitted",
+            "not submitted",
+            "unfinished",
+            "missing homework",
+        )
+        unsubmitted = any(term in lowered for term in unsubmitted_terms)
+        skill_name = "crawl_unsubmitted_homeworks" if unsubmitted else "crawl_course_homeworks"
+        description = (
+            "检查网络学堂里尚未完成或未提交的作业。"
+            if unsubmitted
+            else "抓取网络学堂作业列表。"
+        )
+        structured_prompt: StructuredPrompt = {
+            "objective": text,
+            "entities": ["homework", "unsubmitted"] if unsubmitted else ["homework"],
+            "constraints": [],
+            "success_criteria": ["Return homework records or login guidance"],
+            "sensitivity": "low",
+        }
+        planned = self._sanitize_skill_plan(
+            [{"skill_name": skill_name, "args": {}, "description": description}],
+            state["task_id"],
+        )
+        if not planned:
+            return None
+        return {
+            "standardized_prompt": structured_prompt,
+            "normalization_warnings": [],
+            "skill_plan": planned,
+            "normalizer_source": "deterministic",
+            "planner_source": "deterministic",
+            "task_status": "planned",
+            "trace_log": self._append_trace(
+                state,
+                node="deterministic_plan",
+                detail={
+                    "planned_count": len(planned),
+                    "planned_skills": [item.get("skill_name", "") for item in planned],
+                    "source": "deterministic",
+                },
+            ),
+        }
+
     def _normalize_requirement(self, state: AgentState) -> dict[str, Any]:
         logger.debug(
             "[node.normalize] task_id=%s input=%r",
@@ -841,6 +944,9 @@ class OpenTHULangGraphAgent:
     def _plan_skills(self, state: AgentState) -> dict[str, Any]:
         logger.debug("[node.plan] task_id=%s", state.get("task_id", ""))
         if state.get("task_status") == "model_unavailable":
+            deterministic_update = self._deterministic_plan_update(state)
+            if deterministic_update:
+                return deterministic_update
             return {
                 "skill_plan": [],
                 "planner_source": "not_run",
@@ -859,6 +965,9 @@ class OpenTHULangGraphAgent:
                 state.get("task_id", ""),
             )
             planner_source = "llm_empty"
+            deterministic_update = self._deterministic_plan_update(state)
+            if deterministic_update:
+                return deterministic_update
 
         skill_names = [item.get("skill_name", "") for item in planned]
         logger.info(

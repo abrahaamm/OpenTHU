@@ -13,6 +13,8 @@ try:
         PreviewHomeworkAttachmentsHandler,
         SubmitHomeworkHandler,
         UploadHomeworkAttachmentHandler,
+        _csrf_from_session,
+        _learn_cookie_from_session,
     )
     from .skill_core import SkillInvocation, build_default_registry
     from .skill_manager import SkillManager
@@ -25,6 +27,8 @@ except ImportError:
         PreviewHomeworkAttachmentsHandler,
         SubmitHomeworkHandler,
         UploadHomeworkAttachmentHandler,
+        _csrf_from_session,
+        _learn_cookie_from_session,
     )
     from skill_core import SkillInvocation, build_default_registry
     from skill_manager import SkillManager
@@ -237,6 +241,17 @@ def _test_cookie_ready(harness: HomeworkSkillHarness) -> None:
     _expect(result["data"]["status"] == "cookie_ready", f"cookie status mismatch: {result}")
 
 
+def _test_generic_session_cookie_fallback() -> None:
+    session = {"cookie": "JSESSIONID=abc", "csrf": "legacy-csrf"}
+    cookie = _learn_cookie_from_session(session, {})
+    csrf = _csrf_from_session(session, {}, cookie)
+    _expect(cookie == "JSESSIONID=abc", f"generic cookie fallback failed: {cookie}")
+    _expect(csrf == "legacy-csrf", f"generic csrf fallback failed: {csrf}")
+    cookie_with_xsrf = _learn_cookie_from_session({"cookie": "JSESSIONID=abc; XSRF-TOKEN=cookie-xsrf"}, {})
+    csrf_from_cookie = _csrf_from_session({"csrf": "webvpn-csrf"}, {}, cookie_with_xsrf)
+    _expect(csrf_from_cookie == "cookie-xsrf", f"cookie csrf should beat generic csrf: {csrf_from_cookie}")
+
+
 def _test_crawl_unsubmitted(harness: HomeworkSkillHarness) -> None:
     result = harness.invoke("crawl_unsubmitted_homeworks", {"course_ids": ["course_math", "course_cs"]})
     _expect(result["code"] == "OK", f"crawl failed: {result}")
@@ -280,6 +295,7 @@ def run_mock_suite() -> list[TestResult]:
     tests: list[tuple[str, Callable[[], None]]] = [
         ("registry_binding", _test_registry_binding),
         ("cookie_ready", lambda: _test_cookie_ready(harness)),
+        ("generic_session_cookie_fallback", _test_generic_session_cookie_fallback),
         ("crawl_unsubmitted", lambda: _test_crawl_unsubmitted(harness)),
         ("upload_missing_path", lambda: _test_upload_missing_path(harness)),
         ("submit_requires_confirm", lambda: _test_submit_requires_confirm(harness)),
