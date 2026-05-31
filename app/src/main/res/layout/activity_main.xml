@@ -20,19 +20,25 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@drawable/chat_hero_surface"
-            android:elevation="6dp"
+            android:elevation="3dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="16dp">
+            android:paddingStart="14dp"
+            android:paddingTop="14dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="14dp">
 
             <Button
                 android:id="@+id/drawer_toggle_button"
                 style="@style/OpenCray.SecondaryButton"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:contentDescription="@string/navigation_menu"
+                android:drawableTop="@drawable/ic_menu_24"
+                android:drawableTint="@color/opencray_ink"
+                android:gravity="center"
                 android:minWidth="0dp"
-                android:text="|||"
-                android:textSize="20sp" />
+                android:text="" />
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -47,7 +53,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/chat_title"
                     android:textColor="@color/white"
-                    android:textSize="20sp"
+                    android:textSize="19sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -114,9 +120,9 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:background="@drawable/chat_shell"
-                android:elevation="6dp"
+                android:elevation="2dp"
                 android:orientation="vertical"
-                android:padding="12dp">
+                android:padding="10dp">
 
                 <ScrollView
                     android:id="@+id/chat_history_scroll"
@@ -125,7 +131,7 @@
                     android:layout_weight="1"
                     android:background="@drawable/chat_history_surface"
                     android:fillViewport="true"
-                    android:padding="12dp"
+                    android:padding="10dp"
                     android:scrollbarStyle="outsideInset">
 
                     <LinearLayout
@@ -157,7 +163,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:background="@drawable/chat_status_chip_surface"
+                            android:background="@drawable/metric_tile_surface"
                             android:paddingStart="12dp"
                             android:paddingTop="7dp"
                             android:paddingEnd="12dp"
@@ -187,8 +193,12 @@
                             style="@style/OpenCray.SecondaryButton"
                             android:layout_width="64dp"
                             android:layout_height="56dp"
+                            android:contentDescription="@string/chat_attach_file"
+                            android:drawableTop="@drawable/ic_attach_file_24"
+                            android:drawableTint="@color/opencray_ink"
+                            android:gravity="center"
                             android:minWidth="0dp"
-                            android:text="@string/chat_attach_file" />
+                            android:text="" />
 
                         <EditText
                             android:id="@+id/chat_input"
@@ -214,8 +224,12 @@
                             android:layout_width="72dp"
                             android:layout_height="56dp"
                             android:layout_marginStart="10dp"
+                            android:contentDescription="@string/chat_send"
+                            android:drawableTop="@drawable/ic_send_24"
+                            android:drawableTint="@color/white"
+                            android:gravity="center"
                             android:minWidth="0dp"
-                            android:text="@string/chat_send" />
+                            android:text="" />
                     </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
@@ -238,7 +252,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:background="@drawable/chat_hero_surface"
-                        android:elevation="6dp"
+                        android:elevation="3dp"
                         android:orientation="vertical"
                         android:padding="16dp">
 
@@ -277,7 +291,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:background="@drawable/chat_status_chip_surface"
+                                android:background="@drawable/metric_tile_surface"
                                 android:orientation="vertical"
                                 android:padding="10dp">
 
@@ -303,7 +317,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="8dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/chat_status_chip_surface"
+                                android:background="@drawable/metric_tile_surface"
                                 android:orientation="vertical"
                                 android:padding="10dp">
 
@@ -329,7 +343,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="8dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/chat_status_chip_surface"
+                                android:background="@drawable/metric_tile_surface"
                                 android:orientation="vertical"
                                 android:padding="10dp">
 
@@ -355,7 +369,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="8dp"
                                 android:layout_weight="1"
-                                android:background="@drawable/chat_status_chip_surface"
+                                android:background="@drawable/metric_tile_surface"
                                 android:orientation="vertical"
                                 android:padding="10dp">
 
@@ -640,6 +654,9 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
+                            android:drawableStart="@drawable/ic_send_24"
+                            android:drawablePadding="6dp"
+                            android:drawableTint="@color/white"
                             android:text="@string/run_agent_button" />
 
                         <Button
@@ -648,6 +665,9 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
+                            android:drawableStart="@drawable/ic_calendar_24"
+                            android:drawablePadding="6dp"
+                            android:drawableTint="@color/white"
                             android:text="@string/action_primary" />
 
                         <Button
@@ -656,6 +676,9 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="10dp"
+                            android:drawableStart="@drawable/ic_clock_24"
+                            android:drawablePadding="6dp"
+                            android:drawableTint="@color/opencray_ink"
                             android:text="@string/action_secondary" />
 
                         <Button
@@ -695,7 +718,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:background="@drawable/chat_hero_surface"
-                        android:elevation="6dp"
+                        android:elevation="3dp"
                         android:orientation="vertical"
                         android:padding="16dp">
 
@@ -1470,7 +1493,7 @@
         android:layout_width="320dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
-        android:background="@color/opencray_card"
+        android:background="@drawable/drawer_surface"
         android:fillViewport="true"
         android:scrollbars="none">
 
@@ -1554,6 +1577,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
+                    android:drawableStart="@drawable/ic_plus_24"
+                    android:drawablePadding="6dp"
+                    android:drawableTint="@color/white"
                     android:text="@string/chat_new_conversation" />
 
                 <ScrollView
@@ -1626,6 +1652,8 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:drawableTop="@drawable/ic_clock_24"
+                            android:drawableTint="@color/opencray_primary_dark"
                             android:text="@string/skill_placeholder_1" />
 
                         <Button
@@ -1635,6 +1663,8 @@
                             android:layout_height="wrap_content"
                             android:layout_marginStart="10dp"
                             android:layout_weight="1"
+                            android:drawableTop="@drawable/ic_compass_24"
+                            android:drawableTint="@color/opencray_primary_dark"
                             android:text="@string/skill_placeholder_2" />
                     </LinearLayout>
 
@@ -1650,6 +1680,8 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:drawableTop="@drawable/ic_calendar_24"
+                            android:drawableTint="@color/opencray_primary_dark"
                             android:text="@string/skill_placeholder_3" />
 
                         <Button
@@ -1659,6 +1691,8 @@
                             android:layout_height="wrap_content"
                             android:layout_marginStart="10dp"
                             android:layout_weight="1"
+                            android:drawableTop="@drawable/ic_inbox_24"
+                            android:drawableTint="@color/opencray_primary_dark"
                             android:text="@string/skill_placeholder_4" />
                     </LinearLayout>
                 </LinearLayout>

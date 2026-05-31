@@ -34,6 +34,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
 import ai.opencray.app.domain.model.AppDestination
+import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SystemAction
 import ai.opencray.app.feature.chat.AgentEvent
@@ -510,16 +511,19 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
-    val preferencePlaceholderListener = View.OnClickListener {
-      Toast.makeText(this, getString(R.string.preference_waiting), Toast.LENGTH_SHORT).show()
-    }
     preferenceAddButton.setOnClickListener {
-      preferenceInput.setText("")
-      Toast.makeText(this, getString(R.string.preference_waiting), Toast.LENGTH_SHORT).show()
+      val saved = viewModel.addPreference(preferenceInput.text.toString())
+      if (saved) {
+        preferenceInput.setText("")
+        Toast.makeText(this, getString(R.string.preference_saved), Toast.LENGTH_SHORT).show()
+        render()
+      } else {
+        Toast.makeText(this, getString(R.string.preference_empty), Toast.LENGTH_SHORT).show()
+      }
     }
-    preferenceDelete1Button.setOnClickListener(preferencePlaceholderListener)
-    preferenceDelete2Button.setOnClickListener(preferencePlaceholderListener)
-    preferenceDelete3Button.setOnClickListener(preferencePlaceholderListener)
+    preferenceDelete1Button.setOnClickListener { deletePreferenceAt(0) }
+    preferenceDelete2Button.setOnClickListener { deletePreferenceAt(1) }
+    preferenceDelete3Button.setOnClickListener { deletePreferenceAt(2) }
 
     connectButton.setOnClickListener {
       viewModel.updateHost(hostInput.text.toString())
@@ -567,7 +571,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.resolveConflict("skip_write")
         render()
       } else {
-        executeActionOrShowFeedback(0, "已模拟加入日历，等待日历能力接入。")
+        executeFocusedAction()
       }
     }
     actionSecondaryButton.setOnClickListener {
@@ -575,7 +579,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.resolveConflict("coexist")
         render()
       } else {
-        executeActionOrShowFeedback(1, "已标记为稍后提醒。")
+        markFocusedActionForLater()
       }
     }
     actionTertiaryButton.setOnClickListener {
@@ -583,7 +587,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.resolveConflict("delete_conflicts")
         render()
       } else {
-        executeActionOrShowFeedback(2, "已忽略该建议，并保留可撤销记录。")
+        ignoreFocusedAction()
       }
     }
 
@@ -827,12 +831,14 @@ class MainActivity : AppCompatActivity() {
         state.systemActions.joinToString(separator = "\n\n") { action ->
           val approval = if (action.requiresApproval) "需要确认" else "可自动执行"
           val result = action.lastResult ?: "尚未执行"
-          "${action.title}\n${action.summary}\n风险：${action.riskLevel} · $approval · 状态：${action.status}\n原因：${action.explain}\n结果：$result"
+          val priority = recommendationTier(action)
+          "${action.title}\n${action.summary}\n推荐：$priority · 风险：${action.riskLevel} · $approval · 状态：${action.status}\n原因：${action.explain}\n结果：$result"
         }.ifBlank { "当前还没有可执行动作。先在对话页描述你的目标，我们会在这里生成规划建议。" }
 
-      configureActionButton(actionPrimaryButton, state.systemActions, 0, "暂无动作 1")
-      configureActionButton(actionSecondaryButton, state.systemActions, 1, "暂无动作 2")
-      configureActionButton(actionTertiaryButton, state.systemActions, 2, "暂无动作 3")
+      val focusedAction = focusedAction(state.systemActions)
+      configureActionButton(actionPrimaryButton, focusedAction?.title ?: "暂无可执行建议", focusedAction != null)
+      configureActionButton(actionSecondaryButton, "稍后处理", focusedAction != null)
+      configureActionButton(actionTertiaryButton, "忽略建议", focusedAction != null)
     }
 
     safetyFeedView.text =
@@ -852,7 +858,17 @@ class MainActivity : AppCompatActivity() {
       buildString {
         append("在这里统一管理 OpenTHU 的能力开关、连接方式、校园数据源、记忆策略与设备参数。\n")
         append("建议先完成连接与模型配置，再按需补充校园与搜索、记忆策略和设备选项。")
+        val preferences =
+          state.memoryRecords
+            .filter { it.scope == "long" }
+            .sortedByDescending { it.updatedAtEpochMs }
+            .take(3)
+        if (preferences.isNotEmpty()) {
+          append("\n\n长期偏好\n")
+          append(preferences.joinToString("\n") { "• ${it.value}" })
+        }
       }
+    configurePreferenceDeleteButtons(state.memoryRecords)
 
     eventsView.text =
       state.snapshot.recentEvents
@@ -1006,8 +1022,8 @@ class MainActivity : AppCompatActivity() {
       val cardView =
         LinearLayout(this).apply {
           orientation = LinearLayout.VERTICAL
-          setBackgroundResource(R.drawable.chat_section_surface)
-          setPadding(dp(14), dp(12), dp(14), dp(12))
+          setBackgroundResource(R.drawable.planning_card_surface)
+          setPadding(dp(14), dp(14), dp(14), dp(12))
           layoutParams =
             LinearLayout.LayoutParams(
               LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1025,25 +1041,13 @@ class MainActivity : AppCompatActivity() {
           setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
         },
       )
-      cardView.addView(
-        TextView(this).apply {
-          text = planningCardMeta(card)
-          textSize = 12f
-          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_primary_dark))
-          layoutParams =
-            LinearLayout.LayoutParams(
-              LinearLayout.LayoutParams.MATCH_PARENT,
-              LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-              topMargin = dp(6)
-            }
-        },
-      )
+      cardView.addView(createPlanningMetaRow(card))
       cardView.addView(
         TextView(this).apply {
           text = card.body
           textSize = 13f
-          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+          setLineSpacing(2f, 1.0f)
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
           layoutParams =
             LinearLayout.LayoutParams(
               LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1062,7 +1066,7 @@ class MainActivity : AppCompatActivity() {
               LinearLayout.LayoutParams.MATCH_PARENT,
               LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply {
-              topMargin = dp(10)
+              topMargin = dp(12)
             }
         }
       buttonRow.addView(planningCardButton(getString(R.string.planning_card_move_up), index > 0) {
@@ -1092,27 +1096,92 @@ class MainActivity : AppCompatActivity() {
       isEnabled = enabled
       alpha = if (enabled) 1f else 0.45f
       minWidth = 0
+      minimumWidth = 0
+      minHeight = dp(36)
+      minimumHeight = dp(36)
+      textSize = 12f
+      setAllCaps(false)
       setBackgroundResource(R.drawable.button_secondary_selector)
       setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
       stateListAnimator = null
-      elevation = dp(3).toFloat()
+      elevation = 0f
+      setPadding(dp(8), dp(2), dp(8), dp(2))
       setOnClickListener { onClick() }
       layoutParams =
         LinearLayout.LayoutParams(
           0,
-          dp(42),
+          dp(38),
           1f,
         ).apply {
           marginEnd = dp(8)
         }
     }
 
-  private fun planningCardMeta(card: PlanningCard): String =
-    listOf(
-      planningCardTypeLabel(card.type),
-      planningCardStatusLabel(card.status),
-      card.source.ifBlank { "规划页" },
-    ).joinToString(" · ")
+  private fun createPlanningMetaRow(card: PlanningCard): LinearLayout =
+    LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.MATCH_PARENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          topMargin = dp(8)
+        }
+
+      addView(createPlanningPill(planningCardTypeLabel(card.type), R.color.opencray_primary_dark))
+      addView(
+        createPlanningPill(planningCardStatusLabel(card.status), planningStatusColor(card.status)).apply {
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              marginStart = dp(6)
+            }
+        },
+      )
+      addView(
+        TextView(this@MainActivity).apply {
+          text = card.source.ifBlank { "规划页" }
+          textSize = 12f
+          maxLines = 1
+          ellipsize = android.text.TextUtils.TruncateAt.END
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              0,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+              1f,
+            ).apply {
+              marginStart = dp(8)
+            }
+        },
+      )
+    }
+
+  private fun createPlanningPill(
+    text: String,
+    colorRes: Int,
+  ): TextView =
+    TextView(this).apply {
+      this.text = text
+      textSize = 11f
+      maxLines = 1
+      setTypeface(typeface, android.graphics.Typeface.BOLD)
+      setTextColor(ContextCompat.getColor(this@MainActivity, colorRes))
+      setBackgroundResource(R.drawable.chat_status_chip_surface)
+      setPadding(dp(8), dp(4), dp(8), dp(4))
+    }
+
+  private fun planningStatusColor(status: String): Int =
+    when (status) {
+      "ok", "executed", "completed" -> R.color.opencray_success
+      "failed", "conflict_pending" -> R.color.opencray_danger
+      "pending_approval", "queued", "running", "snoozed" -> R.color.opencray_warning
+      "ignored" -> R.color.opencray_muted
+      else -> R.color.opencray_primary_dark
+    }
 
   private fun planningCardTypeLabel(type: String): String =
     when (type) {
@@ -1138,6 +1207,8 @@ class MainActivity : AppCompatActivity() {
       "completed" -> "已完成"
       "failed" -> "未成功"
       "conflict_pending" -> "需处理冲突"
+      "snoozed" -> "稍后处理"
+      "ignored" -> "已忽略"
       else -> status.ifBlank { "待处理" }
     }
 
@@ -1312,8 +1383,8 @@ class MainActivity : AppCompatActivity() {
 
     return LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
-      setPadding(dp(12), dp(8), dp(12), dp(8))
-      setBackgroundResource(R.drawable.skill_card_surface)
+      setPadding(dp(12), dp(10), dp(12), dp(10))
+      setBackgroundResource(R.drawable.event_card_surface)
       layoutParams =
         LinearLayout.LayoutParams(
           LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1326,7 +1397,8 @@ class MainActivity : AppCompatActivity() {
         TextView(this@MainActivity).apply {
           text = title
           textSize = 12f
-          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_primary_dark))
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+          setTextColor(ContextCompat.getColor(this@MainActivity, eventToneColor(event)))
         },
       )
       addView(
@@ -1335,6 +1407,13 @@ class MainActivity : AppCompatActivity() {
           textSize = 12f
           setLineSpacing(2f, 1.0f)
           setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(4)
+            }
         },
       )
       if (
@@ -1347,6 +1426,14 @@ class MainActivity : AppCompatActivity() {
       }
     }
   }
+
+  private fun eventToneColor(event: AgentEvent): Int =
+    when {
+      event.type == AgentEventType.Error || event.status == "failed" -> R.color.opencray_danger
+      event.type == AgentEventType.ConfirmationRequired -> R.color.opencray_warning
+      event.type == AgentEventType.ToolResult -> R.color.opencray_success
+      else -> R.color.opencray_primary_dark
+    }
 
   private fun createDecisionButtonRow(event: AgentEvent): View {
     val options =
@@ -1370,6 +1457,7 @@ class MainActivity : AppCompatActivity() {
       options.forEach { option ->
         val value = option.value.ifBlank { option.label }
         val normalizedValue = value.lowercase()
+        val isAffirmative = normalizedValue == "approve" || normalizedValue == "approved"
         val button =
           Button(this@MainActivity).apply {
             text = option.label.ifBlank { value }
@@ -1379,11 +1467,17 @@ class MainActivity : AppCompatActivity() {
             minimumHeight = dp(32)
             setPadding(dp(12), dp(4), dp(12), dp(4))
             setBackgroundResource(
-              if (normalizedValue == "approve" || normalizedValue == "approved") {
+              if (isAffirmative) {
                 R.drawable.button_primary_selector
               } else {
                 R.drawable.button_secondary_selector
               },
+            )
+            setTextColor(
+              ContextCompat.getColor(
+                this@MainActivity,
+                if (isAffirmative) R.color.white else R.color.opencray_ink,
+              ),
             )
             setOnClickListener {
               viewModel.submitAgentDecision(
@@ -1412,20 +1506,36 @@ class MainActivity : AppCompatActivity() {
 
   private fun configureActionButton(
     button: Button,
-    actions: List<SystemAction>,
-    index: Int,
-    fallbackText: String,
+    text: String,
+    enabled: Boolean,
   ) {
-    val action = actions.getOrNull(index)
-    if (action == null) {
-      button.text = fallbackText
-      button.isEnabled = false
-      return
-    }
-
-    button.text = action.title
-    button.isEnabled = true
+    button.text = text
+    button.isEnabled = enabled
   }
+
+  private fun configurePreferenceDeleteButtons(memoryRecords: List<MemoryRecord>) {
+    val count = memoryRecords.count { it.scope == "long" }
+    listOf(preferenceDelete1Button, preferenceDelete2Button, preferenceDelete3Button)
+      .forEachIndexed { index, button ->
+        button.isEnabled = index < count
+        button.alpha = if (button.isEnabled) 1f else 0.45f
+        button.text = if (button.isEnabled) "删${index + 1}" else "X"
+      }
+  }
+
+  private fun focusedAction(actions: List<SystemAction>): SystemAction? =
+    actions.firstOrNull { it.status in setOf("planned", "approved", "pending_approval", "conflict_pending") }
+      ?: actions.firstOrNull { it.status !in setOf("executed", "failed", "ignored", "snoozed") }
+
+  private fun recommendationTier(action: SystemAction): String =
+    when {
+      action.status == "ignored" -> "已忽略"
+      action.status == "snoozed" -> "稍后处理"
+      action.requiresApproval || action.riskLevel.equals("high", ignoreCase = true) -> "强提醒"
+      action.confidence >= 80 -> "强推荐"
+      action.confidence >= 60 -> "中推荐"
+      else -> "弱推荐"
+    }
 
   private fun requiresCalendarPermission(action: SystemAction): Boolean =
     action.id == "create_calendar_event" ||
@@ -1440,16 +1550,48 @@ class MainActivity : AppCompatActivity() {
     return readGranted && writeGranted
   }
 
-  private fun executeActionOrShowFeedback(
-    index: Int,
-    fallbackMessage: String,
-  ) {
-    val action = viewModel.getUiState().systemActions.getOrNull(index)
+  private fun executeFocusedAction() {
+    val action = focusedAction(viewModel.getUiState().systemActions)
     if (action == null) {
-      Toast.makeText(this, fallbackMessage, Toast.LENGTH_SHORT).show()
+      Toast.makeText(this, "当前没有可执行建议。", Toast.LENGTH_SHORT).show()
       return
     }
+    executeActionOrShowFeedback(action)
+  }
 
+  private fun markFocusedActionForLater() {
+    val action = focusedAction(viewModel.getUiState().systemActions)
+    if (action == null) {
+      Toast.makeText(this, "当前没有可稍后处理的建议。", Toast.LENGTH_SHORT).show()
+      return
+    }
+    val ok = viewModel.snoozeAction(action.id)
+    Toast.makeText(this, if (ok) "已标记为稍后处理。" else "没有找到这条建议。", Toast.LENGTH_SHORT).show()
+    render()
+  }
+
+  private fun ignoreFocusedAction() {
+    val action = focusedAction(viewModel.getUiState().systemActions)
+    if (action == null) {
+      Toast.makeText(this, "当前没有可忽略的建议。", Toast.LENGTH_SHORT).show()
+      return
+    }
+    val ok = viewModel.ignoreAction(action.id)
+    Toast.makeText(this, if (ok) "已忽略该建议。偏好会用于后续排序。" else "没有找到这条建议。", Toast.LENGTH_SHORT).show()
+    render()
+  }
+
+  private fun deletePreferenceAt(index: Int) {
+    val deleted = viewModel.deletePreference(index)
+    Toast.makeText(
+      this,
+      if (deleted) getString(R.string.preference_deleted) else getString(R.string.preference_delete_empty),
+      Toast.LENGTH_SHORT,
+    ).show()
+    render()
+  }
+
+  private fun executeActionOrShowFeedback(action: SystemAction) {
     if (requiresCalendarPermission(action) && !hasCalendarPermissions()) {
       pendingCalendarActionId = action.id
       ActivityCompat.requestPermissions(

@@ -29,6 +29,7 @@ import ai.opencray.app.gateway.GatewayConfig
 import ai.opencray.app.gateway.PlanTaskData
 import ai.opencray.app.gateway.PlannedSkillInvocation
 import ai.opencray.app.memory.MemoryManager
+import ai.opencray.app.safety.PolicyEngine
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -72,6 +73,7 @@ class OpenCrayRuntime(
 ) {
   private val appContext: Context = appContext.applicationContext
   private val memoryManager = MemoryManager()
+  private val policyEngine = PolicyEngine()
   private val actionExecutor = ActionExecutor(this.appContext)
   private val pythonSkillBridgeExecutor = PythonSkillBridgeExecutor(actionExecutor)
   private val gatewayClient = AgentCoreHttpClient()
@@ -130,6 +132,87 @@ class OpenCrayRuntime(
     val item = cards.removeAt(fromIndex)
     cards.add(toIndex, item)
     runtimeRepository.replaceSnapshot(current.copy(planningCards = cards))
+  }
+
+  fun addManualPreference(preference: String): Boolean {
+    val normalized = preference.trim()
+    if (normalized.isEmpty()) return false
+    val current = snapshot()
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = memoryManager.addManualPreference(current.memoryRecords, normalized),
+        recentEvents = listOf("Manual preference saved.") + current.recentEvents,
+      ),
+    )
+    return true
+  }
+
+  fun deleteLongPreference(index: Int): Boolean {
+    val current = snapshot()
+    val (memoryRecords, removed) = memoryManager.removeLongPreferenceAt(current.memoryRecords, index)
+    if (removed == null) return false
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = memoryRecords,
+        recentEvents = listOf("Preference deleted: ${removed.value.take(32)}") + current.recentEvents,
+      ),
+    )
+    return true
+  }
+
+  fun snoozeAction(actionId: String): Boolean =
+    markActionFeedback(actionId = actionId, status = "snoozed", feedback = "snooze", result = "已标记为稍后处理。")
+
+  fun ignoreAction(actionId: String): Boolean =
+    markActionFeedback(actionId = actionId, status = "ignored", feedback = "ignore", result = "已忽略该建议。")
+
+  private fun markActionFeedback(
+    actionId: String,
+    status: String,
+    feedback: String,
+    result: String,
+  ): Boolean {
+    val current = snapshot()
+    val action = current.systemActions.firstOrNull { it.id == actionId } ?: return false
+    val now = System.currentTimeMillis()
+    val taskId = current.tasks.firstOrNull()?.id ?: "local_feedback"
+    val updatedAction = action.copy(status = status, lastResult = result)
+    val updatedActions =
+      current.systemActions.map { candidate ->
+        if (candidate.id == action.id) updatedAction else candidate
+      }
+    val updatedCards =
+      current.planningCards.map { card ->
+        if (card.actionId == action.id) {
+          card.copy(
+            status = status,
+            body = listOf(card.body, "反馈：$result").filter { it.isNotBlank() }.joinToString("\n"),
+            updatedAtEpochMs = now,
+          )
+        } else {
+          card
+        }
+      }
+    val audit =
+      AuditEntry(
+        id = UUID.randomUUID().toString(),
+        taskId = taskId,
+        actionId = action.id,
+        stage = "feedback",
+        message = result,
+        timestampEpochMs = now,
+      )
+
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        systemActions = updatedActions,
+        planningCards = updatedCards,
+        memoryRecords = memoryManager.recordActionFeedback(current.memoryRecords, action, feedback),
+        auditTrail = listOf(audit) + current.auditTrail.take(149),
+        recentEvents = listOf("Action ${action.id} marked $status.") + current.recentEvents,
+      ),
+    )
+    return true
   }
 
   /**
@@ -282,22 +365,30 @@ class OpenCrayRuntime(
     }
 
     val reviewedStatus =
-      current.safetyRecords.firstOrNull { it.actionId == action.id }?.status
-        ?: if (action.requiresApproval) "Awaiting approval" else "Auto-approved"
+      if (action.status == "approved") {
+        "Approved"
+      } else {
+        current.safetyRecords.firstOrNull { it.actionId == action.id }?.status
+          ?: if (action.requiresApproval) "Awaiting approval" else "Auto-approved"
+      }
 
     if (reviewedStatus == "Awaiting approval") {
       val blockedRecord =
         SafetyRecord(
           id = UUID.randomUUID().toString(),
-          title = "Execution blocked",
+          title = "Policy Review: ${action.title}",
           detail = "Action ${action.title} is awaiting approval.",
-          status = "Blocked",
+          status = "Awaiting approval",
           actionId = action.id,
         )
       runtimeRepository.replaceSnapshot(
         current.copy(
+          systemActions =
+            current.systemActions.map { candidate ->
+              if (candidate.id == action.id) candidate.copy(status = "pending_approval") else candidate
+            },
           safetyRecords = listOf(blockedRecord) + current.safetyRecords,
-          recentEvents = listOf("Blocked execution for ${action.id} due to approval gate.") + current.recentEvents,
+          recentEvents = listOf("Execution paused for approval: ${action.id}.") + current.recentEvents,
         ),
       )
       return
@@ -1220,9 +1311,53 @@ class OpenCrayRuntime(
       return
     }
 
+    val approvalGated =
+      targetActions.filter { action ->
+        action.status != "approved" && policyEngine.review(action).status == "Awaiting approval"
+      }
+    if (approvalGated.isNotEmpty()) {
+      val gatedIds = approvalGated.map { it.id }.toSet()
+      val now = System.currentTimeMillis()
+      val safetyRecords =
+        approvalGated.map { action ->
+          val decision = policyEngine.review(action)
+          SafetyRecord(
+            id = UUID.randomUUID().toString(),
+            title = "Policy Review: ${action.title}",
+            detail = decision.reason,
+            status = decision.status,
+            actionId = action.id,
+            timestampEpochMs = now,
+          )
+        }
+      val nextActions =
+        current.systemActions.map { action ->
+          if (action.id in gatedIds) action.copy(status = "pending_approval") else action
+        }
+      val nextCards =
+        approvalGated.fold(current.planningCards) { cards, action ->
+          val card = actionPlanningCard(latestTask, action, status = "pending_approval")
+          if (card.id in current.dismissedPlanningCardIds) cards else upsertPlanningCardList(cards, card)
+        }
+      runtimeRepository.replaceSnapshot(
+        current.copy(
+          systemActions = nextActions,
+          planningCards = nextCards,
+          safetyRecords = safetyRecords + current.safetyRecords,
+          recentEvents = listOf("Execution paused for approval: ${gatedIds.joinToString()}.") + current.recentEvents,
+        ),
+      )
+      if (approvalGated.size == targetActions.size) {
+        streamAssistant("这些动作需要你确认后才能执行。我已经把它们放到待确认状态。")
+        return
+      }
+    }
+
+    val approvedTargetActions = targetActions - approvalGated.toSet()
+
     // Partition: defer calendar actions that still need runtime permission.
     val calendarDeferred = if (!hasCalendarPermissions()) {
-      targetActions.filter { requiresCalendarPermission(it) }
+      approvedTargetActions.filter { requiresCalendarPermission(it) }
     } else emptyList()
 
     if (calendarDeferred.isNotEmpty()) {
@@ -1252,7 +1387,7 @@ class OpenCrayRuntime(
       }
     }
 
-    val executableActions = targetActions - calendarDeferred.toSet()
+    val executableActions = approvedTargetActions - calendarDeferred.toSet()
     if (executableActions.isEmpty()) return
 
     executableActions.forEach { action ->

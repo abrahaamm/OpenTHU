@@ -2,8 +2,8 @@
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="@color/opencray_user_bubble" />
     <corners
-        android:bottomLeftRadius="18dp"
-        android:bottomRightRadius="6dp"
-        android:topLeftRadius="18dp"
-        android:topRightRadius="18dp" />
+        android:bottomLeftRadius="14dp"
+        android:bottomRightRadius="4dp"
+        android:topLeftRadius="14dp"
+        android:topRightRadius="14dp" />
 </shape>
