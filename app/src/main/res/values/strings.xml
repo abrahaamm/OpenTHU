@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">OpenTHU</string>
     <string name="app_subtitle">面向校园生活的移动端智能助理</string>
+    <string name="navigation_menu">打开导航</string>
 
     <string name="tab_chat">对话</string>
     <string name="tab_planning">规划</string>
@@ -48,6 +49,10 @@
     <string name="preference_hint">输入新的偏好，例如：少推荐晚间活动</string>
     <string name="preference_add">新增偏好</string>
     <string name="preference_waiting">偏好文件入口已预留，后续会接入真实存储。</string>
+    <string name="preference_saved">偏好已保存。</string>
+    <string name="preference_empty">请输入一条偏好。</string>
+    <string name="preference_deleted">偏好已删除。</string>
+    <string name="preference_delete_empty">这里还没有可删除的偏好。</string>
 
     <string name="planning_snapshot_title">学习与执行快照</string>
     <string name="planning_cards_title">规划卡片</string>

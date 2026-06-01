@@ -2,14 +2,18 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <shape>
-            <solid android:color="#FF4F46A3" />
-            <corners android:radius="18dp" />
+            <solid android:color="@color/opencray_primary_dark" />
+            <corners android:radius="12dp" />
         </shape>
     </item>
     <item>
         <shape>
-            <solid android:color="#FF5B5FC7" />
-            <corners android:radius="18dp" />
+            <gradient
+                android:angle="0"
+                android:endColor="@color/opencray_accent"
+                android:startColor="@color/opencray_primary"
+                android:type="linear" />
+            <corners android:radius="12dp" />
         </shape>
     </item>
 </selector>

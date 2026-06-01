@@ -216,6 +216,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = AppDestination.Planning
   }
 
+  fun addPreference(preference: String): Boolean =
+    runtime.addManualPreference(preference)
+
+  fun deletePreference(index: Int): Boolean =
+    runtime.deleteLongPreference(index)
+
+  fun snoozeAction(actionId: String): Boolean {
+    val ok = runtime.snoozeAction(actionId)
+    selectedDestination = AppDestination.Planning
+    return ok
+  }
+
+  fun ignoreAction(actionId: String): Boolean {
+    val ok = runtime.ignoreAction(actionId)
+    selectedDestination = AppDestination.Planning
+    return ok
+  }
+
   fun approvePendingActions() {
     runtime.approvePendingActions()
     selectedDestination = AppDestination.Planning

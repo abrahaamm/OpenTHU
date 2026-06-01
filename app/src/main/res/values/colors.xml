@@ -2,18 +2,23 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="opencray_background">#FFF5F0FF</color>
-    <color name="opencray_surface">#F7FFFFFF</color>
-    <color name="opencray_ink">#FF24113D</color>
-    <color name="opencray_muted">#FF716382</color>
-    <color name="opencray_primary">#FF5B5FC7</color>
-    <color name="opencray_primary_dark">#FF383B84</color>
-    <color name="opencray_primary_soft">#FFEDE4FF</color>
-    <color name="opencray_accent">#FF7C8AD8</color>
+    <color name="opencray_background">#FFF4F7FA</color>
+    <color name="opencray_surface">#FCFFFFFF</color>
+    <color name="opencray_ink">#FF172033</color>
+    <color name="opencray_muted">#FF526276</color>
+    <color name="opencray_primary">#FF2F5FDB</color>
+    <color name="opencray_primary_dark">#FF173C8F</color>
+    <color name="opencray_primary_soft">#FFEAF1FF</color>
+    <color name="opencray_accent">#FF087C73</color>
+    <color name="opencray_accent_soft">#FFE7F7F4</color>
     <color name="opencray_card">#FFFFFFFF</color>
-    <color name="opencray_card_soft">#FFFBF8FF</color>
-    <color name="opencray_user_bubble">#FF5B5FC7</color>
+    <color name="opencray_card_soft">#FFF8FAFC</color>
+    <color name="opencray_user_bubble">#FF2457C5</color>
     <color name="opencray_assistant_bubble">#FFFFFFFF</color>
-    <color name="opencray_system_bubble">#FFF0E8FF</color>
-    <color name="opencray_border">#2E5B5FC7</color>
+    <color name="opencray_system_bubble">#FFE8F4F2</color>
+    <color name="opencray_border">#1F244265</color>
+    <color name="opencray_border_strong">#33244265</color>
+    <color name="opencray_success">#FF0F6F55</color>
+    <color name="opencray_warning">#FF925E0E</color>
+    <color name="opencray_danger">#FFB42318</color>
 </resources>
