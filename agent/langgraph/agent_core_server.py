@@ -44,6 +44,9 @@ DEVICE_EXECUTED_SKILLS = {
     "preview_homework_attachments",
     "upload_homework_attachment",
     "submit_homework",
+    "get_semesters",
+    "get_courses",
+    "get_course_schedule",
 }
 
 
@@ -1224,6 +1227,7 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
             name = str(item.get("name") or item.get("course_name") or "未命名课程").strip()
             teacher = str(item.get("teacher_name", "")).strip()
             time_blocks = item.get("time_and_location", [])
+            raw_time_location = str(item.get("time_location", "")).strip()
             details = []
             if teacher:
                 details.append(teacher)
@@ -1242,6 +1246,8 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
                         time_label += f" {location}"
                     if time_label.strip():
                         details.append(time_label.strip())
+            elif raw_time_location:
+                details.append(raw_time_location)
             line = f"- {name}"
             if details:
                 line += f"（{'，'.join(details)}）"

@@ -51,6 +51,7 @@ class ActionExecutor(
   private val appContext: Context,
 ) {
   private val homeworkSkillExecutor = HomeworkSkillExecutor(appContext)
+  private val courseSkillExecutor = CourseSkillExecutor(appContext)
 
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     val actionId = action.id.substringBefore("#")
@@ -65,6 +66,9 @@ class ActionExecutor(
       "preview_homework_attachments",
       "upload_homework_attachment",
       "submit_homework" -> homeworkSkillExecutor.execute(action)
+      "get_semesters",
+      "get_courses",
+      "get_course_schedule" -> courseSkillExecutor.execute(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
       "create_reminder" -> executeCreateReminder(action, goal)
       "get_campus_activities" -> executeGetCampusActivities()
