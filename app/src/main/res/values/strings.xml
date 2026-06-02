@@ -55,10 +55,10 @@
     <string name="preference_delete_empty">这里还没有可删除的偏好。</string>
 
     <string name="planning_snapshot_title">学习与执行快照</string>
-    <string name="planning_cards_title">规划卡片</string>
-    <string name="planning_cards_empty">还没有规划卡片。调用闹钟、待办、课表等能力，或在对话中说“创建一个卡片：……”即可生成。</string>
-    <string name="planning_card_move_up">上移</string>
-    <string name="planning_card_move_down">下移</string>
+    <string name="planning_cards_title">下一步计划</string>
+    <string name="planning_cards_empty">还没有可参考的计划项。你可以在对话页描述目标，或说“创建一个卡片：……”来补充待办、提醒、课程安排。</string>
+    <string name="planning_card_move_up">提前</string>
+    <string name="planning_card_move_down">后排</string>
     <string name="planning_card_delete">删除</string>
     <string name="planning_schedule_title">课程与日程</string>
     <string name="planning_alarm_title">提醒与闹钟</string>

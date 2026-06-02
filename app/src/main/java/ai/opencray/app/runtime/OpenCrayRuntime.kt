@@ -186,7 +186,6 @@ class OpenCrayRuntime(
         if (card.actionId == action.id) {
           card.copy(
             status = status,
-            body = listOf(card.body, "反馈：$result").filter { it.isNotBlank() }.joinToString("\n"),
             updatedAtEpochMs = now,
           )
         } else {
@@ -596,7 +595,11 @@ class OpenCrayRuntime(
       PlanningCard(
         id = "manual_${UUID.randomUUID().toString().take(10)}",
         title = title,
-        body = content,
+        body =
+          buildString {
+            append("下一步：").append(content.take(220))
+            append("\n计划依据：对话中手动添加的计划项。")
+          },
         type = inferPlanningCardType(normalized),
         source = "对话生成",
         status = "planned",
@@ -1744,6 +1747,130 @@ class OpenCrayRuntime(
     }
   }
 
+  private fun actionPlanningBody(
+    task: AgentTask,
+    action: SystemAction,
+    skillName: String,
+    result: String?,
+  ): String =
+    buildString {
+      append("目标：").append(task.goal.take(160))
+      append("\n下一步：").append(actionNextStep(skillName, action))
+
+      val details = actionPlanDetails(action)
+      if (details.isNotBlank()) {
+        append("\n计划要点：").append(details)
+      }
+
+      val reference = actionReference(action)
+      if (reference.isNotBlank()) {
+        append("\n计划依据：").append(reference.take(240))
+      }
+
+      if (!result.isNullOrBlank()) {
+        append("\n进展备注：").append(result.take(180))
+      }
+    }
+
+  private fun actionNextStep(
+    skillName: String,
+    action: SystemAction,
+  ): String {
+    val target = actionValue(action, "title", "label", "name", "query", "keyword").ifBlank { action.title }
+    val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
+    return when (skillName) {
+      "set_alarm" ->
+        if (time.isNotBlank()) {
+          "确认 $time 的提醒内容「${target.take(36)}」，然后设置闹钟。"
+        } else {
+          "补齐提醒时间与提醒内容，再设置闹钟。"
+        }
+      "create_reminder" ->
+        if (time.isNotBlank()) {
+          "把「${target.take(36)}」整理成待办，并按 $time 跟进。"
+        } else {
+          "明确截止时间、提醒频率和待办标题，再创建提醒。"
+        }
+      "create_calendar_event" ->
+        if (time.isNotBlank()) {
+          "核对标题、时间、地点与冲突情况，确认后加入日历。"
+        } else {
+          "补齐时间和地点，确认没有冲突后加入日历。"
+        }
+      "get_course_schedule" -> "拉取课表后，挑出需要提醒、复习或加入日历的课程节点。"
+      "get_courses" -> "整理课程列表，筛出本次目标真正相关的课程。"
+      "get_semesters" -> "确认学期范围，再继续查询课表、课程或作业。"
+      "get_academic_calendar" -> "读取校历节点，把考试、假期和关键截止时间拆成后续计划。"
+      "crawl_course_homeworks",
+      "crawl_unsubmitted_homeworks" -> "核对作业标题、课程和截止时间，优先处理未提交或临近截止项。"
+      "read_notifications" -> "读取通知后，只保留需要行动、提醒或加入日历的信息。"
+      "get_campus_activities" -> "查看活动时间、地点和报名要求，决定是否加入日历或稍后提醒。"
+      "search" -> "先确认搜索范围和关键词，再把有用结果整理成待办或日程。"
+      "show_summary" -> "阅读总结，决定是否继续拆成提醒、日历或待办。"
+      else -> "确认「${target.take(36)}」的目标、时间和范围，必要时补充参数后再执行。"
+    }
+  }
+
+  private fun actionPlanDetails(action: SystemAction): String {
+    val target = actionValue(action, "title", "label", "name", "query", "keyword")
+    val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
+    val location = actionValue(action, "location", "place", "venue")
+    val course = actionValue(action, "course", "course_name", "course_id")
+    val confirmation = if (action.requiresApproval) "执行前需要你确认" else "可自动执行，仍可先检查参数"
+    return listOf(
+      target.takeIf { it.isNotBlank() }?.let { "对象：${it.take(48)}" },
+      course.takeIf { it.isNotBlank() }?.let { "课程：${it.take(48)}" },
+      time.takeIf { it.isNotBlank() }?.let { "时间：${it.take(48)}" },
+      location.takeIf { it.isNotBlank() }?.let { "地点：${it.take(48)}" },
+      "确认：$confirmation",
+    ).filterNotNull().joinToString("；")
+  }
+
+  private fun actionReference(action: SystemAction): String {
+    val summary = action.summary.trim()
+    val explain = action.explain.trim()
+    val genericPrefixes = listOf("Gateway planned skill:", "Gateway dispatched skill:", "Direct invocation from UI")
+    return listOf(summary, explain)
+      .filter { value ->
+        value.isNotBlank() &&
+          value != action.title &&
+          genericPrefixes.none { prefix -> value.startsWith(prefix) }
+      }
+      .distinct()
+      .joinToString(" ")
+  }
+
+  private fun actionValue(
+    action: SystemAction,
+    vararg keys: String,
+  ): String {
+    for (key in keys) {
+      val fromParams = action.params[key]?.trim().orEmpty()
+      if (fromParams.isNotBlank()) return fromParams
+      val fromPayload = action.payload?.get(key)?.toString()?.trim().orEmpty()
+      if (fromPayload.isNotBlank() && fromPayload != "null") return fromPayload
+    }
+    return ""
+  }
+
+  private fun actionPlanningMetadata(
+    task: AgentTask,
+    action: SystemAction,
+    skillName: String,
+  ): Map<String, String> {
+    val metadata = mutableMapOf(
+      "skill" to skillName,
+      "goal" to task.goal.take(160),
+      "confirmation" to if (action.requiresApproval) "需要确认" else "可自动执行",
+      "confidence" to "${action.confidence}%",
+    )
+    val target = actionValue(action, "title", "label", "name", "query", "keyword")
+    val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
+    if (target.isNotBlank()) metadata["target"] = target.take(80)
+    if (time.isNotBlank()) metadata["time"] = time.take(80)
+    return metadata
+  }
+
   private fun actionPlanningCard(
     task: AgentTask,
     action: SystemAction,
@@ -1753,18 +1880,10 @@ class OpenCrayRuntime(
     val now = System.currentTimeMillis()
     val skillName = action.id.substringBefore("#")
     val title = planningCardTitle(skillName, action.title)
-    val body =
-      buildString {
-        append(action.summary.ifBlank { action.explain.ifBlank { action.title } })
-        if (!result.isNullOrBlank()) {
-          append("\n结果：")
-          append(result.take(220))
-        }
-      }
     return PlanningCard(
       id = planningCardId(task.id, action.requestId, skillName),
       title = title,
-      body = body,
+      body = actionPlanningBody(task, action, skillName, result),
       type = inferPlanningCardType(skillName + " " + action.title + " " + action.summary),
       source = "Skill 调用",
       status = status,
@@ -1772,7 +1891,7 @@ class OpenCrayRuntime(
       updatedAtEpochMs = now,
       actionId = action.id,
       taskId = task.id,
-      metadata = mapOf("skill" to skillName),
+      metadata = actionPlanningMetadata(task, action, skillName),
     )
   }
 
@@ -1780,10 +1899,24 @@ class OpenCrayRuntime(
     val skillName = event.skillName.ifBlank { return null }
     val now = System.currentTimeMillis()
     val title = planningCardTitle(skillName, event.title)
+    val nextStep =
+      if (event.type == "tool_result") {
+        "查看返回内容，决定是否继续拆成提醒、日历或待办。"
+      } else {
+        "等待 ${planningCardTitle(skillName, event.title)} 返回结果，再确认后续安排。"
+      }
+    val body =
+      buildString {
+        append("下一步：").append(nextStep)
+        val content = event.content.trim()
+        if (content.isNotBlank()) {
+          append("\n计划依据：").append(content.take(240))
+        }
+      }
     return PlanningCard(
       id = planningCardId(event.taskId, event.requestId, skillName),
       title = title,
-      body = event.content.ifBlank { "正在调用 $skillName。" }.take(360),
+      body = body,
       type = inferPlanningCardType(skillName + " " + event.title + " " + event.content),
       source = "Agent-Core",
       status = if (event.type == "tool_result") event.status.ifBlank { "completed" } else event.status.ifBlank { "running" },

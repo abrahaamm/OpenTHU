@@ -752,19 +752,21 @@ class MainActivity : AppCompatActivity() {
 
     planningSnapshotView.text =
       buildString {
-        append("今天的工作台已经为你收拢了任务、动作、提醒与长期偏好。\n")
-        append("先看当前焦点，再决定是继续执行、补充计划，还是调整提醒节奏。")
+        append("这里优先展示能帮助你决定下一步的计划项。\n")
+        append("先看待行动与待确认内容，再决定提前、后排、执行或继续补充信息。")
       }
     planningMetricTasksView.text = state.tasks.size.toString()
-    planningMetricActionsView.text = state.systemActions.size.toString()
-    planningMetricSafetyView.text = state.safetyRecords.size.toString()
+    planningMetricActionsView.text = state.systemActions.count { planningActionNeedsAttention(it.status) }.toString()
+    planningMetricSafetyView.text =
+      state.systemActions.count { it.status == "pending_approval" || it.status == "conflict_pending" }.toString()
     planningMetricMemoryView.text = state.memoryRecords.size.toString()
 
     planningFocusView.text =
       when {
-        state.tasks.isNotEmpty() -> "优先关注：${state.tasks.first().goal.take(42)}"
-        state.systemActions.isNotEmpty() -> "优先关注：${state.systemActions.first().title}"
-        state.contextSignals.isNotEmpty() -> "优先关注：${state.contextSignals.first().title}"
+        state.planningCards.isNotEmpty() -> "建议先看：${state.planningCards.first().title}，确认它的下一步是否清楚。"
+        state.tasks.isNotEmpty() -> "建议先拆解：${state.tasks.first().goal.take(42)}"
+        state.systemActions.isNotEmpty() -> "建议先确认：${state.systemActions.first().title}"
+        state.contextSignals.isNotEmpty() -> "可参考线索：${state.contextSignals.first().title}"
         else -> "当前还没有明确焦点，可以先回到对话页描述你的目标。"
       }
 
@@ -787,7 +789,7 @@ class MainActivity : AppCompatActivity() {
           state.systemActions
             .filter { it.id.contains("alarm") || it.title.contains("提醒") || it.title.contains("闹钟") }
             .take(5)
-            .joinToString("\n") { "• ${it.title} · ${it.status}" }
+            .joinToString("\n") { "• ${it.title} · ${planningCardStatusLabel(it.status)}" }
             .ifBlank { "• 暂无提醒任务，可从规划动作中添加。" }
         append(content)
       }
@@ -798,7 +800,7 @@ class MainActivity : AppCompatActivity() {
         val content =
           state.tasks
             .take(6)
-            .joinToString("\n") { "• ${it.goal.take(30)} · ${it.status}" }
+            .joinToString("\n") { "• ${it.goal.take(34)}\n  下一步：查看计划项并确认待行动内容。" }
             .ifBlank { "• 暂无待办任务，先在对话页提交目标。" }
         append(content)
       }
@@ -998,6 +1000,12 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  private data class PlanningCardSection(
+    val label: String,
+    val value: String,
+    val emphasized: Boolean = false,
+  )
+
   private fun renderPlanningCards(cards: List<PlanningCard>) {
     planningCardsContainer.removeAllViews()
     if (cards.isEmpty()) {
@@ -1019,6 +1027,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     cards.forEachIndexed { index, card ->
+      val stepNumber = (index + 1).toString().padStart(2, '0')
       val cardView =
         LinearLayout(this).apply {
           orientation = LinearLayout.VERTICAL
@@ -1033,30 +1042,79 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-      cardView.addView(
+      val headerRow =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.HORIZONTAL
+          gravity = Gravity.CENTER_VERTICAL
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+      headerRow.addView(
+        TextView(this).apply {
+          text = stepNumber
+          textSize = 12f
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+          gravity = Gravity.CENTER
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_accent))
+          setBackgroundResource(R.drawable.chat_status_chip_surface)
+          layoutParams =
+            LinearLayout.LayoutParams(
+              dp(42),
+              dp(34),
+            )
+        },
+      )
+
+      val titleColumn =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.VERTICAL
+          layoutParams =
+            LinearLayout.LayoutParams(
+              0,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+              1f,
+            ).apply {
+              marginStart = dp(10)
+              marginEnd = dp(8)
+            }
+        }
+      titleColumn.addView(
         TextView(this).apply {
           text = card.title
-          textSize = 15f
+          textSize = 16f
           setTypeface(typeface, android.graphics.Typeface.BOLD)
           setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
         },
       )
-      cardView.addView(createPlanningMetaRow(card))
-      cardView.addView(
+      titleColumn.addView(
         TextView(this).apply {
-          text = card.body
-          textSize = 13f
-          setLineSpacing(2f, 1.0f)
+          text = planningCardSubtitle(card)
+          textSize = 12f
+          maxLines = 1
+          ellipsize = android.text.TextUtils.TruncateAt.END
           setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
           layoutParams =
             LinearLayout.LayoutParams(
               LinearLayout.LayoutParams.MATCH_PARENT,
               LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply {
-              topMargin = dp(8)
+              topMargin = dp(3)
             }
         },
       )
+      headerRow.addView(titleColumn)
+      headerRow.addView(createPlanningPill(planningCardStatusLabel(card.status), planningStatusColor(card.status)))
+      cardView.addView(headerRow)
+
+      planningCardSections(card).forEach { section ->
+        cardView.addView(createPlanningSection(section))
+      }
+
+      cardView.addView(createPlanningFooter(card))
 
       val buttonRow =
         LinearLayout(this).apply {
@@ -1085,6 +1143,165 @@ class MainActivity : AppCompatActivity() {
       planningCardsContainer.addView(cardView)
     }
   }
+
+  private fun planningCardSections(card: PlanningCard): List<PlanningCardSection> {
+    val sections = mutableListOf<PlanningCardSection>()
+    val nextStep = planningBodySection(card.body, "下一步") ?: planningNextStepText(card)
+    sections.add(PlanningCardSection("下一步", nextStep, emphasized = true))
+
+    val details = planningBodySection(card.body, "计划要点") ?: planningMetadataDetails(card)
+    if (details.isNotBlank()) {
+      sections.add(PlanningCardSection("计划要点", details))
+    }
+
+    val reference = planningBodySection(card.body, "计划依据") ?: planningReferenceText(card)
+    if (reference.isNotBlank()) {
+      sections.add(PlanningCardSection("参考信息", reference))
+    }
+
+    val progress =
+      planningBodySection(card.body, "进展备注")
+        ?: planningBodySection(card.body, "结果")
+        ?: planningBodySection(card.body, "反馈")
+    if (!progress.isNullOrBlank()) {
+      sections.add(PlanningCardSection("进展备注", progress))
+    }
+    return sections
+  }
+
+  private fun createPlanningSection(section: PlanningCardSection): LinearLayout =
+    LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.MATCH_PARENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          topMargin = if (section.emphasized) dp(14) else dp(10)
+        }
+
+      addView(
+        TextView(this@MainActivity).apply {
+          text = section.label
+          textSize = 11f
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+          setTextColor(
+            ContextCompat.getColor(
+              this@MainActivity,
+              if (section.emphasized) R.color.opencray_accent else R.color.opencray_primary_dark,
+            ),
+          )
+        },
+      )
+      addView(
+        TextView(this@MainActivity).apply {
+          text = section.value
+          textSize = if (section.emphasized) 14f else 13f
+          setLineSpacing(2f, 1.0f)
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+          if (section.emphasized) {
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+          }
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              topMargin = dp(4)
+            }
+        },
+      )
+    }
+
+  private fun createPlanningFooter(card: PlanningCard): TextView =
+    TextView(this).apply {
+      val source = card.source.ifBlank { "规划页" }
+      text = listOf(planningCardTypeLabel(card.type), source).joinToString(" · ")
+      textSize = 12f
+      maxLines = 1
+      ellipsize = android.text.TextUtils.TruncateAt.END
+      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.MATCH_PARENT,
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+          topMargin = dp(12)
+        }
+    }
+
+  private fun planningCardSubtitle(card: PlanningCard): String {
+    val time = card.metadata["time"].orEmpty()
+    val target = card.metadata["target"].orEmpty()
+    return listOf(
+      planningCardTypeLabel(card.type),
+      time.ifBlank { target },
+    ).filter { it.isNotBlank() }.joinToString(" · ")
+  }
+
+  private fun planningBodySection(
+    body: String,
+    label: String,
+  ): String? {
+    val chinesePrefix = "$label："
+    val asciiPrefix = "$label:"
+    return body
+      .lineSequence()
+      .map { it.trim() }
+      .firstOrNull { line -> line.startsWith(chinesePrefix) || line.startsWith(asciiPrefix) }
+      ?.removePrefix(chinesePrefix)
+      ?.removePrefix(asciiPrefix)
+      ?.trim()
+      ?.takeIf { it.isNotBlank() }
+  }
+
+  private fun planningMetadataDetails(card: PlanningCard): String =
+    listOf(
+      card.metadata["target"]?.takeIf { it.isNotBlank() }?.let { "对象：$it" },
+      card.metadata["time"]?.takeIf { it.isNotBlank() }?.let { "时间：$it" },
+      card.metadata["confirmation"]?.takeIf { it.isNotBlank() }?.let { "确认：$it" },
+      card.metadata["confidence"]?.takeIf { it.isNotBlank() }?.let { "把握度：$it" },
+    ).filterNotNull().joinToString("；")
+
+  private fun planningReferenceText(card: PlanningCard): String {
+    val ignoredLabels = listOf("目标", "下一步", "计划要点", "计划依据", "进展备注", "结果", "反馈")
+    val cleaned =
+      card.body
+        .lineSequence()
+        .map { it.trim() }
+        .filter { line ->
+          line.isNotBlank() &&
+            ignoredLabels.none { label -> line.startsWith("$label：") || line.startsWith("$label:") } &&
+            !line.startsWith("Gateway planned skill:") &&
+            !line.startsWith("Gateway dispatched skill:")
+        }
+        .joinToString("\n")
+    if (cleaned.isNotBlank()) return cleaned.take(220)
+    return card.metadata["goal"]?.takeIf { it.isNotBlank() }?.let { "目标：${it.take(120)}" }.orEmpty()
+  }
+
+  private fun planningNextStepText(card: PlanningCard): String =
+    when (card.status) {
+      "pending_approval" -> "先确认这个计划项是否可以执行；如果信息不完整，补充时间、地点或范围。"
+      "queued" -> "等待端侧接收任务；如长时间无响应，可回到对话页补充上下文后重试。"
+      "running" -> "等待当前能力返回结果，然后把结果拆成可执行的下一步。"
+      "failed" -> "查看进展备注中的失败原因，调整参数后重试，或把这项后排。"
+      "conflict_pending" -> "先处理冲突选择，再决定是写入日历、改期，还是保留原安排。"
+      "snoozed" -> "稍后重新检查这项，如果仍然重要就提前到列表上方。"
+      "ignored" -> "这项已搁置；保留它只用于参考，后续可以删除。"
+      "ok", "executed", "completed" -> "复核产出是否满足目标；如果还需要行动，继续拆成新的提醒、日历或待办。"
+      else ->
+        when (card.type) {
+          "alarm" -> "确认提醒时间和提醒内容，必要时补充提前量。"
+          "todo" -> "明确截止时间、提交材料和第一步动作。"
+          "course" -> "核对课程范围，把关键时间点转成复习或日历安排。"
+          "calendar" -> "确认标题、时间、地点和冲突情况，再加入日历。"
+          "homework" -> "核对课程、作业标题和截止时间，优先处理临近截止项。"
+          "notification" -> "筛出需要行动的信息，转成待办、提醒或日历事项。"
+          "search" -> "确认搜索范围，把有用结果整理成下一步行动。"
+          else -> "补充目标、时间、地点和优先级，然后决定是否执行。"
+        }
+    }
 
   private fun planningCardButton(
     text: String,
@@ -1183,6 +1400,9 @@ class MainActivity : AppCompatActivity() {
       else -> R.color.opencray_primary_dark
     }
 
+  private fun planningActionNeedsAttention(status: String): Boolean =
+    status !in setOf("ok", "executed", "completed", "ignored")
+
   private fun planningCardTypeLabel(type: String): String =
     when (type) {
       "alarm" -> "闹钟"
@@ -1197,18 +1417,18 @@ class MainActivity : AppCompatActivity() {
 
   private fun planningCardStatusLabel(status: String): String =
     when (status) {
-      "planned" -> "待执行"
-      "approved" -> "待执行"
+      "planned" -> "待行动"
+      "approved" -> "待行动"
       "pending_approval" -> "待确认"
       "queued" -> "等待端侧"
-      "ok" -> "已完成"
-      "running" -> "执行中"
-      "executed" -> "已完成"
-      "completed" -> "已完成"
-      "failed" -> "未成功"
-      "conflict_pending" -> "需处理冲突"
+      "ok" -> "可复核"
+      "running" -> "处理中"
+      "executed" -> "可复核"
+      "completed" -> "可复核"
+      "failed" -> "需调整"
+      "conflict_pending" -> "需决策"
       "snoozed" -> "稍后处理"
-      "ignored" -> "已忽略"
+      "ignored" -> "已搁置"
       else -> status.ifBlank { "待处理" }
     }
 
