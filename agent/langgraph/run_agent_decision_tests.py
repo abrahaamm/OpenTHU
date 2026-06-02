@@ -7,6 +7,37 @@ import types
 from pathlib import Path
 from typing import Any
 
+
+def _install_fake_langgraph_if_needed() -> None:
+    try:
+        import langgraph.graph  # type: ignore  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+
+    class _FakeStateGraph:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def add_node(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def add_edge(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def add_conditional_edges(self, *_: Any, **__: Any) -> None:
+            pass
+
+        def compile(self) -> "_FakeStateGraph":
+            return self
+
+    fake_graph = types.SimpleNamespace(END="END", START="START", StateGraph=_FakeStateGraph)
+    sys.modules.setdefault("langgraph", types.SimpleNamespace())
+    sys.modules["langgraph.graph"] = fake_graph
+
+
+_install_fake_langgraph_if_needed()
+
 try:
     from .openthu_agent import OpenTHULangGraphAgent
     from .skill_manager import SkillManager
@@ -103,6 +134,9 @@ def test_skill_metadata() -> None:
     homework = by_name["crawl_unsubmitted_homeworks"]
     _expect("not submitted" in homework["when_to_use"], homework["when_to_use"])
     _expect("check my homework that is not submitted" in homework["example_utterances"], str(homework))
+    submit_schema = by_name["submit_homework"]["args_json_schema"]
+    _expect(submit_schema.get("required") == [], str(submit_schema))
+    _expect(by_name["get_campus_activities"]["session_required"] is False, str(by_name["get_campus_activities"]))
     _expect(by_name["get_course_schedule"]["example_utterances"], "course schedule examples missing")
     _expect(by_name["read_notifications"]["when_to_use"], "notification when_to_use missing")
 
@@ -141,11 +175,40 @@ def test_decide_turn_homework_plan() -> None:
     _expect(planned[0]["status"] == "approved", str(planned))
 
 
+def test_decide_turn_homework_submit_fallback() -> None:
+    _install_fake_openai()
+    message = (
+        "请你帮我提交这份作业\n\n"
+        "[attached_file]\n"
+        "file_uri: content://com.android.providers.downloads.documents/document/42\n"
+        "file_name: report.docx"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = OpenTHULangGraphAgent(memory_file=Path(tmpdir) / "memory.json")
+        response = agent.decide_turn(
+            message,
+            user_id="decision_test_user",
+            session={"openai_api_key": "test-key"},
+        )
+    data = response["data"]
+    plan_data = data["plan_response"]["data"]
+    planned = plan_data["skill_plan"]
+    skill_names = [item["skill_name"] for item in planned]
+    _expect(data["source"] == "deterministic_after_llm_empty", str(data))
+    _expect(data["should_plan"] is True, str(data))
+    _expect("submit_homework" in skill_names, str(planned))
+    submit = next(item for item in planned if item["skill_name"] == "submit_homework")
+    _expect(submit["args"]["file_uri"].startswith("content://"), str(submit))
+    _expect(submit["args"]["file_name"] == "report.docx", str(submit))
+    _expect(submit["args"]["confirm_submit"] is True, str(submit))
+
+
 def run_suite() -> list[tuple[str, bool, str]]:
     cases = [
         ("skill_metadata", test_skill_metadata),
         ("decide_turn_chat", test_decide_turn_chat),
         ("decide_turn_homework_plan", test_decide_turn_homework_plan),
+        ("decide_turn_homework_submit_fallback", test_decide_turn_homework_submit_fallback),
     ]
     results: list[tuple[str, bool, str]] = []
     for name, fn in cases:

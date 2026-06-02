@@ -19,12 +19,15 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
+import java.io.File
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.max
 import org.json.JSONArray
+import org.json.JSONObject
 
 data class ActionExecutionReport(
   val success: Boolean,
@@ -46,6 +49,30 @@ private data class CalendarEventBrief(
   val startMs: Long,
   val endMs: Long,
 )
+
+private data class CampusActivityRecord(
+  val title: String,
+  val startTime: String = "",
+  val location: String = "",
+  val organizer: String = "",
+  val category: String = "",
+  val abstract: String = "",
+  val url: String = "",
+  val source: String = "",
+) {
+  fun toDataMap(): Map<String, String> =
+    mapOf(
+      "title" to title,
+      "start_time" to startTime,
+      "time" to startTime,
+      "location" to location,
+      "organizer" to organizer,
+      "category" to category,
+      "abstract" to abstract,
+      "url" to url,
+      "source" to source,
+    ).filterValues { it.isNotBlank() }
+}
 
 class ActionExecutor(
   private val appContext: Context,
@@ -71,7 +98,7 @@ class ActionExecutor(
       "get_course_schedule" -> courseSkillExecutor.execute(action)
       "set_alarm_reminder", "set_alarm" -> executeAlarmIntent(action, goal)
       "create_reminder" -> executeCreateReminder(action, goal)
-      "get_campus_activities" -> executeGetCampusActivities()
+      "get_campus_activities" -> executeGetCampusActivities(action)
       "read_notifications" -> executeReadNotifications()
       "show_summary" -> executeShowSummary(action)
       "send_notification" -> executeSendNotification(action)
@@ -108,18 +135,198 @@ class ActionExecutor(
     }
   }
 
-  private fun executeGetCampusActivities(): ActionExecutionReport =
-    ActionExecutionReport(
-      success = false,
-      message = "Campus activities are not configured on the device. Configure Agent-Core INFO/WebVPN cookies or an explicit campus activities source.",
+  private fun executeGetCampusActivities(action: SystemAction): ActionExecutionReport {
+    val (activities, source, loadError) = loadConfiguredCampusActivities()
+    if (activities.isEmpty()) {
+      return ActionExecutionReport(
+        success = false,
+        message =
+          loadError.ifBlank {
+            "手机端未配置校园活动数据源。请在设置页填写「校园活动文件」，或先同步校园活动 JSON 到设备。"
+          },
+        recoverable = false,
+        semantic = "not_configured",
+        metadata =
+          mapOf(
+            "activities" to emptyList<Map<String, String>>(),
+            "source" to if (source.isBlank()) "not_configured" else source,
+            "reason" to "missing_mobile_campus_source",
+          ),
+      )
+    }
+
+    val query = firstNonBlank(
+      readActionString(action, "query"),
+      readActionString(action, "question"),
+      readActionString(action, "keyword"),
+    )
+    val keywords =
+      parseCsvOrJsonArray(readActionString(action, "keywords"))
+        .ifEmpty { tokenizeCampusQuery(query) }
+    val limit = readActionString(action, "limit").toIntOrNull()?.coerceIn(1, 30) ?: 10
+    val filtered =
+      filterCampusActivities(activities, keywords)
+        .take(limit)
+    val result = if (filtered.isNotEmpty()) filtered else activities.take(limit)
+    val summary =
+      buildString {
+        append("手机端校园活动检索完成：")
+        append(if (filtered.isNotEmpty()) "匹配到 ${filtered.size} 条" else "未命中关键词，返回前 ${result.size} 条候选")
+        append("。")
+        result.take(6).forEach { item ->
+          append("\n- ").append(item.title)
+          val details = listOf(item.startTime, item.location).filter { it.isNotBlank() }.joinToString("，")
+          if (details.isNotBlank()) append("（").append(details).append("）")
+        }
+      }
+
+    return ActionExecutionReport(
+      success = true,
+      message = summary,
       recoverable = false,
-      semantic = "not_configured",
+      semantic = "campus_activities_loaded_on_device",
       metadata =
         mapOf(
-          "activities" to emptyList<Map<String, String>>(),
-          "source" to "not_configured",
+          "status" to "activities_loaded",
+          "answer" to summary,
+          "summary" to summary,
+          "activities" to result.map { it.toDataMap() },
+          "count" to result.size,
+          "source" to source,
+          "query" to query,
         ),
     )
+  }
+
+  private fun loadConfiguredCampusActivities(): Triple<List<CampusActivityRecord>, String, String> {
+    val inlineJson = readSetting("campus_activities_json")
+    if (inlineJson.isNotBlank()) {
+      return parseCampusActivities(inlineJson, "settings:campus_activities_json")
+    }
+
+    val pathText = readSetting("campus_file")
+    if (pathText.isBlank()) {
+      return Triple(emptyList(), "", "")
+    }
+    val file = File(pathText)
+    if (!file.isFile || !file.canRead()) {
+      return Triple(emptyList(), pathText, "手机端无法读取校园活动文件：$pathText")
+    }
+    if (file.length() > 2L * 1024L * 1024L) {
+      return Triple(emptyList(), pathText, "校园活动文件超过 2MB，暂不在手机端读取：$pathText")
+    }
+    return runCatching {
+      parseCampusActivities(file.readText(Charsets.UTF_8), pathText)
+    }.getOrElse { throwable ->
+      Triple(emptyList(), pathText, "校园活动文件解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
+    }
+  }
+
+  private fun parseCampusActivities(
+    rawJson: String,
+    source: String,
+  ): Triple<List<CampusActivityRecord>, String, String> =
+    runCatching {
+      val trimmed = rawJson.trim()
+      val array =
+        if (trimmed.startsWith("[")) {
+          JSONArray(trimmed)
+        } else {
+          val root = JSONObject(trimmed)
+          root.optJSONArray("activities")
+            ?: root.optJSONArray("items")
+            ?: root.optJSONArray("data")
+            ?: JSONArray()
+        }
+      val records =
+        (0 until array.length())
+          .mapNotNull { index -> array.optJSONObject(index)?.toCampusActivityRecord() }
+          .filter { it.title.isNotBlank() }
+      Triple(records, source, "")
+    }.getOrElse { throwable ->
+      Triple(emptyList(), source, "校园活动 JSON 解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
+    }
+
+  private fun JSONObject.toCampusActivityRecord(): CampusActivityRecord =
+    CampusActivityRecord(
+      title = firstJsonString(this, "title", "name", "activity_title"),
+      startTime = firstJsonString(this, "start_time", "time", "date", "event_time", "begin_time"),
+      location = firstJsonString(this, "location", "venue", "place", "address"),
+      organizer = firstJsonString(this, "organizer", "host", "source"),
+      category = firstJsonString(this, "category", "type", "channel"),
+      abstract = firstJsonString(this, "abstract", "summary", "content", "description", "snippet"),
+      url = firstJsonString(this, "url", "link", "detail_url"),
+      source = firstJsonString(this, "source", "channel", "provider"),
+    )
+
+  private fun filterCampusActivities(
+    activities: List<CampusActivityRecord>,
+    keywords: List<String>,
+  ): List<CampusActivityRecord> {
+    if (keywords.isEmpty()) return activities
+    val normalizedKeywords = keywords.map { it.lowercase(Locale.getDefault()) }.filter { it.isNotBlank() }
+    return activities.filter { activity ->
+      val haystack =
+        listOf(
+          activity.title,
+          activity.abstract,
+          activity.location,
+          activity.organizer,
+          activity.category,
+          activity.source,
+        ).joinToString(" ").lowercase(Locale.getDefault())
+      normalizedKeywords.any { keyword -> haystack.contains(keyword) }
+    }
+  }
+
+  private fun tokenizeCampusQuery(query: String): List<String> =
+    query
+      .replace(Regex("[，。；、,.!?！？:：\\[\\]（）()\\n\\t]"), " ")
+      .split(Regex("\\s+"))
+      .map { it.trim() }
+      .filter { it.length >= 2 }
+      .take(8)
+
+  private fun parseCsvOrJsonArray(raw: String): List<String> {
+    if (raw.isBlank()) return emptyList()
+    val text = raw.trim()
+    if (text.startsWith("[")) {
+      return runCatching {
+        val arr = JSONArray(text)
+        (0 until arr.length()).mapNotNull { index -> arr.opt(index)?.toString()?.trim() }.filter { it.isNotEmpty() }
+      }.getOrElse { emptyList() }
+    }
+    return text.split(",", "，", "、").map { it.trim() }.filter { it.isNotEmpty() }
+  }
+
+  private fun readActionString(
+    action: SystemAction,
+    key: String,
+  ): String {
+    val fromParams = action.params[key]?.trim().orEmpty()
+    if (fromParams.isNotBlank()) return fromParams
+    return action.payload?.get(key)?.toString()?.trim().orEmpty()
+  }
+
+  private fun readSetting(key: String): String =
+    appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+      .getString(key, "")
+      .orEmpty()
+      .trim()
+
+  private fun firstNonBlank(vararg values: String): String =
+    values.firstOrNull { it.isNotBlank() }.orEmpty()
+
+  private fun firstJsonString(
+    json: JSONObject,
+    vararg keys: String,
+  ): String {
+    for (key in keys) {
+      val value = json.optString(key, "").trim()
+      if (value.isNotBlank() && value != "null") return value
+    }
+    return ""
+  }
 
   private fun executeShowSummary(action: SystemAction): ActionExecutionReport {
     val title =

@@ -38,6 +38,7 @@ DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS = 8.0
 DEVICE_RESULT_WAIT_TIMEOUT_SECONDS = 300.0
 DEBUG_LOG_VALUE_LIMIT = 6000
 DEVICE_EXECUTED_SKILLS = {
+    "get_campus_activities",
     "get_homework_cookie",
     "crawl_course_homeworks",
     "crawl_unsubmitted_homeworks",
@@ -1285,9 +1286,6 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
             line = f"- {homework_title}"
             if details:
                 line += f"（{'，'.join(details)}）"
-            detail_url = str(item.get("detail_url", "")).strip()
-            if detail_url:
-                line += f"：{detail_url}"
             lines.append(line)
         return "\n".join(lines)
 

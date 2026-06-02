@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -27,6 +27,28 @@ class HomeworkSkillBridge(Protocol):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+CN_TZ = timezone(timedelta(hours=8))
+
+
+def _homework_deadline_epoch_ms(raw: Any) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if value > 10_000_000_000 else value * 1000
+
+
+def _format_homework_deadline(raw: Any) -> str:
+    text = str(raw or "").strip()
+    epoch_ms = _homework_deadline_epoch_ms(text)
+    if epoch_ms is None:
+        return text
+    return datetime.fromtimestamp(epoch_ms / 1000, tz=CN_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -488,34 +510,37 @@ def _extract_homework_records(
         title = _normalize_text(_first_nonblank(row.get("bt"), row.get("zybt"), row.get("title"), row.get("zymc")))
         if not any([homework_id, student_homework_id, title]):
             continue
-        deadline = _normalize_text(
+        deadline_raw = _normalize_text(
             _first_nonblank(row.get("jzsj"), row.get("deadline"), row.get("jssj"), row.get("endTime"))
         )
+        deadline_epoch_ms = _homework_deadline_epoch_ms(deadline_raw)
         detail_url = f"{base_url}/f/wlxt/kczy/zy/student/viewZy?zyid={homework_id}" if homework_id else ""
-        records.append(
-            {
-                "homework_id": homework_id,
-                "zyid": homework_id,
-                "student_homework_id": student_homework_id,
-                "xszyid": student_homework_id,
-                "title": title or "未命名作业",
-                "homework_title": title or "未命名作业",
-                "deadline": deadline,
-                "submitted": endpoint_type != "unsubmitted",
-                "status_group": endpoint_type,
-                "course_id": course.get("course_id", ""),
-                "course_wlkcid": course.get("wlkcid", ""),
-                "course_name": course.get("course_name", ""),
-                "course_no": course.get("course_no", ""),
-                "class_no": course.get("class_no", ""),
-                "teacher_name": course.get("teacher_name", ""),
-                "detail_url": detail_url,
-                "submit_url": f"{base_url}/f/wlxt/kczy/zy/student/tijiao?wlkcid={course.get('wlkcid', '')}&xszyid={student_homework_id}"
-                if student_homework_id
-                else "",
-                "source_endpoint": endpoint,
-            }
-        )
+        record = {
+            "homework_id": homework_id,
+            "zyid": homework_id,
+            "student_homework_id": student_homework_id,
+            "xszyid": student_homework_id,
+            "title": title or "未命名作业",
+            "homework_title": title or "未命名作业",
+            "deadline": _format_homework_deadline(deadline_raw),
+            "deadline_raw": deadline_raw,
+            "submitted": endpoint_type != "unsubmitted",
+            "status_group": endpoint_type,
+            "course_id": course.get("course_id", ""),
+            "course_wlkcid": course.get("wlkcid", ""),
+            "course_name": course.get("course_name", ""),
+            "course_no": course.get("course_no", ""),
+            "class_no": course.get("class_no", ""),
+            "teacher_name": course.get("teacher_name", ""),
+            "detail_url": detail_url,
+            "submit_url": f"{base_url}/f/wlxt/kczy/zy/student/tijiao?wlkcid={course.get('wlkcid', '')}&xszyid={student_homework_id}"
+            if student_homework_id
+            else "",
+            "source_endpoint": endpoint,
+        }
+        if deadline_epoch_ms is not None:
+            record["deadline_epoch_ms"] = deadline_epoch_ms
+        records.append(record)
     return records
 
 

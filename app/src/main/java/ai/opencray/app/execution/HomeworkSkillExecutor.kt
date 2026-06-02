@@ -14,6 +14,8 @@ import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -216,7 +218,13 @@ class HomeworkSkillExecutor(
         }
       }
 
-      val deduped = records.distinctBy { "${it.homeworkId}::${it.studentHomeworkId}" }.sortedBy { it.deadline }
+      val deduped =
+        records
+          .distinctBy { "${it.homeworkId}::${it.studentHomeworkId}" }
+          .sortedWith(
+            compareBy<HomeworkRecord> { parseHomeworkDeadlineEpochMs(it.deadline) ?: Long.MAX_VALUE }
+              .thenBy { it.deadline },
+          )
       val filtered = filterHomeworkRecords(deduped)
       persistHomeworkRecords(filtered)
       val status = if (unsubmittedOnly) "unsubmitted_crawled" else "crawled"
@@ -731,7 +739,9 @@ class HomeworkSkillExecutor(
             homeworkId = zyid,
             studentHomeworkId = xszyid,
             title = normalizeNullableText(item.optString("homework_title")).ifBlank { normalizeNullableText(item.optString("title")) },
-            deadline = normalizeNullableText(item.optString("deadline")),
+            deadline =
+              normalizeNullableText(item.optString("deadline_raw"))
+                .ifBlank { normalizeNullableText(item.optString("deadline")) },
             submitted = item.optBoolean("submitted", false),
             courseId = normalizeNullableText(item.optString("course_wlkcid")).ifBlank { normalizeNullableText(item.optString("course_id")) },
             courseName = normalizeNullableText(item.optString("course_name")),
@@ -1097,12 +1107,31 @@ class HomeworkSkillExecutor(
       if (row.title.contains("补交")) {
         return@filter false
       }
-      val deadlineMs = row.deadline.trim().toLongOrNull()
+      val deadlineMs = parseHomeworkDeadlineEpochMs(row.deadline)
       if (deadlineMs != null && deadlineMs < nowMs) {
         return@filter false
       }
       true
     }
+  }
+
+  private fun parseHomeworkDeadlineEpochMs(raw: String): Long? {
+    val text = raw.trim()
+    if (text.isBlank()) return null
+    val numeric = text.toLongOrNull() ?: return null
+    return if (numeric > 10_000_000_000L) numeric else numeric * 1000L
+  }
+
+  private fun formatHomeworkDeadline(raw: String): String {
+    val deadlineMs = parseHomeworkDeadlineEpochMs(raw) ?: return raw
+    val zoneId =
+      runCatching {
+        ZoneId.of(readHomeworkSetting("timezone").ifBlank { ZoneId.systemDefault().id })
+      }.getOrDefault(ZoneId.systemDefault())
+    return DateTimeFormatter
+      .ofPattern("yyyy-MM-dd HH:mm")
+      .withZone(zoneId)
+      .format(Instant.ofEpochMilli(deadlineMs))
   }
 
   private fun parseCsvOrJsonArray(raw: String?): List<String> {
@@ -1346,26 +1375,28 @@ class HomeworkSkillExecutor(
   }
 
   private fun HomeworkRecord.toDataMap(): Map<String, Any> =
-    mapOf(
-      "homework_id" to homeworkId,
-      "zyid" to homeworkId,
-      "student_homework_id" to studentHomeworkId,
-      "xszyid" to studentHomeworkId,
-      "title" to title,
-      "homework_title" to title,
-      "deadline" to deadline,
-      "submitted" to submitted,
-      "course_id" to courseId,
-      "course_wlkcid" to courseId,
-      "course_name" to courseName,
-      "course_no" to courseNo,
-      "class_no" to classNo,
-      "teacher_name" to teacherName,
-      "status_group" to statusGroup,
-      "source_endpoint" to sourceEndpoint,
-      "detail_url" to detailUrl,
-      "submit_url" to submitUrl,
-    )
+    buildMap {
+      put("homework_id", homeworkId)
+      put("zyid", homeworkId)
+      put("student_homework_id", studentHomeworkId)
+      put("xszyid", studentHomeworkId)
+      put("title", title)
+      put("homework_title", title)
+      put("deadline", formatHomeworkDeadline(deadline))
+      put("deadline_raw", deadline)
+      parseHomeworkDeadlineEpochMs(deadline)?.let { put("deadline_epoch_ms", it) }
+      put("submitted", submitted)
+      put("course_id", courseId)
+      put("course_wlkcid", courseId)
+      put("course_name", courseName)
+      put("course_no", courseNo)
+      put("class_no", classNo)
+      put("teacher_name", teacherName)
+      put("status_group", statusGroup)
+      put("source_endpoint", sourceEndpoint)
+      put("detail_url", detailUrl)
+      put("submit_url", submitUrl)
+    }
 
   private fun HomeworkCourse.toDataMap(): Map<String, Any> =
     mapOf(
