@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,11 +40,14 @@ def _parse_iso_to_epoch_ms(raw: str) -> int:
     text = raw.strip()
     if not text:
         raise ValueError("empty datetime")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", text) is None:
+        raise ValueError(
+            "datetime must be ISO-8601 with explicit UTC offset, "
+            "e.g. 2026-06-03T14:00:00+08:00"
+        )
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
     return int(parsed.timestamp() * 1000)
 
 

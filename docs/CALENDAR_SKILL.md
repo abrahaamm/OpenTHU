@@ -101,3 +101,26 @@ gradlew.bat :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerAr
 然后在服务端看 `/api/v1/agent/tasks/{task_id}` 的 `device_results` 与 `status`。
 
 具体见文件 [AGENT_CORE_SERVER.md](AGENT_CORE_SERVER.md)
+
+## 5. Time Argument Contract
+
+Calendar writes and conflict detection require concrete absolute datetimes:
+
+- `create_calendar_event.start_time`
+- `create_calendar_event.end_time`
+- `detect_calendar_conflicts.start_time`
+- `detect_calendar_conflicts.end_time`
+
+All four fields must be ISO-8601 datetime strings with an explicit UTC offset, for example:
+
+```json
+{
+  "start_time": "2026-06-03T14:00:00+08:00",
+  "end_time": "2026-06-03T15:00:00+08:00",
+  "timezone": "Asia/Shanghai"
+}
+```
+
+Do not pass natural-language or relative time values such as `明天`, `今晚`, `下周`, or `tomorrow`.
+
+When the user uses relative time, the planner must call `get_current_time` first. The calendar action may be planned only after the intended wall-clock time has been resolved into ISO-8601 offset datetimes. The Android executor intentionally has no fallback that guesses a time. If the time is missing or invalid, it returns an error and does not create a calendar event.

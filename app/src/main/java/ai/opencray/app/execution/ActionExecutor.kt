@@ -22,7 +22,6 @@ import ai.opencray.app.domain.model.SystemAction
 import java.io.File
 import java.time.OffsetDateTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.max
@@ -539,10 +538,26 @@ class ActionExecutor(
 
     val title = action.params["title"]?.trim().orEmpty().ifEmpty { goal.take(40).ifEmpty { "OpenTHU Event" } }
     val description = action.params["description"]?.trim().orEmpty().ifEmpty { goal }
-    val window = deriveWindow(action.params, goal) ?: return ActionExecutionReport(
+    val window = deriveWindow(action.params) ?: return ActionExecutionReport(
       success = false,
-      message = "Invalid or missing start_time/end_time.",
+      message = "Invalid or missing calendar time. start_time and end_time must be ISO-8601 datetimes with explicit UTC offset, e.g. 2026-06-03T14:00:00+08:00.",
       recoverable = false,
+      semantic = "invalid_calendar_time",
+      metadata = mapOf(
+        "reason" to "invalid_calendar_time",
+        "start_time" to action.params["start_time"],
+        "end_time" to action.params["end_time"],
+      ),
+    )
+    val calendarZone = resolveCalendarZoneId(action.params["timezone"]) ?: return ActionExecutionReport(
+      success = false,
+      message = "Invalid calendar timezone. Use an IANA timezone id such as Asia/Shanghai.",
+      recoverable = false,
+      semantic = "invalid_calendar_timezone",
+      metadata = mapOf(
+        "reason" to "invalid_calendar_timezone",
+        "timezone" to action.params["timezone"],
+      ),
     )
     val conflictDecision = action.params["conflict_decision"]?.trim()?.lowercase() ?: "prompt_user"
     val conflicts = queryConflicts(window.startMs, window.endMs)
@@ -612,7 +627,7 @@ class ActionExecutor(
           put(CalendarContract.Events.DESCRIPTION, description)
           put(CalendarContract.Events.DTSTART, window.startMs)
           put(CalendarContract.Events.DTEND, window.endMs)
-          put(CalendarContract.Events.EVENT_TIMEZONE, ZoneId.systemDefault().id)
+          put(CalendarContract.Events.EVENT_TIMEZONE, calendarZone.id)
         }
       val uri = appContext.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
       val eventId = uri?.lastPathSegment ?: "unknown"
@@ -625,6 +640,7 @@ class ActionExecutor(
           "title" to title,
           "start" to formatEpochMs(window.startMs),
           "end" to formatEpochMs(window.endMs),
+          "timezone" to calendarZone.id,
           "calendar_id" to calendarId,
           "deleted_conflicts" to if (conflicts.isNotEmpty()) conflictsToDataList(conflicts) else emptyList<Any>(),
         ),
@@ -640,20 +656,21 @@ class ActionExecutor(
   }
 
   private fun executeGetCurrentTime(): ActionExecutionReport {
-    val now = OffsetDateTime.now(ZoneId.systemDefault()).withNano(0)
+    val zone = resolveCalendarZoneId(null) ?: ZoneId.systemDefault()
+    val now = OffsetDateTime.now(zone).withNano(0)
     val hour = now.hour
     val minute = now.minute
     val localTime = "${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}"
     return ActionExecutionReport(
       success = true,
-      message = "Current local time captured: $localTime (${ZoneId.systemDefault().id})",
+      message = "Current local time captured: $localTime (${zone.id})",
       recoverable = false,
       semantic = "current_time_captured",
       metadata = mapOf(
         "local_datetime" to now.toString(),
         "local_date" to now.toLocalDate().toString(),
         "local_time" to localTime,
-        "timezone" to ZoneId.systemDefault().id,
+        "timezone" to zone.id,
         "epoch_ms" to now.toInstant().toEpochMilli(),
       ),
     )
@@ -670,10 +687,16 @@ class ActionExecutor(
         recoverable = false,
       )
     }
-    val window = deriveWindow(action.params, goal) ?: return ActionExecutionReport(
+    val window = deriveWindow(action.params) ?: return ActionExecutionReport(
       success = false,
-      message = "Invalid or missing start_time/end_time.",
+      message = "Invalid or missing calendar time. start_time and end_time must be ISO-8601 datetimes with explicit UTC offset, e.g. 2026-06-03T14:00:00+08:00.",
       recoverable = false,
+      semantic = "invalid_calendar_time",
+      metadata = mapOf(
+        "reason" to "invalid_calendar_time",
+        "start_time" to action.params["start_time"],
+        "end_time" to action.params["end_time"],
+      ),
     )
     val conflicts = queryConflicts(window.startMs, window.endMs)
     return ActionExecutionReport(
@@ -936,23 +959,32 @@ class ActionExecutor(
     return null
   }
 
-  private fun deriveWindow(
-    params: Map<String, String>,
-    goal: String,
-  ): CalendarWindow? {
-    val extracted = extractIsoDateTime(goal)
-    val startRaw = params["start_time"]?.trim().orEmpty().ifEmpty { extracted.firstOrNull().orEmpty() }
-    val endRaw = params["end_time"]?.trim().orEmpty().ifEmpty { extracted.getOrNull(1).orEmpty() }
+  private fun deriveWindow(params: Map<String, String>): CalendarWindow? {
+    val startRaw = params["start_time"]?.trim().orEmpty()
+    val endRaw = params["end_time"]?.trim().orEmpty()
+    if (startRaw.isEmpty() || endRaw.isEmpty()) return null
 
     val formatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
-    val now = OffsetDateTime.now(ZoneOffset.UTC).withSecond(0).withNano(0)
-    val start = runCatching { OffsetDateTime.parse(startRaw, formatter) }.getOrNull() ?: now.plusHours(1)
-    val end = runCatching { OffsetDateTime.parse(endRaw, formatter) }.getOrNull() ?: start.plusHours(1)
+    val start = runCatching { OffsetDateTime.parse(startRaw, formatter) }.getOrNull() ?: return null
+    val end = runCatching { OffsetDateTime.parse(endRaw, formatter) }.getOrNull() ?: return null
     if (!end.isAfter(start)) return null
     return CalendarWindow(
       startMs = start.toInstant().toEpochMilli(),
       endMs = end.toInstant().toEpochMilli(),
     )
+  }
+
+  private fun resolveCalendarZoneId(rawTimezone: String?): ZoneId? {
+    val requested = rawTimezone?.trim().orEmpty()
+    val configured =
+      appContext
+        .getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+        .getString("timezone", "")
+        .orEmpty()
+        .trim()
+    val zoneText = requested.ifEmpty { configured }
+    if (zoneText.isEmpty()) return ZoneId.systemDefault()
+    return runCatching { ZoneId.of(zoneText) }.getOrNull()
   }
 
   private fun queryConflicts(

@@ -132,6 +132,23 @@ class SkillRegistry:
 
 def build_default_registry() -> SkillRegistry:
     registry = SkillRegistry()
+    iso_offset_datetime_schema = {
+        "type": "string",
+        "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        "description": (
+            "Concrete ISO-8601 datetime with explicit UTC offset. "
+            "Examples: 2026-06-03T14:00:00+08:00, 2026-06-03T06:00:00Z. "
+            "Do not use relative or natural-language values such as 明天, 下周, 今晚, tomorrow."
+        ),
+    }
+    timezone_schema = {
+        "type": "string",
+        "description": (
+            "Optional IANA timezone id used for calendar display/context, preferably copied "
+            "from session.timezone or settings, e.g. Asia/Shanghai. Time values must still "
+            "include an explicit offset."
+        ),
+    }
 
     for spec in [
         SkillSpec("login", "Authenticate with Tsinghua identity system", "auth", "low", False),
@@ -484,7 +501,10 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=False,
-            when_to_use="Use before alarm/reminder/calendar planning when the user uses relative time such as 明天, 后天, 今晚, tomorrow, next Monday.",
+            when_to_use=(
+                "Must be used before alarm/reminder/calendar planning when the user uses relative "
+                "time such as 明天, 后天, 今晚, 下周, tomorrow, next Monday."
+            ),
             example_utterances=[
                 "明早八点叫我",
                 "remind me tomorrow",
@@ -524,8 +544,9 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "start_time": {"type": "string"},
-                    "end_time": {"type": "string"},
+                    "start_time": iso_offset_datetime_schema,
+                    "end_time": iso_offset_datetime_schema,
+                    "timezone": timezone_schema,
                     "location": {"type": "string"},
                     "description": {"type": "string"},
                     "conflict_decision": {
@@ -547,8 +568,9 @@ def build_default_registry() -> SkillRegistry:
             args_json_schema={
                 "type": "object",
                 "properties": {
-                    "start_time": {"type": "string"},
-                    "end_time": {"type": "string"},
+                    "start_time": iso_offset_datetime_schema,
+                    "end_time": iso_offset_datetime_schema,
+                    "timezone": timezone_schema,
                 },
                 "required": ["start_time", "end_time"],
                 "additionalProperties": False,
