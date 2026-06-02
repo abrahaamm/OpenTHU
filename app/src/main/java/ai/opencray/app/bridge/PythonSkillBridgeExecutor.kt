@@ -70,7 +70,7 @@ class PythonSkillBridgeExecutor(
     ) {
       return "APPROVAL_REQUIRED"
     }
-    if (reason == "login_required" || report.semantic == "homework_cookie_login_required") {
+    if (reason == "login_required" || report.semantic == "homework_cookie_login_required" || report.semantic == "course_info_auth") {
       return "NOT_CONFIGURED"
     }
     if (message.contains("confirm_delete=true", ignoreCase = true) ||
@@ -198,6 +198,56 @@ class PythonSkillBridgeExecutor(
             .put("status", status)
             .put("high_risk", true)
             .put("message", message)
+        putReportData(data, report)
+      }
+      "get_semesters" -> {
+        val data =
+          JSONObject()
+            .put("status", if (report.success) "ok" else reportedFailureStatus(report))
+            .put("message", message)
+        report.metadata["current_semester"]?.let { data.put("current_semester", it.toString()) }
+        val semesters = report.metadata["semesters"]
+        if (semesters is List<*>) {
+          data.put("semesters", JSONArray(semesters.mapNotNull { it as? Map<*, *> }.map { toJsonObject(it) }))
+          data.put("semester_count", semesters.size)
+        }
+        putReportData(data, report)
+      }
+      "get_courses" -> {
+        val data =
+          JSONObject()
+            .put("status", if (report.success) "ok" else reportedFailureStatus(report))
+            .put("message", message)
+        report.metadata["semester_id"]?.let { data.put("semester_id", it.toString()) }
+        val courses = report.metadata["courses"]
+        if (courses is List<*>) {
+          data.put("courses", JSONArray(courses.mapNotNull { it as? Map<*, *> }.map { toJsonObject(it) }))
+          data.put("course_count", courses.size)
+        }
+        putReportData(data, report)
+      }
+      "get_course_schedule" -> {
+        val data =
+          JSONObject()
+            .put("status", if (report.success) "ok" else reportedFailureStatus(report))
+            .put("message", message)
+        report.metadata["semester"]?.let { semester ->
+          if (semester is Map<*, *>) data.put("semester", toJsonObject(semester))
+        }
+        val scheduleEntries = report.metadata["schedule_entries"]
+        if (scheduleEntries is List<*>) {
+          data.put("schedule_entries", JSONArray(scheduleEntries.mapNotNull { it as? Map<*, *> }.map { toJsonObject(it) }))
+          data.put("schedule_count", scheduleEntries.size)
+        }
+        val courses = report.metadata["courses"]
+        if (courses is List<*>) {
+          data.put("courses", JSONArray(courses.mapNotNull { it as? Map<*, *> }.map { toJsonObject(it) }))
+        }
+        val warnings = report.metadata["warnings"]
+        if (warnings is List<*>) {
+          data.put("warnings", JSONArray(warnings.map { it.toString() }))
+        }
+        report.metadata["source"]?.let { data.put("source", it.toString()) }
         putReportData(data, report)
       }
       else -> JSONObject()

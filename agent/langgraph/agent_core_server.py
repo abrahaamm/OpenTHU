@@ -44,6 +44,9 @@ DEVICE_EXECUTED_SKILLS = {
     "preview_homework_attachments",
     "upload_homework_attachment",
     "submit_homework",
+    "get_semesters",
+    "get_courses",
+    "get_course_schedule",
 }
 
 
@@ -304,6 +307,7 @@ class AgentCoreStore:
                 "skill_plan": data.get("skill_plan", []),
                 "approved_skills": data.get("approved_skills", []),
                 "blocked_skills": data.get("blocked_skills", []),
+                "final_summary_text": data.get("final_summary_text", ""),
                 "device_results": [],
                 "in_flight_request_ids": [],
                 "completed_request_ids": [],
@@ -970,7 +974,20 @@ def hydrate_show_summary_skills(
     store: AgentCoreStore,
     task_doc: dict[str, Any],
 ) -> dict[str, Any]:
-    summary_content = build_task_result_summary(task_doc)
+    summary_content = task_doc.get("final_summary_text", "").strip()
+    
+    device_results = task_doc.get("device_results", [])
+    if device_results:
+        device_summary = build_server_data_summary(device_results)
+        if device_summary:
+            if summary_content:
+                summary_content += "\n\n" + device_summary
+            else:
+                summary_content = device_summary
+                
+    if not summary_content:
+        summary_content = build_task_result_summary(task_doc)
+    
     if not summary_content:
         return task_doc
 
@@ -1210,6 +1227,7 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
             name = str(item.get("name") or item.get("course_name") or "未命名课程").strip()
             teacher = str(item.get("teacher_name", "")).strip()
             time_blocks = item.get("time_and_location", [])
+            raw_time_location = str(item.get("time_location", "")).strip()
             details = []
             if teacher:
                 details.append(teacher)
@@ -1228,6 +1246,8 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
                         time_label += f" {location}"
                     if time_label.strip():
                         details.append(time_label.strip())
+            elif raw_time_location:
+                details.append(raw_time_location)
             line = f"- {name}"
             if details:
                 line += f"（{'，'.join(details)}）"

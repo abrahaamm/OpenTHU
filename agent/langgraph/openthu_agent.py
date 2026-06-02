@@ -48,6 +48,7 @@ class AgentState(TypedDict, total=False):
     trace_log: list[dict[str, Any]]
     normalizer_source: str
     planner_source: str
+    final_summary_text: str
 
 
 class StructuredPrompt(TypedDict):
@@ -69,6 +70,13 @@ def risk_rank(risk_level: str) -> int:
 def normalize_risk(risk_level: str) -> str:
     risk = str(risk_level).strip().lower()
     return risk if risk in {"low", "medium", "high"} else "medium"
+
+
+def _preview_text_for_log(text: str, limit: int = 1200) -> str:
+    preview = str(text).strip()
+    if len(preview) <= limit:
+        return preview
+    return preview[:limit] + "...<truncated>"
 
 
 class RequirementLLM:
@@ -186,6 +194,7 @@ class OpenTHULangGraphAgent:
         workflow.add_node("replan_failed", self._replan_failed)
         workflow.add_node("audit_record", self._audit_record)
         workflow.add_node("memory_update", self._memory_update)
+        workflow.add_node("synthesize_summary", self._synthesize_summary)
         workflow.add_node("finalize", self._finalize)
 
         workflow.add_edge(START, "normalize_requirement")
@@ -202,7 +211,8 @@ class OpenTHULangGraphAgent:
         )
         workflow.add_edge("replan_failed", "audit_record")
         workflow.add_edge("audit_record", "memory_update")
-        workflow.add_edge("memory_update", "finalize")
+        workflow.add_edge("memory_update", "synthesize_summary")
+        workflow.add_edge("synthesize_summary", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
@@ -1372,6 +1382,65 @@ class OpenTHULangGraphAgent:
             ),
         }
 
+    def _synthesize_summary(self, state: AgentState) -> dict[str, Any]:
+        user_input = state.get("user_input", "")
+        skill_results = state.get("skill_results", [])
+
+        logger.info(
+            "[node.synthesize_summary] arrived task_id=%s skill_result_count=%d",
+            state.get("task_id", ""),
+            len(skill_results),
+        )
+        
+        if not skill_results:
+            return {"final_summary_text": ""}
+
+        openai_key, llm_model, llm_base_url = self._llm_config_from_state(state)
+        if not openai_key:
+            logger.debug("[llm.synthesize] OPENAI_API_KEY not set, skipping LLM synthesis")
+            return {"final_summary_text": ""}
+
+        system_prompt = (
+            "你是一个贴心的校园生活助手。请根据用户的原始提问以及后台工具返回的 JSON 结果数据，"
+            "为用户撰写一段连贯、自然、排版美观的 Markdown 摘要总结。"
+            "剔除不需要关注的底层字段(如状态码、ID等)，突出用户关心的重点。"
+            "如果查询到了活动或日程等，可以用亲切的语气进行提示。如果没有有用信息，委婉地告知。"
+        )
+        user_content = f"【提问】\n{user_input}\n\n【返回数据】\n{json.dumps(skill_results, ensure_ascii=False)}"
+        
+        try:
+            from openai import OpenAI
+            client = self._create_openai_client(OpenAI, openai_key, base_url=llm_base_url)
+            response = client.chat.completions.create(
+                model=llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.7,
+                max_tokens=2048,
+            )
+            final_summary = response.choices[0].message.content or "操作已完成。"
+            logger.info(
+                "[node.synthesize_summary] llm_beautified_text task_id=%s text=%s",
+                state.get("task_id", ""),
+                _preview_text_for_log(final_summary),
+            )
+            return {
+                "final_summary_text": final_summary.strip(),
+                "trace_log": self._append_trace(
+                    state, "synthesize_summary", {"status": "success", "length": len(final_summary.strip())}
+                )
+            }
+        except Exception as e:
+            logger.warning(f"[llm.synthesize] LLM error: {e}")
+            return {
+                "final_summary_text": "",
+                "trace_log": self._append_trace(
+                    state, "synthesize_summary", {"status": "error", "error": str(e)}
+                )
+            }
+
     def _finalize(self, state: AgentState) -> dict[str, Any]:
         code, message = self._summarize_outcome(state)
         response = {
@@ -1395,6 +1464,7 @@ class OpenTHULangGraphAgent:
                 "replanned_skills": state.get("replanned_skills", []),
                 "audit_log": state.get("audit_log", []),
                 "memory_update": state.get("memory_update", {}),
+                "final_summary_text": state.get("final_summary_text", ""),
                 "available_skills": self.skill_manager.list_for_planner(),
                 "trace_log": state.get("trace_log", []),
                 "normalizer_source": state.get("normalizer_source", "not_run"),
@@ -1423,6 +1493,14 @@ class OpenTHULangGraphAgent:
         fallback_summary: str,
         conversation_context: dict[str, Any] | None = None,
     ) -> str:
+        server_results = task_doc.get("server_results", [])
+        device_results = task_doc.get("device_results", [])
+        logger.info(
+            "[agent.summary] arrived task_id=%s server_result_count=%d device_result_count=%d",
+            task_doc.get("task_id", ""),
+            len(server_results) if isinstance(server_results, list) else 0,
+            len(device_results) if isinstance(device_results, list) else 0,
+        )
         api_key, model, base_url = self._llm_config_from_session(session if isinstance(session, dict) else {})
         if not api_key:
             return fallback_summary
@@ -1473,6 +1551,11 @@ class OpenTHULangGraphAgent:
                 temperature=0.35,
             )
             text = (completion.choices[0].message.content or "").strip()
+            logger.info(
+                "[agent.summary] llm_beautified_text task_id=%s text=%s",
+                task_doc.get("task_id", ""),
+                _preview_text_for_log(text),
+            )
             return text or fallback_summary
         except Exception as exc:
             logger.warning("[agent.summary] final synthesis failed: %s", exc)
@@ -1536,7 +1619,7 @@ class OpenTHULangGraphAgent:
             "If an available skill can satisfy the user's request, plan it instead of refusing because data is personal; "
             "the skill will report login-required/not-configured if credentials are missing. "
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
-            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
+            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before other skills. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
             "For class timetable or 课表 requests, use `get_semesters` before `get_course_schedule`; for course catalog/list requests, use `get_semesters` then `get_courses`. "
             "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "

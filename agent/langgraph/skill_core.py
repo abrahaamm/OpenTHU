@@ -510,7 +510,7 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "create_calendar_event",
-            "Create a system calendar event",
+            "Create a calendar event on device for schedules, classes, deadlines, and task reminders",
             "action",
             "medium",
             True,
@@ -576,7 +576,7 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "set_alarm",
-            "Set a system alarm",
+            "Set a one-off system alarm for a precise clock time; use for wake-up/timekeeping",
             "action",
             "low",
             False,
@@ -617,7 +617,10 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "read_notifications",
-            "Read unread system notifications",
+            (
+                "Read active/unread status bar notifications from the Android device. "
+                "Use this to check incoming messages (WeChat, SMS, QQ, email) "
+            ),
             "action",
             "low",
             False,
