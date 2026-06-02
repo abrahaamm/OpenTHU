@@ -130,7 +130,7 @@
     <string name="setting_homework_cookie_description">用于网络学堂作业抓取、上传和提交的 Learn Cookie；可通过清华统一登录自动获取。</string>
     <string name="setting_homework_csrf_description">网络学堂接口需要时使用的 XSRF/CSRF Token，可以从 Cookie 中自动提取时留空。</string>
     <string name="setting_campus_file_description">校园活动本地数据文件路径，供活动读取能力做兜底使用。</string>
-    <string name="setting_search_provider_description">搜索提供方名称，当前建议填写 duckduckgo 或 brave。</string>
+    <string name="setting_search_provider_description">搜索提供方名称，当前建议填写 duckduckgo、searxng 或 brave；general 是搜索范围，不是提供方。</string>
     <string name="setting_search_endpoint_description">搜索请求地址；只有更换 provider 或代理时才需要调整。</string>
     <string name="setting_search_api_key_description">搜索服务的 API Key，仅部分 provider 需要填写。</string>
     <string name="setting_search_scene_description">控制搜索来源：campus 只搜校内域名，general 只搜校外/通用网页，hybrid 优先校内并补充通用结果。</string>
@@ -155,7 +155,7 @@
     <string name="setting_homework_cookie_hint">LEARN_COOKIE / JSESSIONID=...</string>
     <string name="setting_homework_csrf_hint">XSRF-TOKEN（可选）</string>
     <string name="setting_campus_file_hint">OPENTHU_CAMPUS_ACTIVITIES_FILE</string>
-    <string name="setting_search_provider_hint">OPENTHU_SEARCH_PROVIDER（duckduckgo 或 brave）</string>
+    <string name="setting_search_provider_hint">OPENTHU_SEARCH_PROVIDER（duckduckgo / searxng / brave）</string>
     <string name="setting_search_endpoint_hint">OPENTHU_SEARCH_ENDPOINT</string>
     <string name="setting_search_api_key_hint">OPENTHU_SEARCH_API_KEY（可选）</string>
     <string name="setting_search_scene_hint">campus / general / hybrid</string>

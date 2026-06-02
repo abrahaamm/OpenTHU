@@ -46,6 +46,9 @@ except ImportError:
     from skill_manager import SkillManager
 
 
+FAKE_COMPLETION_PAYLOADS: list[dict[str, Any]] = []
+
+
 class _FakeMessage:
     def __init__(self, content: str) -> None:
         self.content = content
@@ -65,6 +68,7 @@ class _FakeCompletions:
     def create(self, **kwargs: Any) -> _FakeCompletion:
         messages = kwargs.get("messages", [])
         payload = json.loads(messages[-1]["content"])
+        FAKE_COMPLETION_PAYLOADS.append(payload)
         user_input = str(payload.get("user_input", "")).lower()
         if "homework" in user_input and "not submitted" in user_input:
             return _FakeCompletion(
@@ -120,6 +124,7 @@ class _FakeOpenAI:
 
 
 def _install_fake_openai() -> None:
+    FAKE_COMPLETION_PAYLOADS.clear()
     sys.modules["openai"] = types.SimpleNamespace(OpenAI=_FakeOpenAI)
 
 
@@ -203,12 +208,43 @@ def test_decide_turn_homework_submit_fallback() -> None:
     _expect(submit["args"]["confirm_submit"] is True, str(submit))
 
 
+def test_decide_turn_includes_memory_context() -> None:
+    _install_fake_openai()
+    memory_context = {
+        "summary": "- [long/manual_preference/w90] 不要创建早于 08:00 的提醒",
+        "entries": [
+            {
+                "scope": "long",
+                "key": "manual_preference",
+                "value": "不要创建早于 08:00 的提醒",
+                "weight": 90,
+                "updated_at_epoch_ms": 1780000000000,
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = OpenTHULangGraphAgent(memory_file=Path(tmpdir) / "memory.json")
+        response = agent.decide_turn(
+            "hello",
+            user_id="decision_test_user",
+            session={"openai_api_key": "test-key", "memory_context": memory_context},
+        )
+    data = response["data"]
+    _expect(data["source"] == "llm_decision", str(data))
+    _expect(FAKE_COMPLETION_PAYLOADS, "fake LLM did not receive payload")
+    context = FAKE_COMPLETION_PAYLOADS[-1].get("conversation_context", {})
+    captured_memory = context.get("memory_context", {})
+    _expect(captured_memory.get("summary") == memory_context["summary"], str(captured_memory))
+    _expect(captured_memory.get("entries", [{}])[0].get("value") == "不要创建早于 08:00 的提醒", str(captured_memory))
+
+
 def run_suite() -> list[tuple[str, bool, str]]:
     cases = [
         ("skill_metadata", test_skill_metadata),
         ("decide_turn_chat", test_decide_turn_chat),
         ("decide_turn_homework_plan", test_decide_turn_homework_plan),
         ("decide_turn_homework_submit_fallback", test_decide_turn_homework_submit_fallback),
+        ("decide_turn_includes_memory_context", test_decide_turn_includes_memory_context),
     ]
     results: list[tuple[str, bool, str]] = []
     for name, fn in cases:

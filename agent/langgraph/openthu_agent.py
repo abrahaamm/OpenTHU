@@ -115,6 +115,8 @@ class RequirementLLM:
                 "Convert the user requirement into strict JSON with keys: "
                 "objective, entities, constraints, success_criteria, sensitivity. "
                 "Use concise, execution-oriented values. "
+                "If the input is JSON with conversation_context, use recent_messages and memory_context "
+                "to resolve follow-up references and user preferences. "
                 "If the input contains an [attached_file] block, preserve its file_uri and file_name "
                 "verbatim in constraints so downstream homework upload skills can use them. "
                 "Return JSON only."
@@ -678,6 +680,7 @@ class OpenTHULangGraphAgent:
         history: list[dict[str, Any]],
         *,
         user_input: str,
+        session: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         recent_messages = self._compact_chat_history(history, limit=10)
         current = user_input.strip()
@@ -714,7 +717,73 @@ class OpenTHULangGraphAgent:
             "latest_user_input": current,
             "recent_messages": recent_messages,
             "reference_candidates": reference_candidates[-12:],
+            "memory_context": self._compact_session_memory_context(session or {}),
         }
+
+    def _compact_session_memory_context(self, session: dict[str, Any]) -> dict[str, Any]:
+        raw_memory = session.get("memory_context") or session.get("memory_records") or session.get("memories")
+        if not raw_memory:
+            return {}
+        if isinstance(raw_memory, str):
+            try:
+                raw_memory = json.loads(raw_memory)
+            except Exception:
+                return {"summary": raw_memory.strip()[:1500]} if raw_memory.strip() else {}
+
+        if isinstance(raw_memory, list):
+            raw_memory = {"entries": raw_memory}
+        if not isinstance(raw_memory, dict):
+            return {}
+
+        entries_raw = raw_memory.get("entries", [])
+        if not isinstance(entries_raw, list):
+            entries_raw = []
+
+        entries: list[dict[str, Any]] = []
+        for item in entries_raw:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value", "")).strip()
+            if not value:
+                continue
+            entries.append(
+                {
+                    "scope": str(item.get("scope", "")).strip()[:20],
+                    "key": str(item.get("key", "")).strip()[:80],
+                    "value": value[:500],
+                    "weight": self._safe_int(item.get("weight"), default=0),
+                    "updated_at_epoch_ms": self._safe_int(
+                        item.get("updated_at_epoch_ms", item.get("updatedAtEpochMs")),
+                        default=0,
+                    ),
+                }
+            )
+
+        entries.sort(
+            key=lambda item: (
+                {"long": 3, "mid": 2, "short": 1}.get(str(item.get("scope", "")).lower(), 0),
+                int(item.get("weight", 0)),
+                int(item.get("updated_at_epoch_ms", 0)),
+            ),
+            reverse=True,
+        )
+        entries = entries[:12]
+        summary = str(raw_memory.get("summary", "")).strip()
+        if not summary and entries:
+            summary = "\n".join(
+                f"- [{item['scope']}/{item['key']}/w{item['weight']}] {item['value'][:160]}"
+                for item in entries[:8]
+            )
+        return {
+            "summary": summary[:1500],
+            "entries": entries,
+        } if summary or entries else {}
+
+    def _safe_int(self, value: Any, *, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
 
     def _turn_decision_system_prompt(self) -> str:
         return (
@@ -730,6 +799,8 @@ class OpenTHULangGraphAgent:
             "return login-required when needed. "
             "Use conversation_context to resolve pronouns and ordinal references such as this, that, it, "
             "the second one, 刚才那个, 第二个, or 上一个 before choosing skills. "
+            "Use conversation_context.memory_context as durable user preferences and feedback; "
+            "respect long-term preferences unless the latest user message explicitly overrides them. "
             "Use only skill_name values from available_skills, and keep plans between 1 and 8 steps. "
             "Do not add show_summary only to produce the final answer; the runtime has a final summary node. "
             "Use get_homework_cookie only when the user explicitly provides a cookie/token/header. "
@@ -759,7 +830,14 @@ class OpenTHULangGraphAgent:
             "user_input": state.get("user_input", ""),
             "user_id": state.get("user_id", "demo_user"),
             "semester_id": state.get("semester_id", ""),
-            "conversation_context": state.get("conversation_context", self._build_conversation_context(history, user_input=state.get("user_input", ""))),
+            "conversation_context": state.get(
+                "conversation_context",
+                self._build_conversation_context(
+                    history,
+                    user_input=state.get("user_input", ""),
+                    session=state.get("session", {}),
+                ),
+            ),
             "available_skills": self.skill_manager.list_for_planner(),
             "response_schema": {
                 "reply": "natural language reply shown to user",
@@ -847,7 +925,7 @@ class OpenTHULangGraphAgent:
             "user_input": user_input,
             "user_id": user_id,
             "approve_sensitive": approve_sensitive,
-            "conversation_context": self._build_conversation_context(history or [], user_input=user_input),
+            "conversation_context": self._build_conversation_context(history or [], user_input=user_input, session=session or {}),
         }
 
     def _contextual_user_input(self, state: AgentState) -> str:
@@ -1631,6 +1709,15 @@ class OpenTHULangGraphAgent:
         if not api_key:
             return fallback_summary
 
+        summary_context = (
+            conversation_context
+            if isinstance(conversation_context, dict) and conversation_context
+            else self._build_conversation_context(
+                [],
+                user_input=user_input,
+                session=session if isinstance(session, dict) else {},
+            )
+        )
         results: list[dict[str, Any]] = []
         for key in ("server_results", "device_results"):
             raw_results = task_doc.get(key, [])
@@ -1639,7 +1726,7 @@ class OpenTHULangGraphAgent:
 
         payload = {
             "user_input": user_input,
-            "conversation_context": conversation_context or {},
+            "conversation_context": summary_context,
             "task_status": task_doc.get("status", ""),
             "results": results,
             "blocked_skills": [
@@ -1659,6 +1746,8 @@ class OpenTHULangGraphAgent:
             "你会收到用户原始请求、云端 skill 和手机端 skill 的结构化执行结果。"
             "请在所有结果基础上给用户一段自然、明确、有帮助的中文最终回复。"
             "不要暴露 request_id、内部 JSON、工具日志或实现细节；"
+            "可以参考 conversation_context.memory_context 中的用户偏好和近期反馈来决定表达重点，"
+            "但不要直接暴露这些内部记忆条目；"
             "如果有失败或权限问题，要说明用户下一步应该怎么做；"
             "如果已有具体结果，直接总结结果，不要只说任务已完成。"
         )
@@ -1755,6 +1844,9 @@ class OpenTHULangGraphAgent:
             "use get_homework_cookie only when the user provides a Learn cookie. "
             "Use conversation_context to resolve follow-up references like `the second one`, `that activity`, `刚才那个`, `第二个`, or `上一个`; "
             "when a reference maps to a prior result, copy the concrete title, time, query, or object from context into skill args. "
+            "Use conversation_context.memory_context as durable user preferences and feedback; "
+            "prefer plans that align with long-term preferences and avoid actions the user recently ignored, "
+            "unless the latest user_input clearly asks otherwise. "
             "If user_input or structured_prompt constraints include an [attached_file] block with file_uri/file_name, copy those exact values into upload_homework_attachment or submit_homework args when the user asks to upload or submit homework."
         )
 

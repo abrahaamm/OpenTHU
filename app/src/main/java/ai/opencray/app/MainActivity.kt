@@ -1863,7 +1863,7 @@ class MainActivity : AppCompatActivity() {
     homeworkCsrfInput.setText(pref.getString("homework_csrf", ""))
     campusFileInput.setText(pref.getString("campus_file", ""))
     searchProviderInput.setText(pref.getString("search_provider", "duckduckgo"))
-    searchEndpointInput.setText(pref.getString("search_endpoint", "https://duckduckgo.com/html/"))
+    searchEndpointInput.setText(pref.getString("search_endpoint", "https://lite.duckduckgo.com/lite/"))
     searchApiKeyInput.setText(pref.getString("search_api_key", ""))
     searchSceneInput.setText(pref.getString("search_scene", "hybrid"))
     searchTtlInput.setText(pref.getString("search_ttl", "3600"))
@@ -1894,7 +1894,7 @@ class MainActivity : AppCompatActivity() {
       .putString("homework_csrf", homeworkCsrfInput.text.toString().trim())
       .putString("campus_file", campusFileInput.text.toString().trim())
       .putString("search_provider", searchProviderInput.text.toString().trim().ifEmpty { "duckduckgo" })
-      .putString("search_endpoint", searchEndpointInput.text.toString().trim())
+      .putString("search_endpoint", normalizedSearchEndpoint())
       .putString("search_api_key", searchApiKeyInput.text.toString().trim())
       .putString("search_scene", searchSceneInput.text.toString().trim().lowercase().ifEmpty { "hybrid" })
       .putString("search_ttl", searchTtlInput.text.toString().trim())
@@ -1917,6 +1917,14 @@ class MainActivity : AppCompatActivity() {
       .edit()
       .putBoolean(PREF_SHOW_PLANNING_DETAILS, visible)
       .apply()
+  }
+
+  private fun normalizedSearchEndpoint(): String {
+    val endpoint = searchEndpointInput.text.toString().trim()
+    if (endpoint == "https://duckduckgo.com/html/" || endpoint == "https://html.duckduckgo.com/html/") {
+      return "https://lite.duckduckgo.com/lite/"
+    }
+    return endpoint
   }
 
   private fun buildSettingsWarnings(): List<String> {

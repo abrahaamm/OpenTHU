@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+from http.client import RemoteDisconnected
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from html import unescape
@@ -21,6 +22,9 @@ except ImportError:
 
 USER_AGENT = "OpenTHU-Agent-Core/1.0 (+https://github.com/thu-info-community/thu-info-app)"
 DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
+DEFAULT_DUCKDUCKGO_ENDPOINT = "https://lite.duckduckgo.com/lite/"
+LEGACY_DUCKDUCKGO_ENDPOINT = "https://duckduckgo.com/html/"
+HTML_DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html/"
 DEFAULT_CAMPUS_DOMAINS = [
     "tsinghua.edu.cn",
     "info.tsinghua.edu.cn",
@@ -250,8 +254,8 @@ class SearxngSearchProvider(SearchProvider):
 class DuckDuckGoSearchProvider(SearchProvider):
     name = "duckduckgo"
 
-    def __init__(self, endpoint: str = "https://duckduckgo.com/html/") -> None:
-        self.endpoint = endpoint
+    def __init__(self, endpoint: str = DEFAULT_DUCKDUCKGO_ENDPOINT) -> None:
+        self.endpoint = _normalize_duckduckgo_endpoint(endpoint)
 
     def search(
         self,
@@ -277,6 +281,8 @@ class DuckDuckGoSearchProvider(SearchProvider):
         }
         html = _text_request(f"{self.endpoint}?{urlencode(params)}")
         results = parse_duckduckgo_html(html)[:max_results]
+        if not results and "anomaly.js" in html:
+            raise SearchProviderError("DuckDuckGo returned an anti-bot challenge. Configure searxng/brave or try again later.")
         _write_cache(cache_key, {"results": [asdict(item) for item in results]})
         return results, False
 
@@ -361,7 +367,7 @@ def _build_provider(session: dict[str, Any] | None = None) -> SearchProvider:
             session,
             "search_endpoint",
             "OPENTHU_SEARCH_ENDPOINT",
-            "https://duckduckgo.com/html/",
+            DEFAULT_DUCKDUCKGO_ENDPOINT,
         )
         return DuckDuckGoSearchProvider(endpoint)
     if provider == "searxng":
@@ -493,6 +499,38 @@ def parse_duckduckgo_html(html: str) -> list[WebSearchResult]:
         snippet_match = re.search(r'(?is)<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>', block)
         if not snippet_match:
             snippet_match = re.search(r'(?is)<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>', block)
+        snippet = _clean_text(re.sub(r"(?s)<[^>]+>", " ", snippet_match.group(1) if snippet_match else ""))
+        if not url or not title:
+            continue
+        results.append(
+            WebSearchResult(
+                title=title,
+                url=url,
+                snippet=snippet,
+                source="duckduckgo",
+            )
+        )
+    if results:
+        return results
+
+    link_matches = [
+        match
+        for match in re.finditer(r"(?is)<a\b([^>]*)>(.*?)</a>", html)
+        if re.search(r"""class=['"][^'"]*result-link[^'"]*['"]""", match.group(1))
+    ]
+    for index, title_match in enumerate(link_matches):
+        href_match = re.search(r"""(?is)href=['"]([^'"]+)['"]""", title_match.group(1))
+        if not href_match:
+            continue
+        raw_url = unescape(href_match.group(1))
+        url = _unwrap_duckduckgo_redirect(raw_url)
+        title = _clean_text(re.sub(r"(?s)<[^>]+>", " ", title_match.group(2)))
+        next_start = link_matches[index + 1].start() if index + 1 < len(link_matches) else len(html)
+        block = html[title_match.end() : next_start]
+        snippet_match = re.search(
+            r"""(?is)<td[^>]+class=['"][^'"]*result-snippet[^'"]*['"][^>]*>(.*?)</td>""",
+            block,
+        )
         snippet = _clean_text(re.sub(r"(?s)<[^>]+>", " ", snippet_match.group(1) if snippet_match else ""))
         if not url or not title:
             continue
@@ -699,7 +737,19 @@ def _text_request(url: str, headers: dict[str, str] | None = None) -> str:
     except HTTPError as exc:
         raise SearchProviderError(f"HTTP {exc.code} for {url}") from exc
     except URLError as exc:
-        raise SearchProviderError(str(exc)) from exc
+        detail = str(exc)
+        if "timed out" in detail.lower() or "timeout" in detail.lower():
+            raise SearchProviderError(
+                "Search provider request timed out. Check network access or configure searxng/brave."
+            ) from exc
+        raise SearchProviderError(detail) from exc
+    except (OSError, RemoteDisconnected, TimeoutError) as exc:
+        detail = str(exc)
+        if "timed out" in detail.lower() or "timeout" in detail.lower():
+            raise SearchProviderError(
+                "Search provider request timed out. Check network access or configure searxng/brave."
+            ) from exc
+        raise SearchProviderError(f"Search provider connection failed: {detail}") from exc
     charset = "utf-8"
     match = re.search(r"charset=([^;\s]+)", content_type, re.I)
     if match:
@@ -715,6 +765,16 @@ def _with_domain_filters(query: str, domains: list[str]) -> str:
         return query
     filters = " OR ".join(f"site:{domain}" for domain in domains)
     return f"({query}) ({filters})"
+
+
+def _normalize_duckduckgo_endpoint(endpoint: str) -> str:
+    value = (endpoint or DEFAULT_DUCKDUCKGO_ENDPOINT).strip()
+    if not value:
+        return DEFAULT_DUCKDUCKGO_ENDPOINT
+    normalized = value.rstrip("/") + "/"
+    if normalized in {LEGACY_DUCKDUCKGO_ENDPOINT, HTML_DUCKDUCKGO_ENDPOINT}:
+        return DEFAULT_DUCKDUCKGO_ENDPOINT
+    return normalized
 
 
 def _result_from_dict(item: dict[str, Any]) -> WebSearchResult:

@@ -11,6 +11,7 @@ import ai.opencray.app.data.repository.ChatRepository
 import ai.opencray.app.data.repository.RuntimeRepository
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
+import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
@@ -631,6 +632,7 @@ class OpenCrayRuntime(
   private fun generateLocalLlmChatReply(message: String): String? {
     val config = localLlmConfig() ?: return null
     val endpoint = config.chatCompletionsEndpoint()
+    val memoryText = buildMemoryPromptText()
     val messages = JSONArray()
       .put(
         JSONObject()
@@ -639,7 +641,8 @@ class OpenCrayRuntime(
             "content",
             "你是 OpenTHU 移动端里的对话式校园助手。"
               + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。"
-              + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。",
+              + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。"
+              + memoryText,
           ),
       )
 
@@ -1033,6 +1036,7 @@ class OpenCrayRuntime(
     val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
     val timezone = pref.getString("timezone", "").orEmpty().trim()
+    val memoryContext = buildGatewayMemoryContext()
 
     val session = linkedMapOf<String, Any?>()
     if (cookie.isNotEmpty()) {
@@ -1067,8 +1071,58 @@ class OpenCrayRuntime(
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
     if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
+    if (memoryContext.isNotEmpty()) session["memory_context"] = memoryContext
     return session
   }
+
+  private fun buildGatewayMemoryContext(limit: Int = 12): Map<String, Any?> {
+    val entries = rankedMemoryRecords(limit)
+    if (entries.isEmpty()) return emptyMap()
+    return mapOf(
+      "summary" to memorySummaryText(entries, valueLimit = 160),
+      "entries" to entries.map { record ->
+        mapOf(
+          "scope" to record.scope,
+          "key" to record.key,
+          "value" to record.value.take(300),
+          "weight" to record.weight,
+          "updated_at_epoch_ms" to record.updatedAtEpochMs,
+        )
+      },
+    )
+  }
+
+  private fun buildMemoryPromptText(limit: Int = 8): String {
+    val entries = rankedMemoryRecords(limit)
+    if (entries.isEmpty()) return ""
+    return "\n可参考用户记忆和反馈，但不要逐字暴露这些内部记录：\n${memorySummaryText(entries, valueLimit = 120)}"
+  }
+
+  private fun rankedMemoryRecords(limit: Int): List<MemoryRecord> =
+    snapshot().memoryRecords
+      .filter { it.value.isNotBlank() }
+      .sortedWith(
+        compareByDescending<MemoryRecord> { memoryScopeRank(it.scope) }
+          .thenByDescending { it.weight }
+          .thenByDescending { it.updatedAtEpochMs },
+      )
+      .take(limit)
+
+  private fun memoryScopeRank(scope: String): Int =
+    when (scope.lowercase(Locale.getDefault())) {
+      "long" -> 3
+      "mid" -> 2
+      "short" -> 1
+      else -> 0
+    }
+
+  private fun memorySummaryText(
+    records: List<MemoryRecord>,
+    valueLimit: Int,
+  ): String =
+    records.joinToString("\n") { record ->
+      "- [${record.scope}/${record.key}/w${record.weight}] ${record.value.take(valueLimit)}"
+    }
 
   private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
     val file = File(path)
