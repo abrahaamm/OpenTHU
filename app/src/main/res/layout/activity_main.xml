@@ -10,10 +10,10 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:paddingStart="16dp"
-        android:paddingTop="12dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="12dp">
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="10dp">
 
         <LinearLayout
             android:id="@+id/top_bar"
@@ -23,16 +23,16 @@
             android:elevation="3dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="14dp"
-            android:paddingTop="14dp"
-            android:paddingEnd="14dp"
-            android:paddingBottom="14dp">
+            android:paddingStart="18dp"
+            android:paddingTop="22dp"
+            android:paddingEnd="18dp"
+            android:paddingBottom="22dp">
 
             <Button
                 android:id="@+id/drawer_toggle_button"
                 style="@style/OpenCray.SecondaryButton"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="50dp"
+                android:layout_height="50dp"
                 android:contentDescription="@string/navigation_menu"
                 android:drawableTop="@drawable/ic_menu_24"
                 android:drawableTint="@color/opencray_ink"
@@ -43,7 +43,7 @@
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="18dp"
                 android:layout_weight="1"
                 android:orientation="vertical">
 
@@ -53,7 +53,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/chat_title"
                     android:textColor="@color/white"
-                    android:textSize="19sp"
+                    android:textSize="29sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -63,7 +63,7 @@
                     android:layout_marginTop="4dp"
                     android:text="@string/chat_subtitle"
                     android:textColor="#F2FFFFFF"
-                    android:textSize="13sp" />
+                    android:textSize="14sp" />
             </LinearLayout>
         </LinearLayout>
 
@@ -71,7 +71,7 @@
             android:id="@+id/status_chip_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="14dp"
             android:fillViewport="true"
             android:scrollbars="none">
 
@@ -85,12 +85,12 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="@drawable/chat_status_chip_surface"
-                    android:paddingStart="14dp"
-                    android:paddingTop="8dp"
-                    android:paddingEnd="14dp"
-                    android:paddingBottom="8dp"
+                    android:paddingStart="16dp"
+                    android:paddingTop="9dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="9dp"
                     android:textColor="@color/opencray_primary_dark"
-                    android:textSize="12sp"
+                    android:textSize="14sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -98,13 +98,13 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
-                    android:background="@drawable/chat_status_chip_surface"
-                    android:paddingStart="14dp"
-                    android:paddingTop="8dp"
-                    android:paddingEnd="14dp"
-                    android:paddingBottom="8dp"
-                    android:textColor="@color/opencray_primary_dark"
-                    android:textSize="12sp" />
+                    android:background="@drawable/chat_source_chip_surface"
+                    android:paddingStart="16dp"
+                    android:paddingTop="9dp"
+                    android:paddingEnd="16dp"
+                    android:paddingBottom="9dp"
+                    android:textColor="@color/opencray_muted"
+                    android:textSize="14sp" />
             </LinearLayout>
         </HorizontalScrollView>
 
@@ -112,7 +112,7 @@
             android:id="@+id/page_container"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="14dp"
             android:layout_weight="1">
 
             <LinearLayout
@@ -120,9 +120,9 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:background="@drawable/chat_shell"
-                android:elevation="2dp"
+                android:elevation="0dp"
                 android:orientation="vertical"
-                android:padding="10dp">
+                android:padding="8dp">
 
                 <ScrollView
                     android:id="@+id/chat_history_scroll"
@@ -131,7 +131,7 @@
                     android:layout_weight="1"
                     android:background="@drawable/chat_history_surface"
                     android:fillViewport="true"
-                    android:padding="10dp"
+                    android:padding="12dp"
                     android:scrollbarStyle="outsideInset">
 
                     <LinearLayout
@@ -183,6 +183,7 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/settings_section_campus_search"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:gravity="bottom"
@@ -191,8 +192,8 @@
                         <Button
                             android:id="@+id/chat_attach_button"
                             style="@style/OpenCray.SecondaryButton"
-                            android:layout_width="64dp"
-                            android:layout_height="56dp"
+                            android:layout_width="58dp"
+                            android:layout_height="58dp"
                             android:contentDescription="@string/chat_attach_file"
                             android:drawableTop="@drawable/ic_attach_file_24"
                             android:drawableTint="@color/opencray_ink"
@@ -209,20 +210,20 @@
                             android:background="@drawable/chat_input_surface"
                             android:gravity="top|start"
                             android:hint="@string/chat_input_hint"
-                            android:minHeight="56dp"
-                            android:paddingStart="16dp"
+                            android:minHeight="58dp"
+                            android:paddingStart="20dp"
                             android:paddingTop="14dp"
-                            android:paddingEnd="16dp"
+                            android:paddingEnd="20dp"
                             android:paddingBottom="14dp"
                             android:textColor="@color/opencray_ink"
                             android:textColorHint="@color/opencray_muted"
-                            android:textSize="15sp" />
+                            android:textSize="16sp" />
 
                         <Button
                             android:id="@+id/chat_send_button"
                             style="@style/OpenCray.PrimaryButton"
-                            android:layout_width="72dp"
-                            android:layout_height="56dp"
+                            android:layout_width="58dp"
+                            android:layout_height="58dp"
                             android:layout_marginStart="10dp"
                             android:contentDescription="@string/chat_send"
                             android:drawableTop="@drawable/ic_send_24"
@@ -249,6 +250,7 @@
                     android:paddingBottom="8dp">
 
                     <LinearLayout
+                        android:id="@+id/settings_section_memory"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:background="@drawable/chat_hero_surface"
@@ -393,6 +395,7 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/settings_section_device_system"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
@@ -704,6 +707,7 @@
                 android:id="@+id/settings_page"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:background="@drawable/settings_page_background"
                 android:fillViewport="true"
                 android:scrollbars="vertical"
                 android:visibility="gone">
@@ -714,9 +718,79 @@
                     android:orientation="vertical"
                     android:paddingBottom="8dp">
 
+                    <androidx.compose.ui.platform.ComposeView
+                        android:id="@+id/settings_compose_view"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:gravity="center"
+                        android:text="设置"
+                        android:textColor="@color/settings_demo_primary"
+                        android:textSize="28sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:id="@+id/settings_overview_card"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_marginTop="22dp"
+                        android:layout_marginEnd="10dp"
+                        android:background="@drawable/settings_overview_card"
+                        android:clipToOutline="true"
+                        android:elevation="4dp"
+                        android:orientation="vertical"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/settings_overview_capability"
+                            style="@style/OpenCraySettingsOverviewRow"
+                            android:drawableStart="@drawable/ic_settings_shield_24"
+                            android:text="能力与隐私" />
+
+                        <View style="@style/OpenCraySettingsOverviewDivider" />
+
+                        <TextView
+                            android:id="@+id/settings_overview_connection"
+                            style="@style/OpenCraySettingsOverviewRow"
+                            android:drawableStart="@drawable/ic_settings_network_24"
+                            android:text="连接与模型" />
+
+                        <View style="@style/OpenCraySettingsOverviewDivider" />
+
+                        <TextView
+                            android:id="@+id/settings_overview_campus"
+                            style="@style/OpenCraySettingsOverviewRow"
+                            android:drawableStart="@drawable/ic_settings_book_open_24"
+                            android:text="校园与搜索" />
+
+                        <View style="@style/OpenCraySettingsOverviewDivider" />
+
+                        <TextView
+                            android:id="@+id/settings_overview_memory"
+                            style="@style/OpenCraySettingsOverviewRow"
+                            android:drawableStart="@drawable/ic_settings_brain_24"
+                            android:text="记忆" />
+
+                        <View style="@style/OpenCraySettingsOverviewDivider" />
+
+                        <TextView
+                            android:id="@+id/settings_overview_device"
+                            style="@style/OpenCraySettingsOverviewRow"
+                            android:drawableStart="@drawable/ic_settings_monitor_24"
+                            android:text="设备与系统" />
+                    </LinearLayout>
+
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:layout_marginTop="18dp"
                         android:background="@drawable/chat_hero_surface"
                         android:elevation="3dp"
                         android:orientation="vertical"
@@ -783,6 +857,7 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/settings_section_capability_privacy"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
@@ -822,6 +897,7 @@
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/settings_section_connection_model"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="16dp"
@@ -1489,104 +1565,126 @@
         </FrameLayout>
     </LinearLayout>
 
-    <ScrollView
-        android:layout_width="320dp"
+    <LinearLayout
+        android:layout_width="340dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:background="@drawable/drawer_surface"
-        android:fillViewport="true"
-        android:scrollbars="none">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+        android:orientation="vertical"
+        android:padding="22dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:fontFamily="casual"
                 android:text="@string/app_name"
-                android:textColor="@color/opencray_ink"
-                android:textSize="22sp"
+                android:textColor="@color/opencray_brand_purple"
+                android:textSize="38sp"
                 android:textStyle="bold" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/app_subtitle"
-                android:textColor="@color/opencray_muted"
-                android:textSize="13sp" />
-
-            <LinearLayout
+            <FrameLayout
+                android:id="@+id/drawer_tab_rail"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:orientation="horizontal">
+                android:layout_height="54dp"
+                android:layout_marginTop="18dp"
+                android:background="@drawable/settings_segmented_track"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:elevation="2dp"
+                android:padding="5dp">
 
-                <Button
-                    android:id="@+id/chat_tab"
-                    style="@style/OpenCray.TabButton"
+                <ai.opencray.app.ui.SettingsSegmentedSliderView
+                    android:id="@+id/drawer_tab_slider"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/tab_chat" />
+                    android:layout_height="44dp"
+                    android:elevation="4dp" />
 
-                <Button
-                    android:id="@+id/planning_tab"
-                    style="@style/OpenCray.TabButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="@string/tab_planning" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="horizontal">
 
-                <Button
-                    android:id="@+id/settings_tab"
-                    style="@style/OpenCray.TabButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="@string/tab_settings" />
-            </LinearLayout>
+                    <Button
+                        android:id="@+id/chat_tab"
+                        style="@style/OpenCray.TabButton"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:text="@string/tab_chat" />
+
+                    <Button
+                        android:id="@+id/planning_tab"
+                        style="@style/OpenCray.TabButton"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:text="@string/tab_planning" />
+
+                    <Button
+                        android:id="@+id/settings_tab"
+                        style="@style/OpenCray.TabButton"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:text="@string/tab_settings" />
+                </LinearLayout>
+            </FrameLayout>
 
             <LinearLayout
                 android:id="@+id/conversation_section"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="18dp"
                 android:background="@drawable/chat_section_surface"
                 android:clipChildren="true"
                 android:clipToPadding="true"
                 android:orientation="vertical"
-                android:padding="14dp">
+                android:paddingStart="12dp"
+                android:paddingTop="12dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="10dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/chat_conversation_list_title"
-                    android:textColor="@color/opencray_ink"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <Button
-                    android:id="@+id/new_conversation_button"
-                    style="@style/OpenCray.PrimaryButton"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:drawableStart="@drawable/ic_plus_24"
-                    android:drawablePadding="6dp"
-                    android:drawableTint="@color/white"
-                    android:text="@string/chat_new_conversation" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
+                        android:text="@string/chat_conversation_list_title"
+                        android:textColor="@color/opencray_ink"
+                        android:textSize="19sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/new_conversation_button"
+                        android:layout_width="96dp"
+                        android:layout_height="38dp"
+                        android:background="@drawable/button_lime_selector"
+                        android:drawableStart="@drawable/ic_plus_24"
+                        android:drawablePadding="2dp"
+                        android:drawableTint="@color/opencray_ink"
+                        android:fontFamily="sans-serif-medium"
+                        android:minWidth="0dp"
+                        android:minHeight="0dp"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:text="@string/chat_new_conversation"
+                        android:textAllCaps="false"
+                        android:textColor="@color/opencray_ink"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
 
                 <ScrollView
                     android:id="@+id/conversation_list_scroll"
                     android:layout_width="match_parent"
-                    android:layout_height="240dp"
-                    android:layout_marginTop="12dp"
+                    android:layout_height="186dp"
+                    android:layout_marginTop="8dp"
                     android:clipChildren="true"
                     android:clipToPadding="true"
                     android:fillViewport="true"
@@ -1609,7 +1707,7 @@
                 android:layout_marginTop="16dp"
                 android:background="@drawable/chat_section_surface"
                 android:orientation="vertical"
-                android:padding="14dp">
+                android:padding="12dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -1621,9 +1719,10 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
+                        android:fontFamily="sans-serif-medium"
                         android:text="@string/quick_skills_title"
                         android:textColor="@color/opencray_ink"
-                        android:textSize="15sp"
+                        android:textSize="19sp"
                         android:textStyle="bold" />
 
                     <Button
@@ -1638,7 +1737,7 @@
                     android:id="@+id/quick_skills_container"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="10dp"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -1661,7 +1760,7 @@
                             style="@style/OpenCray.SkillCard"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="10dp"
+                            android:layout_marginStart="14dp"
                             android:layout_weight="1"
                             android:drawableTop="@drawable/ic_compass_24"
                             android:drawableTint="@color/opencray_primary_dark"
@@ -1689,7 +1788,7 @@
                             style="@style/OpenCray.SkillCard"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginStart="10dp"
+                            android:layout_marginStart="14dp"
                             android:layout_weight="1"
                             android:drawableTop="@drawable/ic_inbox_24"
                             android:drawableTint="@color/opencray_primary_dark"
@@ -1697,7 +1796,6 @@
                     </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
-        </LinearLayout>
-    </ScrollView>
+    </LinearLayout>
 
 </androidx.drawerlayout.widget.DrawerLayout>

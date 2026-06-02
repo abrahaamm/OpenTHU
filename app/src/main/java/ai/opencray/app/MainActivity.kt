@@ -1,6 +1,8 @@
 package ai.opencray.app
 
 import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -16,9 +18,11 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.PathInterpolator
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -33,6 +37,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PlanningCard
@@ -42,6 +48,8 @@ import ai.opencray.app.feature.chat.AgentEventOption
 import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
+import ai.opencray.app.ui.settings.SettingsScreen
+import ai.opencray.app.ui.settings.SettingsTab
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.image.ImagesPlugin
@@ -55,6 +63,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var viewModel: MainViewModel
   private lateinit var markwon: Markwon
   private var pendingCalendarActionId: String? = null
+  private var lastDrawerTabIndex = -1
 
   private lateinit var drawerLayout: DrawerLayout
   private lateinit var drawerToggleButton: Button
@@ -81,6 +90,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var planningPage: ScrollView
   private lateinit var planningCardsContainer: LinearLayout
   private lateinit var settingsPage: ScrollView
+  private lateinit var settingsComposeView: ComposeView
   private lateinit var chatHistoryScroll: ScrollView
   private lateinit var chatHistoryContainer: LinearLayout
   private lateinit var conversationSection: LinearLayout
@@ -107,6 +117,8 @@ class MainActivity : AppCompatActivity() {
   private lateinit var chatTab: Button
   private lateinit var planningTab: Button
   private lateinit var settingsTab: Button
+  private lateinit var drawerTabRail: FrameLayout
+  private lateinit var drawerTabSlider: View
   private lateinit var notificationToggle: CheckBox
   private lateinit var safetyGuardToggle: CheckBox
   private lateinit var planningDetailsToggle: CheckBox
@@ -145,6 +157,16 @@ class MainActivity : AppCompatActivity() {
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneInput: EditText
+  private lateinit var settingsOverviewCapability: TextView
+  private lateinit var settingsOverviewConnection: TextView
+  private lateinit var settingsOverviewCampus: TextView
+  private lateinit var settingsOverviewMemory: TextView
+  private lateinit var settingsOverviewDevice: TextView
+  private lateinit var settingsSectionCapabilityPrivacy: LinearLayout
+  private lateinit var settingsSectionConnectionModel: LinearLayout
+  private lateinit var settingsSectionCampusSearch: LinearLayout
+  private lateinit var settingsSectionMemory: LinearLayout
+  private lateinit var settingsSectionDeviceSystem: LinearLayout
   private var showPlanningDetails: Boolean = false
   private var selectedChatFileUri: Uri? = null
   private var selectedChatFileName: String = ""
@@ -215,6 +237,7 @@ class MainActivity : AppCompatActivity() {
     bindViews()
     decorateUi()
     bindActions()
+    setupSettingsCompose()
     render()
     uiRefreshHandler.post(uiRefreshTicker)
   }
@@ -250,6 +273,7 @@ class MainActivity : AppCompatActivity() {
     planningPage = findViewById(R.id.planning_page)
     planningCardsContainer = findViewById(R.id.planning_cards_container)
     settingsPage = findViewById(R.id.settings_page)
+    settingsComposeView = findViewById(R.id.settings_compose_view)
     chatHistoryScroll = findViewById(R.id.chat_history_scroll)
     chatHistoryContainer = findViewById(R.id.chat_history_container)
     conversationSection = findViewById(R.id.conversation_section)
@@ -276,6 +300,8 @@ class MainActivity : AppCompatActivity() {
     chatTab = findViewById(R.id.chat_tab)
     planningTab = findViewById(R.id.planning_tab)
     settingsTab = findViewById(R.id.settings_tab)
+    drawerTabRail = findViewById(R.id.drawer_tab_rail)
+    drawerTabSlider = findViewById(R.id.drawer_tab_slider)
     notificationToggle = findViewById(R.id.capability_notification_toggle)
     safetyGuardToggle = findViewById(R.id.capability_safety_toggle)
     planningDetailsToggle = findViewById(R.id.capability_planning_details_toggle)
@@ -314,6 +340,16 @@ class MainActivity : AppCompatActivity() {
     adbBinInput = findViewById(R.id.setting_adb_bin_input)
     adbSerialInput = findViewById(R.id.setting_adb_serial_input)
     timezoneInput = findViewById(R.id.setting_timezone_input)
+    settingsOverviewCapability = findViewById(R.id.settings_overview_capability)
+    settingsOverviewConnection = findViewById(R.id.settings_overview_connection)
+    settingsOverviewCampus = findViewById(R.id.settings_overview_campus)
+    settingsOverviewMemory = findViewById(R.id.settings_overview_memory)
+    settingsOverviewDevice = findViewById(R.id.settings_overview_device)
+    settingsSectionCapabilityPrivacy = findViewById(R.id.settings_section_capability_privacy)
+    settingsSectionConnectionModel = findViewById(R.id.settings_section_connection_model)
+    settingsSectionCampusSearch = findViewById(R.id.settings_section_campus_search)
+    settingsSectionMemory = findViewById(R.id.settings_section_memory)
+    settingsSectionDeviceSystem = findViewById(R.id.settings_section_device_system)
     loadSettingsInputs()
   }
 
@@ -448,17 +484,14 @@ class MainActivity : AppCompatActivity() {
 
     chatTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Chat)
-      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     planningTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Planning)
-      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     settingsTab.setOnClickListener {
       viewModel.selectDestination(AppDestination.Settings)
-      drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     newConversationButton.setOnClickListener {
@@ -502,6 +535,11 @@ class MainActivity : AppCompatActivity() {
         if (quickSkillsContainer.visibility == View.VISIBLE) View.GONE else View.VISIBLE
       syncQuickSkillsToggle()
     }
+    settingsOverviewCapability.setOnClickListener { scrollSettingsTo(settingsSectionCapabilityPrivacy) }
+    settingsOverviewConnection.setOnClickListener { scrollSettingsTo(settingsSectionConnectionModel) }
+    settingsOverviewCampus.setOnClickListener { scrollSettingsTo(settingsSectionCampusSearch) }
+    settingsOverviewMemory.setOnClickListener { scrollSettingsTo(settingsSectionMemory) }
+    settingsOverviewDevice.setOnClickListener { scrollSettingsTo(settingsSectionDeviceSystem) }
     planningDeveloperToggleButton.setOnClickListener {
       setPlanningDetailsVisible(!showPlanningDetails)
       render()
@@ -609,6 +647,29 @@ class MainActivity : AppCompatActivity() {
     portInput.syncToViewModel { value -> viewModel.updatePort(value) }
   }
 
+  private fun setupSettingsCompose() {
+    settingsComposeView.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+    settingsComposeView.setContent {
+      SettingsScreen(
+        onTabSelected = { tab ->
+          val destination =
+            when (tab) {
+              SettingsTab.Chat -> AppDestination.Chat
+              SettingsTab.Plan -> AppDestination.Planning
+              SettingsTab.Settings -> AppDestination.Settings
+            }
+          viewModel.selectDestination(destination)
+          render()
+        },
+        onCapabilityClick = { scrollSettingsTo(settingsSectionCapabilityPrivacy) },
+        onConnectionClick = { scrollSettingsTo(settingsSectionConnectionModel) },
+        onCampusClick = { scrollSettingsTo(settingsSectionCampusSearch) },
+        onMemoryClick = { scrollSettingsTo(settingsSectionMemory) },
+        onDeviceClick = { scrollSettingsTo(settingsSectionDeviceSystem) },
+      )
+    }
+  }
+
   private fun renderChatAttachment() {
     val name =
       selectedChatFileName
@@ -659,6 +720,7 @@ class MainActivity : AppCompatActivity() {
     chatTab.isEnabled = state.currentDestination != AppDestination.Chat
     planningTab.isEnabled = state.currentDestination != AppDestination.Planning
     settingsTab.isEnabled = state.currentDestination != AppDestination.Settings
+    animateDrawerTabSlider(state.currentDestination)
     syncQuickSkillsToggle()
     planningDeveloperContextSection.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
     planningDeveloperFlowSection.visibility = if (showPlanningDetails) View.VISIBLE else View.GONE
@@ -894,6 +956,50 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  private fun animateDrawerTabSlider(destination: AppDestination) {
+    val index =
+      when (destination) {
+        AppDestination.Chat -> 0
+        AppDestination.Planning -> 1
+        AppDestination.Settings -> 2
+      }
+    drawerTabRail.post {
+      val railWidth = drawerTabRail.width
+      if (railWidth <= 0) return@post
+      val padding = dp(5)
+      val sliderWidth = (railWidth - padding * 2) / 3
+      val targetX = padding + sliderWidth * index
+      val params = drawerTabSlider.layoutParams as FrameLayout.LayoutParams
+      if (params.width != sliderWidth) {
+        params.width = sliderWidth
+        params.height = drawerTabRail.height - padding * 2
+        drawerTabSlider.layoutParams = params
+      }
+      if (lastDrawerTabIndex < 0) {
+        drawerTabSlider.translationX = targetX.toFloat()
+        lastDrawerTabIndex = index
+        return@post
+      }
+      if (lastDrawerTabIndex == index) return@post
+      lastDrawerTabIndex = index
+      val move = ObjectAnimator.ofFloat(drawerTabSlider, View.TRANSLATION_X, drawerTabSlider.translationX, targetX.toFloat())
+      val squashX = ObjectAnimator.ofFloat(drawerTabSlider, View.SCALE_X, 1f, 0.75f, 1f)
+      val squashY = ObjectAnimator.ofFloat(drawerTabSlider, View.SCALE_Y, 1f, 0.92f, 1f)
+      AnimatorSet().apply {
+        duration = 400L
+        interpolator = PathInterpolator(0.4f, 0f, 0.2f, 1f)
+        playTogether(move, squashX, squashY)
+        start()
+      }
+    }
+  }
+
+  private fun scrollSettingsTo(target: View) {
+    settingsPage.post {
+      settingsPage.smoothScrollTo(0, target.top - dp(12))
+    }
+  }
+
   private fun renderConversationTabs(conversations: List<ConversationSummary>) {
     conversationTabsContainer.removeAllViews()
     conversations.forEach { summary ->
@@ -901,17 +1007,11 @@ class MainActivity : AppCompatActivity() {
         LinearLayout(this).apply {
           orientation = LinearLayout.HORIZONTAL
           gravity = Gravity.CENTER_VERTICAL
-          setPadding(dp(14), dp(12), dp(14), dp(12))
-          setBackgroundResource(
-            if (summary.selected) {
-              R.drawable.button_primary_selector
-            } else {
-              R.drawable.button_secondary_selector
-            },
-          )
+          setPadding(dp(8), dp(5), dp(8), dp(5))
+          setBackgroundResource(R.drawable.conversation_row_selector)
+          isSelected = summary.selected
           isClickable = true
           isFocusable = true
-          alpha = if (summary.selected) 1f else 0.92f
           setOnClickListener {
             viewModel.selectConversation(summary.id)
             drawerLayout.closeDrawer(GravityCompat.START)
@@ -919,9 +1019,19 @@ class MainActivity : AppCompatActivity() {
           }
         }
 
-      val textColumn =
-        LinearLayout(this).apply {
-          orientation = LinearLayout.VERTICAL
+      val titleView =
+        TextView(this).apply {
+          text = "${summary.title} · ${summary.subtitle}"
+          textSize = 13f
+          maxLines = 1
+          ellipsize = android.text.TextUtils.TruncateAt.END
+          setTypeface(android.graphics.Typeface.create("serif", android.graphics.Typeface.NORMAL))
+          setTextColor(
+            ContextCompat.getColor(
+              this@MainActivity,
+              R.color.opencray_ink,
+            ),
+          )
           layoutParams =
             LinearLayout.LayoutParams(
               0,
@@ -930,69 +1040,14 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-      val titleView =
-        TextView(this).apply {
-          text = summary.title
-          textSize = 13f
-          setTextColor(
-            ContextCompat.getColor(
-              this@MainActivity,
-              if (summary.selected) R.color.white else R.color.opencray_ink,
-            ),
-          )
-          setTypeface(typeface, android.graphics.Typeface.BOLD)
-        }
-
-      val subtitleView =
-        TextView(this).apply {
-          text = summary.subtitle
-          textSize = 12f
-          maxLines = 1
-          ellipsize = android.text.TextUtils.TruncateAt.END
-          alpha = 0.9f
-          setTextColor(
-            ContextCompat.getColor(
-              this@MainActivity,
-              if (summary.selected) R.color.white else R.color.opencray_muted,
-            ),
-          )
-        }
-
-      val deleteButton =
-        Button(this).apply {
-          text = getString(R.string.chat_delete_conversation)
-          textSize = 11f
-          minWidth = 0
-          minimumWidth = 0
-          minHeight = dp(34)
-          minimumHeight = dp(34)
-          setPadding(dp(10), dp(2), dp(10), dp(2))
-          setBackgroundResource(R.drawable.button_secondary_selector)
-          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
-          setOnClickListener {
-            viewModel.deleteConversation(summary.id)
-            render()
-          }
-          layoutParams =
-            LinearLayout.LayoutParams(
-              dp(56),
-              dp(34),
-            ).apply {
-              marginStart = dp(8)
-            }
-        }
-
-      textColumn.addView(titleView)
-      textColumn.addView(subtitleView)
-      row.addView(textColumn)
-      row.addView(deleteButton)
+      row.addView(titleView)
 
       val params =
         LinearLayout.LayoutParams(
           LinearLayout.LayoutParams.MATCH_PARENT,
-          LinearLayout.LayoutParams.WRAP_CONTENT,
+          dp(28),
         ).apply {
-          bottomMargin = dp(8)
+          bottomMargin = dp(2)
         }
       conversationTabsContainer.addView(row, params)
     }

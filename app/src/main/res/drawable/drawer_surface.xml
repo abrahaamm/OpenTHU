@@ -1,8 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <gradient
-        android:angle="270"
-        android:endColor="@color/opencray_card_soft"
-        android:startColor="@color/opencray_card"
-        android:type="linear" />
+    <solid android:color="@color/opencray_surface" />
 </shape>

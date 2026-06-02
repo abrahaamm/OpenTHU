@@ -7,11 +7,11 @@
     <string name="tab_planning">规划</string>
     <string name="tab_settings">设置</string>
 
-    <string name="chat_title">Agent 对话</string>
-    <string name="chat_subtitle">像 ChatGPT 一样自然地发起任务、提问和追踪执行结果。</string>
+    <string name="chat_title">Agent Chat</string>
+    <string name="chat_subtitle">自然语言委托任务、提问，并追踪执行结果。</string>
     <string name="chat_empty_title">开始一段新对话</string>
-    <string name="chat_empty_body">例如：帮我整理本周课程 DDL，并把重要事项加入日历。</string>
-    <string name="chat_input_hint">给 OpenTHU 发送消息…</string>
+    <string name="chat_empty_body">New chat started. You can chat directly, or use natural language to delegate tasks.</string>
+    <string name="chat_input_hint">Message OpenTHU...</string>
     <string name="chat_send">发送</string>
     <string name="chat_attach_file">文件</string>
     <string name="chat_attachment_selected">附件：%1$s</string>

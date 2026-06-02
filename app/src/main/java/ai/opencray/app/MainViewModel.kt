@@ -32,26 +32,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private var hostText: String = runtime.snapshot().host
   private var portText: String = runtime.snapshot().port.toString()
   private var tlsEnabled: Boolean = runtime.snapshot().tlsEnabled
-  private val dateFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
+  private val dateFormatter = DateTimeFormatter.ofPattern("M月d日")
 
   private fun conversationSummaries(): List<ConversationSummary> {
     return conversations.values
+      .filter { thread -> thread.messages.any { it.role == ChatRole.User } }
       .sortedByDescending { it.updatedAtEpochMs }
       .map { thread ->
-        val lastUserMessage =
+        val firstUserMessage =
           thread.messages
-            .asReversed()
             .firstOrNull { it.role == ChatRole.User }
             ?.text
             ?.trim()
-            ?.take(40)
+            ?.take(24)
             ?.ifBlank { "暂未发送用户消息" }
             ?: "暂未发送用户消息"
 
         ConversationSummary(
           id = thread.id,
           title = formatConversationDate(thread.updatedAtEpochMs),
-          subtitle = lastUserMessage,
+          subtitle = firstUserMessage,
           updatedAtEpochMs = thread.updatedAtEpochMs,
           selected = thread.id == selectedConversationId,
         )
@@ -61,21 +61,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private fun formatConversationDate(timestamp: Long): String {
     val date = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate()
     val today = LocalDate.now()
+    val yearsAgo = today.year - date.year
     return when (date) {
       today -> "今天"
       today.minusDays(1) -> "昨天"
-      else -> date.format(dateFormatter)
+      else ->
+        when {
+          date.year == today.year -> date.format(dateFormatter)
+          yearsAgo == 1 -> "去年"
+          yearsAgo == 2 -> "前年"
+          yearsAgo > 2 -> "${yearsAgo}年前"
+          else -> date.format(dateFormatter)
+        }
     }
   }
 
   private fun upsertCurrentConversation(messages: List<ChatMessage>) {
     val existing = conversations[selectedConversationId]
-    val titleSeed = messages.firstOrNull { it.role == ChatRole.User }?.text?.take(18) ?: "新对话"
+    val titleSeed = messages.firstOrNull { it.role == ChatRole.User }?.text?.trim()?.take(24) ?: "新对话"
+    val existingHasUserMessage = existing?.messages?.any { it.role == ChatRole.User } == true
     val now = System.currentTimeMillis()
     conversations[selectedConversationId] =
       ConversationThread(
         id = selectedConversationId,
-        title = existing?.title ?: titleSeed,
+        title = if (existingHasUserMessage) existing?.title ?: titleSeed else titleSeed,
         messages = messages,
         updatedAtEpochMs = now,
       )
@@ -273,7 +282,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       ChatMessage(
         id = "sys_${UUID.randomUUID().toString().take(8)}",
         role = ChatRole.Assistant,
-        text = "新会话开始了。你可以直接聊天，也可以用自然语言交代任务。",
+          text = "New chat started. You can chat directly, or use natural language to delegate tasks.",
       )
     conversations[id] =
       ConversationThread(
