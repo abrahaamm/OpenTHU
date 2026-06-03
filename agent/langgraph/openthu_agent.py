@@ -682,6 +682,7 @@ class OpenTHULangGraphAgent:
         *,
         user_input: str,
         session: dict[str, Any] | None = None,
+        user_id: str = "",
     ) -> dict[str, Any]:
         recent_messages = self._compact_chat_history(history, limit=10)
         current = user_input.strip()
@@ -714,11 +715,15 @@ class OpenTHULangGraphAgent:
                         }
                     )
 
+        session_memory = self._compact_session_memory_context(session or {})
+        stored_memory = self._compact_stored_memory_context(user_id=user_id, user_input=current)
+        memory_context = self._merge_memory_context(session_memory, stored_memory)
+
         return {
             "latest_user_input": current,
             "recent_messages": recent_messages,
             "reference_candidates": reference_candidates[-12:],
-            "memory_context": self._compact_session_memory_context(session or {}),
+            "memory_context": memory_context,
         }
 
     def _compact_session_memory_context(self, session: dict[str, Any]) -> dict[str, Any]:
@@ -779,6 +784,133 @@ class OpenTHULangGraphAgent:
             "summary": summary[:1500],
             "entries": entries,
         } if summary or entries else {}
+
+    def _compact_stored_memory_context(
+        self,
+        *,
+        user_id: str,
+        user_input: str,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        memory = self._load_memory()
+        entries_raw = memory.get("entries", [])
+        if not isinstance(entries_raw, list):
+            return {}
+
+        tokens = self._memory_tokens(user_input)
+        candidates: list[dict[str, Any]] = []
+        for item in entries_raw:
+            if not isinstance(item, dict):
+                continue
+            item_user_id = str(item.get("user_id", "")).strip()
+            if user_id and item_user_id and item_user_id != user_id:
+                continue
+            objective = str(item.get("objective", "")).strip()
+            if not objective:
+                continue
+            objective_lc = objective.lower()
+            overlap = sum(1 for token in tokens if token in objective_lc)
+            success_count = self._safe_int(item.get("success_count"), default=0)
+            failure_count = self._safe_int(item.get("failure_count"), default=0)
+            blocked_count = self._safe_int(item.get("blocked_count"), default=0)
+            ts = self._safe_epoch_ms(item.get("ts"))
+            weight = max(10, min(80, 35 + overlap * 10 + min(success_count, 3) * 5 - blocked_count * 5))
+            value = (
+                f"{objective}；技能数 {self._safe_int(item.get('planned_skill_count'), default=0)}，"
+                f"成功 {success_count}，失败 {failure_count}，阻塞 {blocked_count}"
+            )
+            candidates.append(
+                {
+                    "scope": "mid",
+                    "key": "agent_task_history",
+                    "value": value[:500],
+                    "weight": weight,
+                    "updated_at_epoch_ms": ts,
+                    "_overlap": overlap,
+                }
+            )
+
+        if not candidates:
+            return {}
+        candidates.sort(
+            key=lambda item: (
+                int(item.get("_overlap", 0)),
+                int(item.get("weight", 0)),
+                int(item.get("updated_at_epoch_ms", 0)),
+            ),
+            reverse=True,
+        )
+        entries = [{key: value for key, value in item.items() if key != "_overlap"} for item in candidates[:limit]]
+        summary = "\n".join(
+            f"- [{item['scope']}/{item['key']}/w{item['weight']}] {item['value'][:160]}"
+            for item in entries[:6]
+        )
+        return {"summary": summary[:1500], "entries": entries}
+
+    def _merge_memory_context(
+        self,
+        primary: dict[str, Any],
+        secondary: dict[str, Any],
+        limit: int = 12,
+    ) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        summaries: list[str] = []
+        for context in (primary, secondary):
+            if not isinstance(context, dict):
+                continue
+            summary = str(context.get("summary", "")).strip()
+            if summary:
+                summaries.append(summary)
+            raw_entries = context.get("entries", [])
+            if isinstance(raw_entries, list):
+                entries.extend(item for item in raw_entries if isinstance(item, dict))
+
+        deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in entries:
+            value = str(item.get("value", "")).strip()
+            if not value:
+                continue
+            key = (str(item.get("scope", "")), str(item.get("key", "")), value)
+            previous = deduped.get(key)
+            if previous is None or self._safe_int(item.get("weight"), default=0) > self._safe_int(previous.get("weight"), default=0):
+                deduped[key] = item
+
+        merged_entries = list(deduped.values())
+        merged_entries.sort(
+            key=lambda item: (
+                {"long": 3, "mid": 2, "short": 1}.get(str(item.get("scope", "")).lower(), 0),
+                self._safe_int(item.get("effective_weight", item.get("weight")), default=0),
+                self._safe_int(item.get("updated_at_epoch_ms", item.get("updatedAtEpochMs")), default=0),
+            ),
+            reverse=True,
+        )
+        merged_entries = merged_entries[:limit]
+        summary = "\n".join(dict.fromkeys(summaries)).strip()
+        if not summary and merged_entries:
+            summary = "\n".join(
+                f"- [{item.get('scope', '')}/{item.get('key', '')}/w{item.get('effective_weight', item.get('weight', 0))}] {str(item.get('value', ''))[:160]}"
+                for item in merged_entries[:8]
+            )
+        return {"summary": summary[:1500], "entries": merged_entries} if summary or merged_entries else {}
+
+    def _memory_tokens(self, text: str) -> set[str]:
+        return {
+            token
+            for token in re.split(r"[^0-9A-Za-z\u4e00-\u9fff]+", text.lower())
+            if len(token) >= 2
+        }
+
+    def _safe_epoch_ms(self, value: Any) -> int:
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value or "").strip()
+        if not text:
+            return 0
+        try:
+            normalized = text.replace("Z", "+00:00")
+            return int(datetime.fromisoformat(normalized).timestamp() * 1000)
+        except Exception:
+            return 0
 
     def _safe_int(self, value: Any, *, default: int = 0) -> int:
         try:
@@ -844,6 +976,7 @@ class OpenTHULangGraphAgent:
                     history,
                     user_input=state.get("user_input", ""),
                     session=state.get("session", {}),
+                    user_id=state.get("user_id", ""),
                 ),
             ),
             "available_skills": self.skill_manager.list_for_planner(),
@@ -936,7 +1069,12 @@ class OpenTHULangGraphAgent:
             "user_input": user_input,
             "user_id": user_id,
             "approve_sensitive": approve_sensitive,
-            "conversation_context": self._build_conversation_context(history or [], user_input=user_input, session=session or {}),
+            "conversation_context": self._build_conversation_context(
+                history or [],
+                user_input=user_input,
+                session=session or {},
+                user_id=user_id,
+            ),
         }
 
     def _contextual_user_input(self, state: AgentState) -> str:
@@ -1734,6 +1872,7 @@ class OpenTHULangGraphAgent:
                 [],
                 user_input=user_input,
                 session=session if isinstance(session, dict) else {},
+                user_id=str((session or {}).get("user_id", "")) if isinstance(session, dict) else "",
             )
         )
         results: list[dict[str, Any]] = []

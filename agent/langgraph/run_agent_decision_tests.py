@@ -238,6 +238,44 @@ def test_decide_turn_includes_memory_context() -> None:
     _expect(captured_memory.get("entries", [{}])[0].get("value") == "不要创建早于 08:00 的提醒", str(captured_memory))
 
 
+def test_decide_turn_includes_stored_memory_context() -> None:
+    _install_fake_openai()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        memory_file = Path(tmpdir) / "memory.json"
+        memory_file.write_text(
+            json.dumps(
+                {
+                    "entries": [
+                        {
+                            "ts": "2026-06-03T10:00:00+00:00",
+                            "user_id": "decision_test_user",
+                            "task_id": "task_old",
+                            "task_status": "completed",
+                            "objective": "把作业 DDL 整理成日历提醒",
+                            "entities": ["homework", "ddl"],
+                            "planned_skill_count": 2,
+                            "success_count": 2,
+                            "failure_count": 0,
+                            "blocked_count": 0,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        agent = OpenTHULangGraphAgent(memory_file=memory_file)
+        agent.decide_turn(
+            "hello",
+            user_id="decision_test_user",
+            session={"openai_api_key": "test-key"},
+        )
+    context = FAKE_COMPLETION_PAYLOADS[-1].get("conversation_context", {})
+    captured_memory = context.get("memory_context", {})
+    stored_values = [item.get("value", "") for item in captured_memory.get("entries", [])]
+    _expect(any("作业 DDL" in value for value in stored_values), str(captured_memory))
+
+
 def run_suite() -> list[tuple[str, bool, str]]:
     cases = [
         ("skill_metadata", test_skill_metadata),
@@ -245,6 +283,7 @@ def run_suite() -> list[tuple[str, bool, str]]:
         ("decide_turn_homework_plan", test_decide_turn_homework_plan),
         ("decide_turn_homework_submit_fallback", test_decide_turn_homework_submit_fallback),
         ("decide_turn_includes_memory_context", test_decide_turn_includes_memory_context),
+        ("decide_turn_includes_stored_memory_context", test_decide_turn_includes_stored_memory_context),
     ]
     results: list[tuple[str, bool, str]] = []
     for name, fn in cases:

@@ -42,6 +42,8 @@ import kotlin.concurrent.thread
 import java.util.Collections
 import java.util.UUID
 import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.roundToInt
 import java.util.Locale
 
 /**
@@ -1185,38 +1187,120 @@ class OpenCrayRuntime(
     return session
   }
 
+  private data class MemoryPolicy(
+    val longTtlDays: Int,
+    val midTtlDays: Int,
+    val shortTtlDays: Int,
+    val halfLifeDays: Int,
+  )
+
+  private data class RankedMemoryRecord(
+    val record: MemoryRecord,
+    val effectiveWeight: Int,
+    val score: Double,
+    val ageDays: Double,
+  )
+
   private fun buildGatewayMemoryContext(limit: Int = 12): Map<String, Any?> {
-    val entries = rankedMemoryRecords(limit)
+    val entries = rankedMemoryEntries(limit)
     if (entries.isEmpty()) return emptyMap()
+    val policy = memoryPolicy()
     return mapOf(
       "summary" to memorySummaryText(entries, valueLimit = 160),
+      "policy" to mapOf(
+        "long_ttl_days" to policy.longTtlDays,
+        "mid_ttl_days" to policy.midTtlDays,
+        "short_ttl_days" to policy.shortTtlDays,
+        "half_life_days" to policy.halfLifeDays,
+      ),
       "entries" to entries.map { record ->
         mapOf(
-          "scope" to record.scope,
-          "key" to record.key,
-          "value" to record.value.take(300),
-          "weight" to record.weight,
-          "updated_at_epoch_ms" to record.updatedAtEpochMs,
+          "scope" to record.record.scope,
+          "key" to record.record.key,
+          "value" to record.record.value.take(300),
+          "weight" to record.record.weight,
+          "effective_weight" to record.effectiveWeight,
+          "age_days" to ((record.ageDays * 100.0).roundToInt() / 100.0),
+          "updated_at_epoch_ms" to record.record.updatedAtEpochMs,
         )
       },
     )
   }
 
   private fun buildMemoryPromptText(limit: Int = 8): String {
-    val entries = rankedMemoryRecords(limit)
+    val entries = rankedMemoryEntries(limit)
     if (entries.isEmpty()) return ""
     return "\n可参考用户记忆和反馈，但不要逐字暴露这些内部记录：\n${memorySummaryText(entries, valueLimit = 120)}"
   }
 
-  private fun rankedMemoryRecords(limit: Int): List<MemoryRecord> =
-    snapshot().memoryRecords
-      .filter { it.value.isNotBlank() }
+  private fun rankedMemoryEntries(limit: Int): List<RankedMemoryRecord> {
+    val now = System.currentTimeMillis()
+    val policy = memoryPolicy()
+    return snapshot().memoryRecords
+      .mapNotNull { record -> rankMemoryRecord(record, policy, now) }
       .sortedWith(
-        compareByDescending<MemoryRecord> { memoryScopeRank(it.scope) }
-          .thenByDescending { it.weight }
-          .thenByDescending { it.updatedAtEpochMs },
+        compareByDescending<RankedMemoryRecord> { it.score }
+          .thenByDescending { it.effectiveWeight }
+          .thenByDescending { it.record.updatedAtEpochMs },
       )
       .take(limit)
+  }
+
+  private fun rankMemoryRecord(
+    record: MemoryRecord,
+    policy: MemoryPolicy,
+    nowEpochMs: Long,
+  ): RankedMemoryRecord? {
+    if (record.value.isBlank()) return null
+    val ageDays =
+      ((nowEpochMs - record.updatedAtEpochMs).coerceAtLeast(0L)).toDouble() / MILLIS_PER_DAY
+    val ttlDays = memoryTtlDays(record.scope, policy)
+    if (ttlDays > 0 && ageDays > ttlDays) return null
+    val decayedWeight =
+      if (policy.halfLifeDays > 0) {
+        record.weight.toDouble() * 0.5.pow(ageDays / policy.halfLifeDays.toDouble())
+      } else {
+        record.weight.toDouble()
+      }
+    val score = decayedWeight + memoryScopeRank(record.scope) * 20.0
+    return RankedMemoryRecord(
+      record = record,
+      effectiveWeight = decayedWeight.roundToInt().coerceAtLeast(1),
+      score = score,
+      ageDays = ageDays,
+    )
+  }
+
+  private fun memoryPolicy(): MemoryPolicy {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    return MemoryPolicy(
+      longTtlDays = readMemoryDays(pref.getString("memory_long_ttl", "365"), default = 365),
+      midTtlDays = readMemoryDays(pref.getString("memory_mid_ttl", "30"), default = 30),
+      shortTtlDays = readMemoryDays(pref.getString("memory_short_ttl", "7"), default = 7),
+      halfLifeDays = readMemoryDays(pref.getString("memory_half_life", "30"), default = 30),
+    )
+  }
+
+  private fun readMemoryDays(
+    value: String?,
+    default: Int,
+  ): Int =
+    value
+      ?.trim()
+      ?.toIntOrNull()
+      ?.takeIf { it >= 0 }
+      ?: default
+
+  private fun memoryTtlDays(
+    scope: String,
+    policy: MemoryPolicy,
+  ): Int =
+    when (scope.lowercase(Locale.getDefault())) {
+      "long" -> policy.longTtlDays
+      "mid" -> policy.midTtlDays
+      "short" -> policy.shortTtlDays
+      else -> policy.shortTtlDays
+    }
 
   private fun memoryScopeRank(scope: String): Int =
     when (scope.lowercase(Locale.getDefault())) {
@@ -1227,12 +1311,17 @@ class OpenCrayRuntime(
     }
 
   private fun memorySummaryText(
-    records: List<MemoryRecord>,
+    records: List<RankedMemoryRecord>,
     valueLimit: Int,
   ): String =
-    records.joinToString("\n") { record ->
-      "- [${record.scope}/${record.key}/w${record.weight}] ${record.value.take(valueLimit)}"
+    records.joinToString("\n") { ranked ->
+      val record = ranked.record
+      "- [${record.scope}/${record.key}/w${ranked.effectiveWeight}] ${record.value.take(valueLimit)}"
     }
+
+  private companion object {
+    private const val MILLIS_PER_DAY = 86_400_000.0
+  }
 
   private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
     val file = File(path)
