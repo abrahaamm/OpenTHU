@@ -161,6 +161,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     selectedDestination = AppDestination.Chat
   }
 
+  fun regenerateLastResponse() {
+    val lastUserText =
+      runtime.chatMessages()
+        .lastOrNull { it.role == ChatRole.User }
+        ?.text
+        ?.trim()
+        .orEmpty()
+    if (lastUserText.isBlank()) return
+    sendChatMessage(lastUserText)
+  }
+
   fun invokeSkill(
     skillId: String,
     args: Map<String, String> = emptyMap(),
