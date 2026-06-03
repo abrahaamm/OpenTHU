@@ -946,12 +946,17 @@ class OpenTHULangGraphAgent:
             "use get_campus_activities. For web or campus retrieval searches, use search. "
             "For alarms/reminders/calendar writes, plan the relevant action and let the safety layer ask "
             "for confirmation if needed. "
-            "For any calendar write or calendar conflict detection, start_time/end_time args must be "
-            "concrete ISO-8601 datetimes with explicit UTC offset, e.g. 2026-06-03T14:00:00+08:00. "
-            "Never pass relative or natural-language time text such as 明天, 下周, 今晚, tomorrow into "
-            "calendar skill args. If the latest user message uses relative time for a calendar request, "
-            "you must plan get_current_time before calendar skills; if the concrete time cannot be resolved, "
-            "do not plan create_calendar_event. "
+            "For calendar writes or calendar conflict detection, start_time/end_time args may be concrete "
+            "ISO-8601 datetimes or the user's original time text. A calendar time is complete only when the "
+            "user explicitly provides a year, date, and time, or when it comes from an upstream skill result. "
+            "Month/day/time without a year is incomplete even if it sounds concrete: 6月21日下午4点, 06/21 16:00, "
+            "and June 21 at 4pm are year-underspecified. For relative or year-underspecified calendar requests, "
+            "you must plan get_current_time before calendar skills. For those cases, keep the original phrase in "
+            "time_text/start_time and set time_source=user_text; do not fill in a year yourself and do not mark it "
+            "explicit_absolute. If the user gives a full absolute date with explicit year and time, you may pass ISO "
+            "and set time_source=explicit_absolute. "
+            "If time comes from an upstream skill result such as an assignment deadline, pass that ISO and set time_source=upstream_skill with source_skill/source_field. "
+            "If you nevertheless infer missing date parts yourself, set time_source=planner_inferred. Do not invent current_time yourself. "
             "The reply should be natural and concise. If skill_plan is non-empty, reply with one short "
             "sentence saying what you are about to do, not the final result."
         )
@@ -1946,6 +1951,7 @@ class OpenTHULangGraphAgent:
         if isinstance(data, dict):
             for key in (
                 "status",
+                "reason",
                 "message",
                 "answer",
                 "summary",
@@ -1991,9 +1997,13 @@ class OpenTHULangGraphAgent:
             "If an available skill can satisfy the user's request, plan it instead of refusing because data is personal; "
             "the skill will report login-required/not-configured if credentials are missing. "
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
-            "When user intent contains relative time words (e.g. 明天/后天/今晚/下周/tomorrow/next week) for alarm, reminder, or calendar planning, you must add `get_current_time` before time-dependent skills. "
-            "For `create_calendar_event` and `detect_calendar_conflicts`, `start_time` and `end_time` must be concrete ISO-8601 datetimes with explicit UTC offset, e.g. `2026-06-03T14:00:00+08:00`; prefer the timezone from session/settings such as `Asia/Shanghai` when resolving local time. "
-            "Never pass natural-language or relative time strings into calendar args. If a concrete calendar time cannot be resolved, do not plan `create_calendar_event`; return only the time-context step or no action. "
+            "When user intent contains relative time words (e.g. 明天/后天/今晚/下周/tomorrow/next week) or a calendar date without a year, you must add `get_current_time` before time-dependent skills. "
+            "For `create_calendar_event` and `detect_calendar_conflicts`, `start_time` and `end_time` may be concrete ISO-8601 datetimes or the user's original time text. "
+            "A complete user-provided absolute calendar time must include an explicit year, date, and time. Month/day/time without a year is incomplete: examples include `6月21日下午4点`, `06/21 16:00`, and `June 21 at 4pm`. "
+            "For those relative or year-underspecified calendar requests, keep the calendar skill after `get_current_time`, keep the original time phrase in `time_text`/`start_time`, and set `time_source=user_text`; do not fill in a year yourself and do not set `time_source=explicit_absolute`. "
+            "If the user gives a full absolute date with explicit year and time, do not add `get_current_time` just for calendar timing; pass ISO if useful and set `time_source=explicit_absolute`. "
+            "If time comes from an upstream skill result such as a DDL/deadline, pass that ISO and set `time_source=upstream_skill`, `source_skill`, and `source_field`. "
+            "If you infer missing date parts yourself, set `time_source=planner_inferred` so the runtime can verify it. Do not invent `current_time` yourself. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
             "For class timetable or 课表 requests, use `get_semesters` before `get_course_schedule`; for course catalog/list requests, use `get_semesters` then `get_courses`. "
             "For course assignment DDL/deadline queries, use `get_assignments`; for Tsinghua Learn homework crawl queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "

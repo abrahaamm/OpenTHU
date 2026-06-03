@@ -132,13 +132,14 @@ class SkillRegistry:
 
 def build_default_registry() -> SkillRegistry:
     registry = SkillRegistry()
-    iso_offset_datetime_schema = {
+    calendar_time_text_schema = {
         "type": "string",
-        "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
         "description": (
-            "Concrete ISO-8601 datetime with explicit UTC offset. "
-            "Examples: 2026-06-03T14:00:00+08:00, 2026-06-03T06:00:00Z. "
-            "Do not use relative or natural-language values such as 明天, 下周, 今晚, tomorrow."
+            "Calendar time text. May be a concrete ISO-8601 datetime with explicit UTC offset "
+            "or natural-language/relative/year-underspecified time text copied from the user. A user "
+            "time is complete only if it explicitly includes year, date, and time; 6月21日下午4点 "
+            "is incomplete because it lacks a year. If relative or missing a year, plan get_current_time "
+            "before this calendar skill and copy the original phrase instead of filling a year."
         ),
     }
     timezone_schema = {
@@ -148,6 +149,31 @@ def build_default_registry() -> SkillRegistry:
             "from session.timezone or settings, e.g. Asia/Shanghai. Time values must still "
             "include an explicit offset."
         ),
+    }
+    calendar_time_source_schema = {
+        "type": "string",
+        "enum": ["user_text", "planner_inferred", "upstream_skill", "explicit_absolute"],
+        "description": (
+            "Where the calendar time came from. Use user_text for relative/year-underspecified "
+            "time copied from the user, planner_inferred only if the planner filled missing parts, "
+            "upstream_skill for authoritative times from earlier skill results such as DDLs, and "
+            "explicit_absolute only when the user gave a complete date with explicit year and time."
+        ),
+    }
+    calendar_time_metadata_schema = {
+        "time_source": calendar_time_source_schema,
+        "time_text": {
+            "type": "string",
+            "description": "Original user time phrase, e.g. 6月21日下午4点. Required when time_source=user_text.",
+        },
+        "source_skill": {
+            "type": "string",
+            "description": "Upstream skill name when time_source=upstream_skill, e.g. get_assignments.",
+        },
+        "source_field": {
+            "type": "string",
+            "description": "Upstream result field when time_source=upstream_skill, e.g. deadline.",
+        },
     }
 
     for spec in [
@@ -526,7 +552,8 @@ def build_default_registry() -> SkillRegistry:
             session_required=False,
             when_to_use=(
                 "Must be used before alarm/reminder/calendar planning when the user uses relative "
-                "time such as 明天, 后天, 今晚, 下周, tomorrow, next Monday."
+                "time such as 明天, 后天, 今晚, 下周, tomorrow, next Monday, or a calendar date "
+                "without a year such as 6月21日下午4点."
             ),
             example_utterances=[
                 "明早八点叫我",
@@ -567,8 +594,19 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "start_time": iso_offset_datetime_schema,
-                    "end_time": iso_offset_datetime_schema,
+                    "start_time": calendar_time_text_schema,
+                    "end_time": {
+                        **calendar_time_text_schema,
+                        "description": (
+                            calendar_time_text_schema["description"]
+                            + " Optional; defaults to one hour after start_time when omitted."
+                        ),
+                    },
+                    "current_time": {
+                        "type": "string",
+                        "description": "Optional current-time context injected by the server/runtime; planners should not invent it.",
+                    },
+                    **calendar_time_metadata_schema,
                     "timezone": timezone_schema,
                     "location": {"type": "string"},
                     "description": {"type": "string"},
@@ -578,7 +616,7 @@ def build_default_registry() -> SkillRegistry:
                     },
                     "allow_conflict_delete": {"type": "boolean"},
                 },
-                "required": ["title", "start_time", "end_time"],
+                "required": ["title", "start_time"],
                 "additionalProperties": False,
             },
         ),
@@ -591,11 +629,22 @@ def build_default_registry() -> SkillRegistry:
             args_json_schema={
                 "type": "object",
                 "properties": {
-                    "start_time": iso_offset_datetime_schema,
-                    "end_time": iso_offset_datetime_schema,
+                    "start_time": calendar_time_text_schema,
+                    "end_time": {
+                        **calendar_time_text_schema,
+                        "description": (
+                            calendar_time_text_schema["description"]
+                            + " Optional; defaults to one hour after start_time when omitted."
+                        ),
+                    },
+                    "current_time": {
+                        "type": "string",
+                        "description": "Optional current-time context injected by the server/runtime; planners should not invent it.",
+                    },
+                    **calendar_time_metadata_schema,
                     "timezone": timezone_schema,
                 },
-                "required": ["start_time", "end_time"],
+                "required": ["start_time"],
                 "additionalProperties": False,
             },
         ),

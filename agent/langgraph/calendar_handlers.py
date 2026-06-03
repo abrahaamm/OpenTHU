@@ -4,13 +4,20 @@ import json
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 
 class CalendarBridgeError(RuntimeError):
     pass
+
+
+class CalendarTimeResolutionError(ValueError):
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
 
 
 class KotlinSkillBridge(Protocol):
@@ -20,6 +27,28 @@ class KotlinSkillBridge(Protocol):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+CALENDAR_TIME_SKILLS = {"create_calendar_event", "detect_calendar_conflicts"}
+_ISO_OFFSET_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
+)
+_CALENDAR_TIME_META_KEYS = {
+    "current_time",
+    "time_source",
+    "time_text",
+    "source_skill",
+    "source_field",
+    # TODO(calendar-timezone): normalize timezone to IANA ids before dispatch
+    # instead of dropping it. Android rejects display names such as 中国标准时间.
+    "timezone",
+}
+_CALENDAR_TIME_SOURCES = {
+    "user_text",
+    "planner_inferred",
+    "upstream_skill",
+    "explicit_absolute",
+}
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -40,7 +69,7 @@ def _parse_iso_to_epoch_ms(raw: str) -> int:
     text = raw.strip()
     if not text:
         raise ValueError("empty datetime")
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", text) is None:
+    if _ISO_OFFSET_RE.fullmatch(text) is None:
         raise ValueError(
             "datetime must be ISO-8601 with explicit UTC offset, "
             "e.g. 2026-06-03T14:00:00+08:00"
@@ -49,6 +78,291 @@ def _parse_iso_to_epoch_ms(raw: str) -> int:
         text = text[:-1] + "+00:00"
     parsed = datetime.fromisoformat(text)
     return int(parsed.timestamp() * 1000)
+
+
+def _parse_iso_datetime(raw: str) -> datetime | None:
+    text = str(raw or "").strip()
+    if _ISO_OFFSET_RE.fullmatch(text) is None:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def _isoformat_seconds(value: datetime) -> str:
+    return value.replace(microsecond=0).isoformat()
+
+
+def _extract_current_time(args: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    current_time = args.get("current_time")
+    if isinstance(current_time, dict):
+        return current_time
+    if isinstance(current_time, str) and current_time.strip():
+        return {"local_datetime": current_time.strip()}
+    current_time = state.get("current_time")
+    if isinstance(current_time, dict):
+        return current_time
+    if isinstance(current_time, str) and current_time.strip():
+        return {"local_datetime": current_time.strip()}
+    for key in ("server_results", "skill_results", "device_results"):
+        results = state.get(key, [])
+        if not isinstance(results, list):
+            continue
+        for item in reversed(results):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("skill_name", "")) != "get_current_time" or str(item.get("code", "")) != "OK":
+                continue
+            data = item.get("data", {})
+            if isinstance(data, dict):
+                return data
+    return {}
+
+
+def _timezone_from_context(args: dict[str, Any], session: dict[str, Any], current_time: dict[str, Any]) -> str:
+    for source in (args, current_time, session):
+        for key in ("timezone", "timezone_id", "local_timezone", "tz"):
+            value = str(source.get(key, "") if isinstance(source, dict) else "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _llm_config_from_session(session: dict[str, Any], llm_config: tuple[str, str, str] | None) -> tuple[str, str, str]:
+    if llm_config is not None:
+        return llm_config
+    api_key = str(
+        session.get("openai_api_key")
+        or session.get("OPENAI_API_KEY")
+        or os.getenv("OPENAI_API_KEY", "")
+    ).strip()
+    model = str(session.get("llm_model") or os.getenv("OPENAI_MODEL", "gpt-4.1-mini")).strip()
+    base_url = str(session.get("llm_base_url") or os.getenv("OPENAI_BASE_URL", "")).strip()
+    return api_key, model, base_url
+
+
+def _extract_json_object_text(raw_text: str) -> str:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start : end + 1]
+    return text
+
+
+def _calendar_time_source(args: dict[str, Any]) -> str:
+    source = str(args.get("time_source", "")).strip().lower()
+    if source in _CALENDAR_TIME_SOURCES:
+        return source
+    return ""
+
+
+def _strip_calendar_time_meta(args: dict[str, Any]) -> dict[str, Any]:
+    for key in _CALENDAR_TIME_META_KEYS:
+        args.pop(key, None)
+    return args
+
+
+def _normalize_iso_calendar_args(
+    *,
+    args: dict[str, Any],
+    session: dict[str, Any],
+    current_time: dict[str, Any],
+    raise_on_invalid_window: bool,
+) -> dict[str, Any] | None:
+    start_raw = str(args.get("start_time", "")).strip()
+    end_raw = str(args.get("end_time", "")).strip()
+    start_dt = _parse_iso_datetime(start_raw)
+    end_dt = _parse_iso_datetime(end_raw) if end_raw else None
+    if start_dt is None or (end_raw and end_dt is None):
+        return None
+    if end_dt is None:
+        end_dt = start_dt + timedelta(hours=1)
+    if end_dt <= start_dt:
+        if not raise_on_invalid_window:
+            return None
+        raise CalendarTimeResolutionError(
+            "invalid_resolved_time",
+            "无法创建或检测日历事项：结束时间必须晚于开始时间。",
+        )
+    normalized = dict(args)
+    normalized["start_time"] = _isoformat_seconds(start_dt)
+    normalized["end_time"] = _isoformat_seconds(end_dt)
+    timezone_text = _timezone_from_context(normalized, session, current_time)
+    if timezone_text and not str(normalized.get("timezone", "")).strip():
+        normalized["timezone"] = timezone_text
+    return _strip_calendar_time_meta(normalized)
+
+
+def resolve_calendar_time_args(
+    *,
+    skill_name: str,
+    args: dict[str, Any],
+    session: dict[str, Any],
+    state: dict[str, Any],
+    llm_config: tuple[str, str, str] | None = None,
+) -> dict[str, Any]:
+    copied = dict(args)
+    start_raw = str(copied.get("start_time", "")).strip()
+    if not start_raw:
+        raise CalendarTimeResolutionError(
+            "missing_start_time",
+            "无法创建或检测日历事项：缺少开始时间。请补充具体日期或时间。",
+        )
+
+    time_source = _calendar_time_source(copied)
+    current_time = _extract_current_time(copied, state)
+    normalized = _normalize_iso_calendar_args(
+        args=copied,
+        session=session,
+        current_time=current_time,
+        raise_on_invalid_window=time_source in {"upstream_skill", "explicit_absolute"}
+        or (not time_source and not current_time),
+    )
+
+    if time_source == "upstream_skill":
+        if normalized is None:
+            raise CalendarTimeResolutionError(
+                "invalid_upstream_time",
+                "无法创建或检测日历事项：上游 skill 提供的时间不是带时区偏移的 ISO 时间。",
+            )
+        return normalized
+
+    if time_source == "explicit_absolute" and normalized is not None:
+        return normalized
+
+    if time_source == "user_text" and not current_time:
+        raise CalendarTimeResolutionError(
+            "missing_current_time",
+            "无法根据用户原文时间解析日历事项。请先获取当前时间后重试。",
+        )
+
+    if time_source == "planner_inferred" and not current_time:
+        raise CalendarTimeResolutionError(
+            "missing_current_time",
+            "无法复核 planner 推断的日历时间。请先获取当前时间后重试。",
+        )
+
+    if not time_source and not current_time:
+        if normalized is not None:
+            return normalized
+        raise CalendarTimeResolutionError(
+            "missing_current_time",
+            "无法根据不完整时间解析日历事项。请补充具体日期时间，或先获取当前时间后重试。",
+        )
+
+    api_key, model, base_url = _llm_config_from_session(session, llm_config)
+    if not api_key:
+        raise CalendarTimeResolutionError(
+            "llm_not_configured",
+            "无法解析相对日历时间：当前没有可用的 LLM 配置。请补充具体日期时间后重试。",
+        )
+
+    payload = {
+        "skill_name": skill_name,
+        "user_input": state.get("user_input", "") or state.get("goal", ""),
+        "time_source": time_source or "unspecified",
+        "time_text": str(copied.get("time_text", "") or start_raw).strip(),
+        "source_skill": str(copied.get("source_skill", "")).strip(),
+        "source_field": str(copied.get("source_field", "")).strip(),
+        "calendar_args": {
+            key: value
+            for key, value in copied.items()
+            if key not in {"current_time"}
+        },
+        "current_time": current_time,
+        "timezone": _timezone_from_context(copied, session, current_time),
+        "output_contract": {
+            "start_time": "ISO-8601 datetime with explicit UTC offset",
+            "end_time": "ISO-8601 datetime with explicit UTC offset; default to start_time + 1 hour if user did not specify duration/end",
+            "timezone": "IANA timezone id when known",
+        },
+    }
+    system_prompt = (
+        "You resolve calendar time arguments for a mobile calendar executor. "
+        "calendar_args are candidate arguments and may contain planner mistakes. "
+        "Return strict JSON only with keys start_time, end_time, timezone; if resolution is impossible, "
+        "return strict JSON with key error. "
+        "Respect time_source. If time_source is upstream_skill, do not replace an upstream deadline or event time "
+        "with the user's general request text. If time_source is user_text or planner_inferred, user_input/time_text "
+        "are authoritative and candidate ISO years are not trustworthy unless the user explicitly gave that year. "
+        "When user_text lacks a year, infer the year from current_time: use the same year when the date-time is still "
+        "upcoming in that timezone, otherwise use the next year. If time_source is explicit_absolute, preserve the "
+        "year explicitly stated by the user even when it is earlier than current_time. "
+        "If time_source is unspecified and candidate ISO conflicts with user_input/time_text, return an error. "
+        "Do not invent an end time except the default one-hour duration when the user did not specify duration or end. "
+        "Both start_time and end_time must be ISO-8601 datetimes with explicit UTC offset."
+    )
+    try:
+        from openai import OpenAI
+
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        client = OpenAI(**client_kwargs)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            max_tokens=400,
+            temperature=0.0,
+        )
+        raw_text = (completion.choices[0].message.content or "").strip()
+        parsed = json.loads(_extract_json_object_text(raw_text))
+    except Exception as exc:
+        raise CalendarTimeResolutionError(
+            "resolver_failed",
+            f"无法解析相对日历时间：{type(exc).__name__}。请补充具体日期时间后重试。",
+        ) from exc
+
+    if not isinstance(parsed, dict):
+        raise CalendarTimeResolutionError(
+            "resolver_failed",
+            "无法解析相对日历时间：解析器没有返回有效结果。请补充具体日期时间后重试。",
+        )
+    resolver_error = str(parsed.get("error", "")).strip()
+    if resolver_error:
+        raise CalendarTimeResolutionError(
+            "resolver_failed",
+            f"无法解析日历时间：{resolver_error}",
+        )
+
+    resolved_start = _parse_iso_datetime(str(parsed.get("start_time", "")).strip())
+    resolved_end = _parse_iso_datetime(str(parsed.get("end_time", "")).strip())
+    if resolved_start is None or resolved_end is None:
+        raise CalendarTimeResolutionError(
+            "invalid_resolved_time",
+            "无法解析相对日历时间：解析结果不是带时区偏移的 ISO 时间。请补充具体日期时间后重试。",
+        )
+    if resolved_end <= resolved_start:
+        raise CalendarTimeResolutionError(
+            "invalid_resolved_time",
+            "无法解析相对日历时间：结束时间必须晚于开始时间。请补充具体日期时间后重试。",
+        )
+
+    copied["start_time"] = _isoformat_seconds(resolved_start)
+    copied["end_time"] = _isoformat_seconds(resolved_end)
+    timezone_text = str(parsed.get("timezone", "")).strip() or _timezone_from_context(copied, session, current_time)
+    if timezone_text:
+        copied["timezone"] = timezone_text
+    return _strip_calendar_time_meta(copied)
 
 
 def _coerce_event_ids(raw_ids: Any, raw_id: Any) -> list[int]:
@@ -238,15 +552,21 @@ class CreateCalendarEventHandler(_BaseCalendarHandler):
         args = invocation.args
         try:
             title = str(args.get("title", "")).strip()
-            start_raw = str(args.get("start_time", "")).strip()
-            end_raw = str(args.get("end_time", "")).strip()
-            if not title or not start_raw or not end_raw:
+            if not title:
                 return self._result(
                     skill_name=invocation.skill_name,
                     request_id=invocation.request_id,
                     code="INVALID_PARAM",
-                    data={"status": "invalid_param", "message": "title/start_time/end_time are required"},
+                    data={"status": "invalid_param", "message": "title is required"},
                 )
+            invocation.args = resolve_calendar_time_args(
+                skill_name=invocation.skill_name,
+                args=args,
+                session=session,
+                state=state,
+            )
+            start_raw = str(invocation.args.get("start_time", "")).strip()
+            end_raw = str(invocation.args.get("end_time", "")).strip()
             start_ms = _parse_iso_to_epoch_ms(start_raw)
             end_ms = _parse_iso_to_epoch_ms(end_raw)
             if end_ms <= start_ms:
@@ -270,6 +590,17 @@ class CreateCalendarEventHandler(_BaseCalendarHandler):
             if conflict_decision == "delete_conflicts":
                 allow_delete = _coerce_bool(args.get("allow_conflict_delete"), default=False)
                 invocation.args["allow_conflict_delete"] = allow_delete
+        except CalendarTimeResolutionError as exc:
+            return self._result(
+                skill_name=invocation.skill_name,
+                request_id=invocation.request_id,
+                code="INVALID_PARAM",
+                data={
+                    "status": "calendar_time_resolution_failed",
+                    "reason": exc.reason,
+                    "message": exc.message,
+                },
+            )
         except ValueError as exc:
             return self._result(
                 skill_name=invocation.skill_name,
@@ -284,15 +615,14 @@ class DetectCalendarConflictsHandler(_BaseCalendarHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         args = invocation.args
         try:
-            start_raw = str(args.get("start_time", "")).strip()
-            end_raw = str(args.get("end_time", "")).strip()
-            if not start_raw or not end_raw:
-                return self._result(
-                    skill_name=invocation.skill_name,
-                    request_id=invocation.request_id,
-                    code="INVALID_PARAM",
-                    data={"status": "invalid_param", "message": "start_time/end_time are required"},
-                )
+            invocation.args = resolve_calendar_time_args(
+                skill_name=invocation.skill_name,
+                args=args,
+                session=session,
+                state=state,
+            )
+            start_raw = str(invocation.args.get("start_time", "")).strip()
+            end_raw = str(invocation.args.get("end_time", "")).strip()
             start_ms = _parse_iso_to_epoch_ms(start_raw)
             end_ms = _parse_iso_to_epoch_ms(end_raw)
             if end_ms <= start_ms:
@@ -302,6 +632,17 @@ class DetectCalendarConflictsHandler(_BaseCalendarHandler):
                     code="INVALID_PARAM",
                     data={"status": "invalid_param", "message": "end_time must be later than start_time"},
                 )
+        except CalendarTimeResolutionError as exc:
+            return self._result(
+                skill_name=invocation.skill_name,
+                request_id=invocation.request_id,
+                code="INVALID_PARAM",
+                data={
+                    "status": "calendar_time_resolution_failed",
+                    "reason": exc.reason,
+                    "message": exc.message,
+                },
+            )
         except ValueError as exc:
             return self._result(
                 skill_name=invocation.skill_name,

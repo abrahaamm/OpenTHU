@@ -17,10 +17,12 @@ import uvicorn
 
 try:
     from .agent_events import agent_event, encode_ndjson
+    from .calendar_handlers import CALENDAR_TIME_SKILLS, CalendarTimeResolutionError, resolve_calendar_time_args
     from .openthu_agent import OpenTHULangGraphAgent
     from .skill_core import MissingSkillHandler, SkillInvocation
 except ImportError:
     from agent_events import agent_event, encode_ndjson
+    from calendar_handlers import CALENDAR_TIME_SKILLS, CalendarTimeResolutionError, resolve_calendar_time_args
     from openthu_agent import OpenTHULangGraphAgent
     from skill_core import MissingSkillHandler, SkillInvocation
 
@@ -344,6 +346,16 @@ class AgentCoreStore:
         with self._lock:
             found = self._state["tasks"].get(task_id)
             return dict(found) if isinstance(found, dict) else None
+
+    def get_tasks_for_device(self, device_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            tasks = [
+                dict(item)
+                for item in self._state["tasks"].values()
+                if isinstance(item, dict) and str(item.get("device_id", "")) == device_id
+            ]
+        tasks.sort(key=lambda item: str(item.get("created_at", "")))
+        return tasks
 
     def _mark_skill_status(
         self,
@@ -971,6 +983,132 @@ def execute_server_side_data_skills(
     return current_task
 
 
+def _task_session(task_doc: dict[str, Any], fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    plan_only = task_doc.get("plan_only_response", {})
+    data = plan_only.get("data", {}) if isinstance(plan_only, dict) else {}
+    session = data.get("session", {}) if isinstance(data, dict) else {}
+    if isinstance(session, dict) and session:
+        return session
+    return dict(fallback or {})
+
+
+def _latest_current_time_data(task_doc: dict[str, Any]) -> dict[str, Any]:
+    for key in ("server_results", "device_results"):
+        results = task_doc.get(key, [])
+        if not isinstance(results, list):
+            continue
+        for item in reversed(results):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("skill_name", "")) != "get_current_time" or str(item.get("code", "")) != "OK":
+                continue
+            data = item.get("data", {})
+            if isinstance(data, dict):
+                return data
+    return {}
+
+
+def _calendar_time_failure_result(
+    *,
+    task_id: str,
+    skill: dict[str, Any],
+    exc: CalendarTimeResolutionError,
+) -> dict[str, Any]:
+    return {
+        "skill_name": str(skill.get("skill_name", "")),
+        "request_id": str(skill.get("request_id", "")),
+        "task_id": task_id,
+        "code": "INVALID_PARAM",
+        "data": {
+            "status": "calendar_time_resolution_failed",
+            "reason": exc.reason,
+            "message": exc.message,
+        },
+        "from_cache": False,
+        "fetched_at": utc_now(),
+        "source": "calendar_time_resolver",
+    }
+
+
+def prepare_calendar_dispatch_args(
+    *,
+    agent: OpenTHULangGraphAgent,
+    store: AgentCoreStore,
+    task_doc: dict[str, Any],
+    session: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    current_task = dict(task_doc)
+    task_id = str(current_task.get("task_id", ""))
+    current_session = _task_session(current_task, session)
+    completed = set(str(item) for item in current_task.get("completed_request_ids", []))
+    in_flight = set(str(item) for item in current_task.get("in_flight_request_ids", []))
+    current_time = _latest_current_time_data(current_task)
+    try:
+        llm_config = agent._llm_config_from_session(current_session)  # type: ignore[attr-defined]
+    except Exception:
+        llm_config = None
+
+    for skill in current_task.get("approved_skills", []):
+        if not isinstance(skill, dict):
+            continue
+        skill_name = str(skill.get("skill_name", ""))
+        request_id = str(skill.get("request_id", ""))
+        if skill_name not in CALENDAR_TIME_SKILLS or not request_id:
+            continue
+        if request_id in completed or request_id in in_flight:
+            continue
+        args = skill.get("args", {})
+        if not isinstance(args, dict):
+            args = {}
+        state = {
+            "task_id": task_id,
+            "request_id": current_task.get("request_id", ""),
+            "user_input": current_task.get("goal", ""),
+            "goal": current_task.get("goal", ""),
+            "session": current_session,
+            "server_results": current_task.get("server_results", []),
+            "device_results": current_task.get("device_results", []),
+            "current_time": current_time,
+        }
+        try:
+            resolved_args = resolve_calendar_time_args(
+                skill_name=skill_name,
+                args=args,
+                session=current_session,
+                state=state,
+                llm_config=llm_config,
+            )
+        except CalendarTimeResolutionError as exc:
+            logger.warning(
+                "[calendar.time] resolution failed task_id=%s request_id=%s skill_name=%s reason=%s",
+                task_id,
+                request_id,
+                skill_name,
+                exc.reason,
+            )
+            current_task = store.record_server_result(
+                task_id=task_id,
+                result=_calendar_time_failure_result(task_id=task_id, skill=skill, exc=exc),
+            )
+            completed = set(str(item) for item in current_task.get("completed_request_ids", []))
+            continue
+
+        if resolved_args != args:
+            logger.debug(
+                "[calendar.time] resolved task_id=%s request_id=%s skill_name=%s args=%s",
+                task_id,
+                request_id,
+                skill_name,
+                _safe_debug_value(resolved_args),
+            )
+            current_task = store.update_skill_args(
+                task_id=task_id,
+                request_id=request_id,
+                args=resolved_args,
+            )
+    return current_task
+
+
 def hydrate_show_summary_skills(
     *,
     store: AgentCoreStore,
@@ -1350,10 +1488,16 @@ def _final_content_from_task(task_doc: dict[str, Any]) -> str:
         if content:
             return content
     result_summary = build_task_result_summary(task_doc)
+    if blocked_count:
+        blocked_names = [
+            str(item.get("skill_name", "")).strip()
+            for item in blocked
+            if isinstance(item, dict) and str(item.get("skill_name", "")).strip()
+        ]
+        suffix = f"：{', '.join(blocked_names[:3])}" if blocked_names else ""
+        return f"我已经整理好计划，其中 {approved_count} 个步骤已处理或可继续，{blocked_count} 个步骤需要你确认{suffix}。确认后我再继续执行。"
     if result_summary:
         return result_summary
-    if blocked_count:
-        return f"我已经整理好计划，其中 {approved_count} 个步骤可以继续处理，{blocked_count} 个步骤需要你确认。"
     if approved_count:
         return "我已经完成可在服务端处理的部分，剩余需要手机端执行的动作会继续处理。"
     return "我没有找到需要执行的步骤。你可以补充一下目标，我再继续。"
@@ -1451,6 +1595,14 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
             goal=payload.goal,
         )
         task_doc = execute_server_side_data_skills(
+            agent=agent,
+            store=store,
+            task_doc=task_doc,
+            session=plan_response.get("data", {}).get("session", {})
+            if isinstance(plan_response.get("data"), dict)
+            else {},
+        )
+        task_doc = prepare_calendar_dispatch_args(
             agent=agent,
             store=store,
             task_doc=task_doc,
@@ -1586,6 +1738,14 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     )
                 task_doc = store.suppress_show_summary_for_stream(task_id=str(task_doc.get("task_id", "")))
                 task_doc = execute_server_side_data_skills(
+                    agent=agent,
+                    store=store,
+                    task_doc=task_doc,
+                    session=plan_response.get("data", {}).get("session", {})
+                    if isinstance(plan_response.get("data"), dict)
+                    else {},
+                )
+                task_doc = prepare_calendar_dispatch_args(
                     agent=agent,
                     store=store,
                     task_doc=task_doc,
@@ -1744,6 +1904,8 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         f"{final_content}\n\n"
                         f"手机端还有 {len(still_pending)} 个步骤暂时没有返回结果，我会在它们完成后继续更新。"
                     )
+                elif blocked_skills:
+                    final_content = _final_content_from_task(task_doc)
                 else:
                     summary_session = (
                         plan_response.get("data", {}).get("session", {})
@@ -1795,6 +1957,16 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
         if device is None:
             logger.warning("[api] next_task rejected: device_id=%s not registered", device_id)
             raise HTTPException(status_code=404, detail="device_not_registered")
+
+        for task_doc in store.get_tasks_for_device(device_id):
+            if str(task_doc.get("status", "")) not in {"ready_for_device_execution", "in_progress"}:
+                continue
+            prepare_calendar_dispatch_args(
+                agent=agent,
+                store=store,
+                task_doc=task_doc,
+                session=_task_session(task_doc, {}),
+            )
 
         next_item = store.pop_next_dispatch(device_id=device_id)
         if next_item is None:
