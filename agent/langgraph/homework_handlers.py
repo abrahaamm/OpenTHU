@@ -705,14 +705,15 @@ class PreviewHomeworkAttachmentsHandler(_BaseHomeworkHandler):
 class UploadHomeworkAttachmentHandler(_BaseHomeworkHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         homework_id = str(invocation.args.get("homework_id", "")).strip()
+        lookup_hint = str(invocation.args.get("lookup_hint") or invocation.args.get("homework_title") or "").strip()
         file_path = str(invocation.args.get("file_path", "")).strip()
         file_uri = str(invocation.args.get("file_uri", "")).strip()
-        if not homework_id:
+        if not homework_id and not lookup_hint:
             return self._result(
                 skill_name=invocation.skill_name,
                 request_id=invocation.request_id,
                 code="INVALID_PARAM",
-                data={"status": "invalid_param", "message": "homework_id is required"},
+                data={"status": "invalid_param", "message": "homework_id or lookup_hint is required"},
             )
         if not file_path and not file_uri:
             return self._result(
@@ -721,7 +722,8 @@ class UploadHomeworkAttachmentHandler(_BaseHomeworkHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": "file_path or file_uri is required"},
             )
-        invocation.args["homework_id"] = homework_id
+        if homework_id:
+            invocation.args["homework_id"] = homework_id
         return self._dispatch_to_bridge(invocation, state)
 
 
@@ -729,6 +731,7 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         args = invocation.args
         homework_id = str(args.get("homework_id", "")).strip()
+        lookup_hint = str(args.get("lookup_hint") or args.get("homework_title") or "").strip()
         confirmed = _coerce_bool(args.get("confirm_submit"), default=False)
         if not confirmed:
             return self._result(
@@ -741,12 +744,12 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
                     "message": "confirm_submit=true is required for submit_homework",
                 },
             )
-        if not homework_id:
+        if not homework_id and not lookup_hint:
             return self._result(
                 skill_name=invocation.skill_name,
                 request_id=invocation.request_id,
                 code="INVALID_PARAM",
-                data={"status": "invalid_param", "message": "homework_id is required"},
+                data={"status": "invalid_param", "message": "homework_id or lookup_hint is required"},
             )
         attachment_tokens = _coerce_string_list(args.get("attachment_tokens"))
         local_file_paths = _coerce_string_list(args.get("local_file_paths"))
@@ -766,7 +769,8 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": "submission_text, file, or attachment_tokens are required"},
             )
-        args["homework_id"] = homework_id
+        if homework_id:
+            args["homework_id"] = homework_id
         args["confirm_submit"] = True
         args["attachment_tokens"] = attachment_tokens
         args["local_file_paths"] = local_file_paths

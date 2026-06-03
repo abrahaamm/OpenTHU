@@ -87,6 +87,7 @@ class ActionExecutor(
       "detect_calendar_conflicts" -> executeConflictDetection(action, goal)
       "delete_calendar_event" -> executeDeleteCalendarEvent(action)
       "get_homework_cookie",
+      "get_assignments",
       "crawl_course_homeworks",
       "crawl_unsubmitted_homeworks",
       "preview_homework_attachments",

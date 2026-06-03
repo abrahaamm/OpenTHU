@@ -40,6 +40,7 @@ DEBUG_LOG_VALUE_LIMIT = 6000
 DEVICE_EXECUTED_SKILLS = {
     "get_campus_activities",
     "get_homework_cookie",
+    "get_assignments",
     "crawl_course_homeworks",
     "crawl_unsubmitted_homeworks",
     "preview_homework_attachments",
@@ -1258,7 +1259,7 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
             lines.append("提示：" + "；".join(str(item) for item in warnings[:3]))
         return "\n".join(lines)
 
-    if skill_name in {"crawl_course_homeworks", "crawl_unsubmitted_homeworks"}:
+    if skill_name in {"get_assignments", "crawl_course_homeworks", "crawl_unsubmitted_homeworks"}:
         homeworks = data.get("homeworks", [])
         if not isinstance(homeworks, list):
             homeworks = []
@@ -1267,7 +1268,7 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
             count = int(count_value)
         except (TypeError, ValueError):
             count = len(homeworks)
-        title = "未提交作业" if skill_name == "crawl_unsubmitted_homeworks" else "作业列表"
+        title = "课程 DDL" if skill_name == "get_assignments" else ("未提交作业" if skill_name == "crawl_unsubmitted_homeworks" else "作业列表")
         lines = [f"### {title}", f"共找到 {max(count, len(homeworks))} 条作业记录。"]
         for item in homeworks[:8]:
             if not isinstance(item, dict):

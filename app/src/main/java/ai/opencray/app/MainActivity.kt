@@ -19,8 +19,11 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -51,6 +54,9 @@ class MainActivity : AppCompatActivity() {
     private const val CALENDAR_PERMISSION_REQUEST = 1201
     private const val PREF_SHOW_PLANNING_DETAILS = "show_planning_details"
   }
+
+  private val modelOptions =
+    listOf("gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "moonshot-v1-8k", "deepseek-chat")
 
   private lateinit var viewModel: MainViewModel
   private lateinit var markwon: Markwon
@@ -95,6 +101,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var chatSendButton: Button
   private lateinit var preferenceInput: EditText
   private lateinit var preferenceAddButton: Button
+  private lateinit var preferenceListContainer: LinearLayout
   private lateinit var preferenceDelete1Button: Button
   private lateinit var preferenceDelete2Button: Button
   private lateinit var preferenceDelete3Button: Button
@@ -122,7 +129,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var planningDeveloperFlowSection: LinearLayout
   private lateinit var planningDeveloperToggleButton: Button
   private lateinit var openAiKeyInput: EditText
-  private lateinit var llmModelInput: EditText
+  private lateinit var llmModelSpinner: Spinner
   private lateinit var llmBaseUrlInput: EditText
   private lateinit var userIdInput: EditText
   private lateinit var webvpnCookieInput: EditText
@@ -148,6 +155,9 @@ class MainActivity : AppCompatActivity() {
   private var showPlanningDetails: Boolean = false
   private var selectedChatFileUri: Uri? = null
   private var selectedChatFileName: String = ""
+  private var editingPreferenceIndex: Int? = null
+  private var suppressSettingsAutosave: Boolean = false
+  private var pendingSettingsSave: Runnable? = null
 
   private val learnCookieLoginLauncher =
     registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -264,6 +274,7 @@ class MainActivity : AppCompatActivity() {
     chatSendButton = findViewById(R.id.chat_send_button)
     preferenceInput = findViewById(R.id.preference_input)
     preferenceAddButton = findViewById(R.id.preference_add_button)
+    preferenceListContainer = findViewById(R.id.preference_list_container)
     preferenceDelete1Button = findViewById(R.id.preference_delete_1)
     preferenceDelete2Button = findViewById(R.id.preference_delete_2)
     preferenceDelete3Button = findViewById(R.id.preference_delete_3)
@@ -291,7 +302,7 @@ class MainActivity : AppCompatActivity() {
     planningDeveloperFlowSection = findViewById(R.id.planning_developer_flow_section)
     planningDeveloperToggleButton = findViewById(R.id.planning_dev_toggle_button)
     openAiKeyInput = findViewById(R.id.setting_openai_key_input)
-    llmModelInput = findViewById(R.id.setting_llm_model_input)
+    llmModelSpinner = findViewById(R.id.setting_llm_model_input)
     llmBaseUrlInput = findViewById(R.id.setting_llm_base_url_input)
     userIdInput = findViewById(R.id.setting_user_id_input)
     webvpnCookieInput = findViewById(R.id.setting_webvpn_cookie_input)
@@ -314,7 +325,15 @@ class MainActivity : AppCompatActivity() {
     adbBinInput = findViewById(R.id.setting_adb_bin_input)
     adbSerialInput = findViewById(R.id.setting_adb_serial_input)
     timezoneInput = findViewById(R.id.setting_timezone_input)
+    configureModelSpinner()
     loadSettingsInputs()
+  }
+
+  private fun configureModelSpinner() {
+    llmModelSpinner.adapter =
+      ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, modelOptions).apply {
+        setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+      }
   }
 
   private fun decorateUi() {
@@ -413,6 +432,70 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  private fun installSettingsAutoSave() {
+    val settingInputs =
+      listOf(
+        openAiKeyInput,
+        llmBaseUrlInput,
+        userIdInput,
+        webvpnCookieInput,
+        webvpnCsrfInput,
+        learnBaseUrlInput,
+        homeworkCookieInput,
+        homeworkCsrfInput,
+        campusFileInput,
+        searchProviderInput,
+        searchEndpointInput,
+        searchApiKeyInput,
+        searchSceneInput,
+        searchTtlInput,
+        memoryFileInput,
+        memoryLongTtlInput,
+        memoryMidTtlInput,
+        memoryShortTtlInput,
+        memoryHalfLifeInput,
+        adbBinInput,
+        adbSerialInput,
+        timezoneInput,
+      )
+    settingInputs.forEach { input ->
+      input.syncToViewModel { scheduleSettingsAutoSave() }
+    }
+    llmModelSpinner.onItemSelectedListener =
+      object : AdapterView.OnItemSelectedListener {
+        override fun onItemSelected(
+          parent: AdapterView<*>?,
+          view: View?,
+          position: Int,
+          id: Long,
+        ) {
+          val model = modelOptions.getOrNull(position) ?: "gpt-4.1-mini"
+          viewModel.updateConfiguredModel(model)
+          scheduleSettingsAutoSave()
+        }
+
+        override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+      }
+    tlsToggle.setOnCheckedChangeListener { _, isChecked ->
+      viewModel.updateTlsEnabled(isChecked)
+      scheduleSettingsAutoSave()
+      render()
+    }
+  }
+
+  private fun scheduleSettingsAutoSave() {
+    if (suppressSettingsAutosave) return
+    pendingSettingsSave?.let { uiRefreshHandler.removeCallbacks(it) }
+    val task =
+      Runnable {
+        if (persistSettings()) {
+          viewModel.updateConfiguredModel(selectedModel())
+        }
+      }
+    pendingSettingsSave = task
+    uiRefreshHandler.postDelayed(task, 450L)
+  }
+
   private fun EditText.syncToViewModel(onChanged: (String) -> Unit) {
     addTextChangedListener(
       object : TextWatcher {
@@ -493,7 +576,7 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
-    bindSkillPlaceholder(skillCard1, "placeholder_study_assistant")
+    bindSkillPlaceholder(skillCard1, "get_assignments")
     bindSkillPlaceholder(skillCard2, "get_campus_activities")
     bindSkillPlaceholder(skillCard3, "create_calendar_event")
     bindSkillPlaceholder(skillCard4, "read_notifications")
@@ -512,18 +595,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     preferenceAddButton.setOnClickListener {
-      val saved = viewModel.addPreference(preferenceInput.text.toString())
+      val editingIndex = editingPreferenceIndex
+      val saved =
+        if (editingIndex == null) {
+          viewModel.addPreference(preferenceInput.text.toString())
+        } else {
+          viewModel.updatePreference(editingIndex, preferenceInput.text.toString())
+        }
       if (saved) {
         preferenceInput.setText("")
-        Toast.makeText(this, getString(R.string.preference_saved), Toast.LENGTH_SHORT).show()
+        editingPreferenceIndex = null
+        preferenceAddButton.text = getString(R.string.preference_add)
+        Toast.makeText(
+          this,
+          getString(if (editingIndex == null) R.string.preference_saved else R.string.preference_updated),
+          Toast.LENGTH_SHORT,
+        ).show()
         render()
       } else {
         Toast.makeText(this, getString(R.string.preference_empty), Toast.LENGTH_SHORT).show()
       }
     }
+    listOf(preferenceDelete1Button, preferenceDelete2Button, preferenceDelete3Button).forEach {
+      it.visibility = View.GONE
+    }
     preferenceDelete1Button.setOnClickListener { deletePreferenceAt(0) }
     preferenceDelete2Button.setOnClickListener { deletePreferenceAt(1) }
     preferenceDelete3Button.setOnClickListener { deletePreferenceAt(2) }
+
+    statusView.setOnClickListener {
+      viewModel.reconnectGateway()
+      Toast.makeText(this, "正在重新连接服务器…", Toast.LENGTH_SHORT).show()
+      render()
+    }
+    transportView.visibility = View.GONE
 
     connectButton.setOnClickListener {
       viewModel.updateHost(hostInput.text.toString())
@@ -607,6 +712,7 @@ class MainActivity : AppCompatActivity() {
 
     hostInput.syncToViewModel { value -> viewModel.updateHost(value) }
     portInput.syncToViewModel { value -> viewModel.updatePort(value) }
+    installSettingsAutoSave()
   }
 
   private fun renderChatAttachment() {
@@ -673,8 +779,10 @@ class MainActivity : AppCompatActivity() {
         getString(R.string.planning_details_show)
       }
 
-    statusView.text = "Agent 状态：${state.snapshot.connectionStatus}"
-    transportView.text = "数据链路：${state.snapshot.transportLabel}"
+    statusView.text = connectionStatusText(state.snapshot.connectionStatus)
+    statusView.setTextColor(ContextCompat.getColor(this, connectionStatusTextColor(state.snapshot.connectionStatus)))
+    statusView.setBackgroundColor(ContextCompat.getColor(this, connectionStatusBackgroundColor(state.snapshot.connectionStatus)))
+    transportView.visibility = View.GONE
     pageTitleView.text =
       when (state.currentDestination) {
         AppDestination.Chat -> "Agent 对话"
@@ -870,6 +978,9 @@ class MainActivity : AppCompatActivity() {
           append(preferences.joinToString("\n") { "• ${it.value}" })
         }
       }
+    preferenceAddButton.text =
+      getString(if (editingPreferenceIndex == null) R.string.preference_add else R.string.preference_update)
+    renderPreferenceList(state.memoryRecords)
     configurePreferenceDeleteButtons(state.memoryRecords)
 
     eventsView.text =
@@ -1107,6 +1218,17 @@ class MainActivity : AppCompatActivity() {
         },
       )
       headerRow.addView(titleColumn)
+      headerRow.addView(
+        createPlanningPill(planningRecommendationLabel(card), planningRecommendationColor(card)).apply {
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              marginEnd = dp(6)
+            }
+        },
+      )
       headerRow.addView(createPlanningPill(planningCardStatusLabel(card.status), planningStatusColor(card.status)))
       cardView.addView(headerRow)
 
@@ -1261,6 +1383,8 @@ class MainActivity : AppCompatActivity() {
       card.metadata["time"]?.takeIf { it.isNotBlank() }?.let { "时间：$it" },
       card.metadata["confirmation"]?.takeIf { it.isNotBlank() }?.let { "确认：$it" },
       card.metadata["confidence"]?.takeIf { it.isNotBlank() }?.let { "把握度：$it" },
+      card.metadata["risk"]?.takeIf { it.isNotBlank() }?.let { "风险：$it" },
+      card.metadata["recommendation"]?.takeIf { it.isNotBlank() }?.let { "推荐：$it" },
     ).filterNotNull().joinToString("；")
 
   private fun planningReferenceText(card: PlanningCard): String {
@@ -1428,8 +1552,28 @@ class MainActivity : AppCompatActivity() {
       "failed" -> "需调整"
       "conflict_pending" -> "需决策"
       "snoozed" -> "稍后处理"
-      "ignored" -> "已搁置"
+      "ignored" -> "已忽略"
       else -> status.ifBlank { "待处理" }
+    }
+
+  private fun planningRecommendationLabel(card: PlanningCard): String =
+    card.metadata["recommendation"]?.takeIf { it.isNotBlank() } ?: when {
+      card.status == "ignored" -> "已忽略"
+      card.status == "snoozed" -> "稍后"
+      card.status == "pending_approval" || card.status == "conflict_pending" -> "强提醒"
+      card.metadata["risk"].orEmpty().equals("high", ignoreCase = true) -> "强提醒"
+      (card.metadata["confidence"]?.toIntOrNull() ?: 0) >= 80 -> "强推荐"
+      (card.metadata["confidence"]?.toIntOrNull() ?: 0) >= 60 -> "中推荐"
+      else -> "弱推荐"
+    }
+
+  private fun planningRecommendationColor(card: PlanningCard): Int =
+    when (planningRecommendationLabel(card)) {
+      "强提醒" -> R.color.opencray_danger
+      "强推荐" -> R.color.opencray_success
+      "中推荐" -> R.color.opencray_warning
+      "已忽略", "稍后" -> R.color.opencray_muted
+      else -> R.color.opencray_primary_dark
     }
 
   private fun syncQuickSkillsToggle() {
@@ -1733,15 +1877,131 @@ class MainActivity : AppCompatActivity() {
     button.isEnabled = enabled
   }
 
+  private fun connectionStatusText(status: String): String =
+    when {
+      status.contains("未连接") || status.contains("failed", ignoreCase = true) -> "服务器未连接，点击重试"
+      status.contains("连接到服务器") || status.contains("Connecting", ignoreCase = true) -> "连接到服务器..."
+      status.contains("已连接") || status.contains("Connected", ignoreCase = true) -> "服务器已连接"
+      else -> "服务器状态：$status"
+    }
+
+  private fun connectionStatusBackgroundColor(status: String): Int =
+    when {
+      status.contains("未连接") || status.contains("failed", ignoreCase = true) -> R.color.opencray_danger_soft
+      status.contains("连接到服务器") || status.contains("Connecting", ignoreCase = true) -> R.color.opencray_neutral_soft
+      status.contains("已连接") || status.contains("Connected", ignoreCase = true) -> R.color.opencray_accent_soft
+      else -> R.color.opencray_primary_soft
+    }
+
+  private fun connectionStatusTextColor(status: String): Int =
+    when {
+      status.contains("未连接") || status.contains("failed", ignoreCase = true) -> R.color.opencray_danger
+      status.contains("已连接") || status.contains("Connected", ignoreCase = true) -> R.color.opencray_success
+      else -> R.color.opencray_primary_dark
+    }
+
   private fun configurePreferenceDeleteButtons(memoryRecords: List<MemoryRecord>) {
     val count = memoryRecords.count { it.scope == "long" }
     listOf(preferenceDelete1Button, preferenceDelete2Button, preferenceDelete3Button)
       .forEachIndexed { index, button ->
+        button.visibility = View.GONE
         button.isEnabled = index < count
         button.alpha = if (button.isEnabled) 1f else 0.45f
         button.text = if (button.isEnabled) "删${index + 1}" else "X"
       }
   }
+
+  private fun renderPreferenceList(memoryRecords: List<MemoryRecord>) {
+    preferenceListContainer.removeAllViews()
+    val preferences =
+      memoryRecords
+        .filter { it.scope == "long" }
+        .sortedByDescending { it.updatedAtEpochMs }
+    if (preferences.isEmpty()) {
+      preferenceListContainer.addView(
+        TextView(this).apply {
+          text = "还没有长期偏好。"
+          textSize = 13f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_muted))
+        },
+      )
+      return
+    }
+
+    preferences.forEachIndexed { index, record ->
+      val row =
+        LinearLayout(this).apply {
+          orientation = LinearLayout.HORIZONTAL
+          gravity = Gravity.CENTER_VERTICAL
+          setBackgroundResource(R.drawable.chat_section_surface)
+          setPadding(dp(10), dp(8), dp(8), dp(8))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              LinearLayout.LayoutParams.MATCH_PARENT,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+              bottomMargin = dp(8)
+            }
+        }
+      row.addView(
+        TextView(this).apply {
+          text = record.value
+          textSize = 13f
+          setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+          layoutParams =
+            LinearLayout.LayoutParams(
+              0,
+              LinearLayout.LayoutParams.WRAP_CONTENT,
+              1f,
+            ).apply {
+              marginEnd = dp(8)
+            }
+        },
+      )
+      row.addView(
+        compactPreferenceButton("修改") {
+          editingPreferenceIndex = index
+          preferenceInput.setText(record.value)
+          preferenceInput.setSelection(preferenceInput.text.length)
+          preferenceAddButton.text = getString(R.string.preference_update)
+          preferenceInput.requestFocus()
+        },
+      )
+      row.addView(
+        compactPreferenceButton("删除") {
+          deletePreferenceAt(index)
+        },
+      )
+      preferenceListContainer.addView(row)
+    }
+  }
+
+  private fun compactPreferenceButton(
+    label: String,
+    onClick: () -> Unit,
+  ): Button =
+    Button(this).apply {
+      text = label
+      textSize = 12f
+      minWidth = 0
+      minimumWidth = 0
+      minHeight = dp(34)
+      minimumHeight = dp(34)
+      setAllCaps(false)
+      setBackgroundResource(R.drawable.button_secondary_selector)
+      setTextColor(ContextCompat.getColor(this@MainActivity, R.color.opencray_ink))
+      stateListAnimator = null
+      elevation = 0f
+      setPadding(dp(8), dp(2), dp(8), dp(2))
+      setOnClickListener { onClick() }
+      layoutParams =
+        LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+          dp(36),
+        ).apply {
+          marginStart = dp(6)
+        }
+    }
 
   private fun focusedAction(actions: List<SystemAction>): SystemAction? =
     actions.firstOrNull { it.status in setOf("planned", "approved", "pending_approval", "conflict_pending") }
@@ -1803,6 +2063,11 @@ class MainActivity : AppCompatActivity() {
 
   private fun deletePreferenceAt(index: Int) {
     val deleted = viewModel.deletePreference(index)
+    if (deleted && editingPreferenceIndex != null) {
+      editingPreferenceIndex = null
+      preferenceInput.setText("")
+      preferenceAddButton.text = getString(R.string.preference_add)
+    }
     Toast.makeText(
       this,
       if (deleted) getString(R.string.preference_deleted) else getString(R.string.preference_delete_empty),
@@ -1851,9 +2116,10 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun loadSettingsInputs() {
+    suppressSettingsAutosave = true
     val pref = getSharedPreferences("openthu_settings", MODE_PRIVATE)
     openAiKeyInput.setText(pref.getString("openai_api_key", ""))
-    llmModelInput.setText(pref.getString("llm_model", "gpt-4.1-mini"))
+    setSelectedModel(pref.getString("llm_model", "gpt-4.1-mini").orEmpty())
     llmBaseUrlInput.setText(pref.getString("llm_base_url", ""))
     userIdInput.setText(pref.getString("user_id", "demo_user"))
     webvpnCookieInput.setText(pref.getString("webvpn_cookie", ""))
@@ -1877,14 +2143,14 @@ class MainActivity : AppCompatActivity() {
     adbBinInput.setText(pref.getString("adb_bin", "adb"))
     adbSerialInput.setText(pref.getString("adb_serial", ""))
     timezoneInput.setText(pref.getString("timezone", "UTC"))
+    suppressSettingsAutosave = false
   }
 
   private fun persistSettings(): Boolean {
-    if (llmModelInput.text.toString().trim().isEmpty()) return false
     val pref = getSharedPreferences("openthu_settings", MODE_PRIVATE)
     pref.edit()
       .putString("openai_api_key", openAiKeyInput.text.toString().trim())
-      .putString("llm_model", llmModelInput.text.toString().trim())
+      .putString("llm_model", selectedModel())
       .putString("llm_base_url", llmBaseUrlInput.text.toString().trim())
       .putString("user_id", userIdInput.text.toString().trim())
       .putString("webvpn_cookie", webvpnCookieInput.text.toString().trim())
@@ -1909,6 +2175,15 @@ class MainActivity : AppCompatActivity() {
       .putString("timezone", timezoneInput.text.toString().trim())
       .apply()
     return true
+  }
+
+  private fun selectedModel(): String =
+    (llmModelSpinner.selectedItem as? String)?.trim()?.ifBlank { null } ?: "gpt-4.1-mini"
+
+  private fun setSelectedModel(model: String) {
+    val normalized = model.trim().ifBlank { "gpt-4.1-mini" }
+    val index = modelOptions.indexOf(normalized).takeIf { it >= 0 } ?: 0
+    llmModelSpinner.setSelection(index)
   }
 
   private fun setPlanningDetailsVisible(visible: Boolean) {

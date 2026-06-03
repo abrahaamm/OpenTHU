@@ -892,16 +892,14 @@
                             style="@style/OpenCraySettingsFieldHelp"
                             android:text="@string/setting_llm_model_description" />
 
-                        <EditText
+                        <Spinner
                             android:id="@+id/setting_llm_model_input"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="5dp"
                             android:background="@drawable/input_field_surface"
-                            android:hint="@string/setting_llm_model_hint"
                             android:padding="14dp"
-                            android:textColor="@color/opencray_ink"
-                            android:textColorHint="@color/opencray_muted" />
+                            android:entries="@array/llm_model_options" />
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"
@@ -1396,6 +1394,13 @@
                                 android:minWidth="0dp"
                                 android:text="X" />
                         </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/preference_list_container"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:orientation="vertical" />
 
                         <TextView
                             style="@style/OpenCraySettingsFieldTitle"

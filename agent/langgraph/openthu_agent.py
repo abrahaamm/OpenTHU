@@ -664,8 +664,9 @@ class OpenTHULangGraphAgent:
         *,
         limit: int = 8,
     ) -> list[dict[str, str]]:
+        selected_history = history if len(history) <= limit else [*history[:2], *history[-max(limit - 2, 0):]]
         compact_history: list[dict[str, str]] = []
-        for item in history[-limit:]:
+        for item in selected_history:
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role", "")).strip().lower()
@@ -804,6 +805,7 @@ class OpenTHULangGraphAgent:
             "Use only skill_name values from available_skills, and keep plans between 1 and 8 steps. "
             "Do not add show_summary only to produce the final answer; the runtime has a final summary node. "
             "Use get_homework_cookie only when the user explicitly provides a cookie/token/header. "
+            "For requests about course DDL/deadlines/作业DDL/作业截止时间, use get_assignments when available. "
             "For requests about unsubmitted/not submitted/missing homework or 未交/未提交作业, "
             "prefer crawl_unsubmitted_homeworks. For all homework lists, use crawl_course_homeworks. "
             "For explicit homework submission/turn-in/提交/递交 requests, use submit_homework; "
@@ -888,7 +890,10 @@ class OpenTHULangGraphAgent:
             raw_plan = parsed.get("skill_plan", [])
             if not isinstance(raw_plan, list):
                 raw_plan = []
-            sanitized_plan = self._sanitize_skill_plan(raw_plan, state["task_id"])
+            sanitized_plan = self._apply_search_scene_overrides(
+                self._sanitize_skill_plan(raw_plan, state["task_id"]),
+                state,
+            )
             structured_prompt = parsed.get("structured_prompt", {})
             if not isinstance(structured_prompt, dict):
                 structured_prompt = {}
@@ -964,6 +969,8 @@ class OpenTHULangGraphAgent:
             constraints = self._extract_attached_file_constraints(text)
             if submit_intent:
                 action_args["confirm_submit"] = True
+            if not any(key in action_args for key in ("homework_id", "zyid", "homework_zyid", "xszyid", "student_homework_id")):
+                action_args["lookup_hint"] = text
             planned_payloads: list[dict[str, Any]] = []
             if not any(key in action_args for key in ("homework_id", "zyid", "homework_zyid", "xszyid", "student_homework_id")):
                 planned_payloads.append(
@@ -1025,15 +1032,20 @@ class OpenTHULangGraphAgent:
             "missing homework",
         )
         unsubmitted = any(term in lowered for term in unsubmitted_terms)
-        skill_name = "crawl_unsubmitted_homeworks" if unsubmitted else "crawl_course_homeworks"
+        ddl_terms = ("ddl", "deadline", "due date", "due dates", "截止", "期限")
+        wants_deadlines = any(term in lowered for term in ddl_terms) or any(term in text for term in ("截止", "期限"))
+        skill_name = "get_assignments" if wants_deadlines else ("crawl_unsubmitted_homeworks" if unsubmitted else "crawl_course_homeworks")
         description = (
+            "获取当前课程作业与 DDL。"
+            if wants_deadlines
+            else
             "检查网络学堂里尚未完成或未提交的作业。"
             if unsubmitted
             else "抓取网络学堂作业列表。"
         )
         structured_prompt: StructuredPrompt = {
             "objective": text,
-            "entities": ["homework", "unsubmitted"] if unsubmitted else ["homework"],
+            "entities": ["homework", "ddl"] if wants_deadlines else (["homework", "unsubmitted"] if unsubmitted else ["homework"]),
             "constraints": [],
             "success_criteria": ["Return homework records or login guidance"],
             "sensitivity": "low",
@@ -1845,7 +1857,7 @@ class OpenTHULangGraphAgent:
             "Never pass natural-language or relative time strings into calendar args. If a concrete calendar time cannot be resolved, do not plan `create_calendar_event`; return only the time-context step or no action. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
             "For class timetable or 课表 requests, use `get_semesters` before `get_course_schedule`; for course catalog/list requests, use `get_semesters` then `get_courses`. "
-            "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "
+            "For course assignment DDL/deadline queries, use `get_assignments`; for Tsinghua Learn homework crawl queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "
             "phrases like `check my homework that is not submitted`, `unsubmitted assignments`, `未交作业`, `未提交作业` map to crawl_unsubmitted_homeworks; "
             "when the user explicitly asks to submit/turn in/递交/提交 homework, use submit_homework; "
             "when the user asks only to upload/stage an attached file, use upload_homework_attachment; "
@@ -1912,7 +1924,10 @@ class OpenTHULangGraphAgent:
             if not isinstance(parsed, list):
                 logger.warning("[llm.planner] task_id=%s LLM returned non-list, ignoring", state.get("task_id", ""))
                 return []
-            sanitized = self._sanitize_skill_plan(parsed, state["task_id"])
+            sanitized = self._apply_search_scene_overrides(
+                self._sanitize_skill_plan(parsed, state["task_id"]),
+                state,
+            )
             logger.info(
                 "[llm.planner] task_id=%s parsed=%d sanitized=%d skills=%s",
                 state.get("task_id", ""),
@@ -1977,6 +1992,36 @@ class OpenTHULangGraphAgent:
             normalized.insert(first_schedule_index, semester_probe)
 
         return normalized[:8]
+
+    def _search_scene_prefers_general(self, state: AgentState) -> bool:
+        session = state.get("session", {})
+        if not isinstance(session, dict):
+            return False
+        return str(session.get("search_scene", "")).strip().lower() == "general"
+
+    def _apply_search_scene_overrides(
+        self,
+        plan: list[dict[str, Any]],
+        state: AgentState,
+    ) -> list[dict[str, Any]]:
+        if not plan or not self._search_scene_prefers_general(state):
+            return plan
+        overridden: list[dict[str, Any]] = []
+        for item in plan:
+            if item.get("skill_name") != "get_campus_activities":
+                overridden.append(item)
+                continue
+            args = dict(item.get("args") or {})
+            query = str(args.get("query") or state.get("user_input", "")).strip()
+            overridden.append(
+                self._build_skill_invocation(
+                    skill_name="search",
+                    task_id=state["task_id"],
+                    args={"query": query, "scene": "general"},
+                    description="按通用网页搜索范围检索相关信息。",
+                )
+            )
+        return overridden
 
     def _assess_skill_risk(
         self,

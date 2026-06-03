@@ -110,6 +110,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   init {
     runtime.boot()
+    val initialConnection = runtime.snapshot()
+    runtime.connectToGateway(
+      host = initialConnection.host.ifBlank { "10.0.2.2" },
+      port = initialConnection.port.takeIf { it > 0 } ?: 18789,
+      tlsEnabled = initialConnection.tlsEnabled,
+    )
     selectedConversationId = runtime.activeConversationId()
     val bootMessages = runtime.chatMessages()
     conversations[selectedConversationId] =
@@ -171,13 +177,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun updateTlsEnabled(enabled: Boolean) {
     tlsEnabled = enabled
+    runtime.updateGatewayTls(enabled)
   }
 
+  fun updateConfiguredModel(model: String) {
+    runtime.updateConfiguredModel(model)
+  }
+
+  fun configuredModel(): String = runtime.configuredModel()
+
   fun connectToGateway() {
-    val host = hostText.trim().ifEmpty { "10.0.2.2" }
-    val port = portText.toIntOrNull() ?: 18789
-    runtime.connectToGateway(host = host, port = port, tlsEnabled = tlsEnabled)
+    runtime.reconnectGateway()
     selectedDestination = AppDestination.Planning
+  }
+
+  fun reconnectGateway() {
+    runtime.reconnectGateway()
   }
 
   fun toggleCapability(
@@ -221,6 +236,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun deletePreference(index: Int): Boolean =
     runtime.deleteLongPreference(index)
+
+  fun updatePreference(
+    index: Int,
+    preference: String,
+  ): Boolean =
+    runtime.updateLongPreference(index, preference)
 
   fun snoozeAction(actionId: String): Boolean {
     val ok = runtime.snoozeAction(actionId)

@@ -230,6 +230,23 @@ def build_default_registry() -> SkillRegistry:
             False,
             session_required=True,
             args_schema={"course_ids": "list[string]"},
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "course_ids": {"type": "array", "items": {"type": "string"}},
+                    "semester_id": {"type": "string"},
+                    "include_submitted": {"type": "boolean"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                    "locale": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
             when_to_use="Use for assignment and deadline lists exposed by the normal course-info API, not the Android Tsinghua Learn homework crawler.",
             example_utterances=[
                 "帮我获取当前作业和DDL",
@@ -347,6 +364,8 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "homework_id": {"type": "string"},
+                    "homework_title": {"type": "string"},
+                    "lookup_hint": {"type": "string"},
                     "homework_detail_url": {"type": "string"},
                     "learn_base_url": {"type": "string"},
                     "session_cookie": {"type": "string"},
@@ -377,6 +396,8 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "homework_id": {"type": "string"},
+                    "homework_title": {"type": "string"},
+                    "lookup_hint": {"type": "string"},
                     "xszyid": {"type": "string"},
                     "student_homework_id": {"type": "string"},
                     "file_path": {"type": "string"},
@@ -412,6 +433,8 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "homework_id": {"type": "string"},
+                    "homework_title": {"type": "string"},
+                    "lookup_hint": {"type": "string"},
                     "zyid": {"type": "string"},
                     "homework_zyid": {"type": "string"},
                     "xszyid": {"type": "string"},

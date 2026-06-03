@@ -65,6 +65,7 @@ class HomeworkSkillExecutor(
   fun execute(action: SystemAction): ActionExecutionReport =
     when (action.id.substringBefore("#")) {
       "get_homework_cookie" -> executeGetHomeworkCookie(action)
+      "get_assignments" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = true)
       "crawl_course_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = false)
       "crawl_unsubmitted_homeworks" -> executeCrawlCourseHomeworks(action, unsubmittedOnly = true)
       "preview_homework_attachments" -> executePreviewHomeworkAttachments(action)
@@ -322,17 +323,21 @@ class HomeworkSkillExecutor(
         semantic = "homework_cookie_login_required",
       )
     }
+    val lookupHint = homeworkLookupHint(action)
     val requestedId = readActionString(action, "homework_id")
-    if (requestedId.isBlank()) {
+    val cachedHomework =
+      findCachedHomework(requestedId)
+        ?: findCachedHomeworkByHint(lookupHint)
+    val resolvedHomeworkId = firstNonBlank(requestedId, cachedHomework?.homeworkId.orEmpty(), cachedHomework?.studentHomeworkId.orEmpty())
+    if (resolvedHomeworkId.isBlank()) {
       return homeworkFailure("homework_id is required.", "missing_homework_id", recoverable = false)
     }
-    val cachedHomework = findCachedHomework(requestedId)
     val xszyid =
       firstNonBlank(
         readActionString(action, "xszyid"),
         readActionString(action, "student_homework_id"),
         cachedHomework?.studentHomeworkId.orEmpty(),
-        requestedId,
+        resolvedHomeworkId,
       )
     val fileRef = readActionString(action, "file_path")
     val fileUri = readActionString(action, "file_uri")
@@ -347,7 +352,7 @@ class HomeworkSkillExecutor(
       val openUrl =
         readActionString(action, "homework_detail_url").ifBlank {
           cachedHomework?.detailUrl.orEmpty().ifBlank {
-            "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$requestedId"
+            "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$resolvedHomeworkId"
           }
         }
       openWebPage(openUrl)
@@ -360,7 +365,7 @@ class HomeworkSkillExecutor(
           mapOf(
             "status" to "awaiting_file_selection",
             "reason" to "missing_file",
-            "homework_id" to requestedId,
+            "homework_id" to resolvedHomeworkId,
             "xszyid" to xszyid,
             "opened_url" to openUrl,
           ),
@@ -385,7 +390,7 @@ class HomeworkSkillExecutor(
       val openUrl =
         readActionString(action, "homework_detail_url").ifBlank {
           cachedHomework?.detailUrl.orEmpty().ifBlank {
-            "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$requestedId"
+            "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$resolvedHomeworkId"
           }
         }
       openWebPage(openUrl)
@@ -397,7 +402,7 @@ class HomeworkSkillExecutor(
         metadata =
           mapOf(
             "status" to "uploaded",
-            "homework_id" to requestedId,
+            "homework_id" to resolvedHomeworkId,
             "xszyid" to xszyid,
             "attachment_token" to token,
             "file_name" to filePart.fileName,
@@ -408,12 +413,12 @@ class HomeworkSkillExecutor(
     }.getOrElse { throwable ->
       homeworkAuthFailure(
         throwable,
-        extra = mapOf("homework_id" to requestedId, "xszyid" to xszyid),
+        extra = mapOf("homework_id" to resolvedHomeworkId, "xszyid" to xszyid),
       ) ?: homeworkFailure(
         message = "Upload homework attachment failed: ${throwable.message ?: "unknown"}",
         reason = "upload_failed",
         recoverable = true,
-        extra = mapOf("homework_id" to requestedId, "xszyid" to xszyid, "exception" to (throwable.message ?: "unknown")),
+        extra = mapOf("homework_id" to resolvedHomeworkId, "xszyid" to xszyid, "exception" to (throwable.message ?: "unknown")),
       )
     }
   }
@@ -439,7 +444,15 @@ class HomeworkSkillExecutor(
     }
     val requestedId = readActionString(action, "homework_id")
     val requestedXszyid = readActionString(action, "xszyid")
-    val cachedHomework = findCachedHomework(firstNonBlank(requestedId, requestedXszyid))
+    val lookupHint = homeworkLookupHint(action)
+    var cachedHomework =
+      findCachedHomework(firstNonBlank(requestedId, requestedXszyid))
+        ?: findCachedHomeworkByHint(lookupHint)
+    if (cachedHomework == null && requestedId.isBlank() && requestedXszyid.isBlank()) {
+      val crawlReport = executeCrawlCourseHomeworks(action, unsubmittedOnly = true)
+      if (!crawlReport.success) return crawlReport
+      cachedHomework = findCachedHomeworkByHint(lookupHint) ?: singleCachedUnsubmittedHomework()
+    }
     val xszyid = firstNonBlank(requestedXszyid, cachedHomework?.studentHomeworkId.orEmpty(), requestedId)
     val zyid =
       firstNonBlank(
@@ -726,16 +739,58 @@ class HomeworkSkillExecutor(
   private fun findCachedHomework(id: String): HomeworkRecord? {
     val normalized = normalizeNullableText(id)
     if (normalized.isBlank()) return null
+    return readCachedHomeworkRecords().firstOrNull { record ->
+      normalized == record.homeworkId || normalized == record.studentHomeworkId
+    }
+  }
+
+  private fun findCachedHomeworkByHint(hint: String): HomeworkRecord? {
+    val normalizedHint = normalizeForHomeworkMatch(hint)
+    if (normalizedHint.isBlank()) return null
+    val records = readCachedHomeworkRecords()
+    if (records.isEmpty()) return null
+    records.firstOrNull { record ->
+      val normalizedTitle = normalizeForHomeworkMatch(record.title)
+      normalizedTitle.isNotBlank() && (normalizedHint.contains(normalizedTitle) || normalizedTitle.contains(normalizedHint))
+    }?.let { return it }
+
+    val tokens = homeworkMatchTokens(hint)
+    if (tokens.isEmpty()) return null
+    return records
+      .map { record ->
+        val searchable =
+          normalizeForHomeworkMatch(
+            listOf(record.title, record.courseName, record.deadline, record.courseNo, record.teacherName)
+              .joinToString(" "),
+          )
+        val tokenScore = tokens.count { token -> searchable.contains(token) }
+        val statusScore = if (!record.submitted) 2 else 0
+        val titleScore = if (tokens.any { token -> normalizeForHomeworkMatch(record.title).contains(token) }) 2 else 0
+        record to (tokenScore + statusScore + titleScore)
+      }
+      .filter { (_, score) -> score > 0 }
+      .maxByOrNull { (_, score) -> score }
+      ?.first
+  }
+
+  private fun singleCachedUnsubmittedHomework(): HomeworkRecord? {
+    val unsubmitted = readCachedHomeworkRecords().filter { !it.submitted }
+    return unsubmitted.singleOrNull()
+  }
+
+  private fun readCachedHomeworkRecords(): List<HomeworkRecord> {
     val file = homeworkCacheFile()
-    if (!file.exists()) return null
+    if (!file.exists()) return emptyList()
     return runCatching {
       val arr = JSONObject(file.readText(Charsets.UTF_8)).optJSONArray("homeworks") ?: JSONArray()
+      val result = mutableListOf<HomeworkRecord>()
       for (i in 0 until arr.length()) {
         val item = arr.optJSONObject(i) ?: continue
         val zyid = normalizeNullableText(item.optString("zyid")).ifBlank { normalizeNullableText(item.optString("homework_id")) }
         val xszyid = normalizeNullableText(item.optString("xszyid")).ifBlank { normalizeNullableText(item.optString("student_homework_id")) }
-        if (normalized == zyid || normalized == xszyid) {
-          return@runCatching HomeworkRecord(
+        if (zyid.isBlank() && xszyid.isBlank()) continue
+        result +=
+          HomeworkRecord(
             homeworkId = zyid,
             studentHomeworkId = xszyid,
             title = normalizeNullableText(item.optString("homework_title")).ifBlank { normalizeNullableText(item.optString("title")) },
@@ -753,11 +808,34 @@ class HomeworkSkillExecutor(
             sourceEndpoint = normalizeNullableText(item.optString("source_endpoint")),
             submitUrl = normalizeNullableText(item.optString("submit_url")),
           )
-        }
       }
-      null
-    }.getOrNull()
+      result
+    }.getOrElse { emptyList() }
   }
+
+  private fun homeworkLookupHint(action: SystemAction): String =
+    firstNonBlank(
+      readActionString(action, "lookup_hint"),
+      readActionString(action, "homework_title"),
+      readActionString(action, "title"),
+      readActionString(action, "query"),
+      action.title,
+      action.summary,
+    )
+
+  private fun normalizeForHomeworkMatch(value: String): String =
+    value
+      .lowercase()
+      .replace(Regex("""\.[a-z0-9]{1,8}\b"""), " ")
+      .replace(Regex("""[^\p{L}\p{N}\u4e00-\u9fff]+"""), " ")
+      .trim()
+
+  private fun homeworkMatchTokens(value: String): List<String> =
+    normalizeForHomeworkMatch(value)
+      .split(Regex("""\s+"""))
+      .map { it.trim() }
+      .filter { token -> token.length >= 2 && token !in setOf("提交", "递交", "作业", "homework", "assignment", "upload", "submit") }
+      .distinct()
 
   private fun postForm(
     url: String,

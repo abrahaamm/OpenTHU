@@ -86,6 +86,7 @@ class OpenCrayRuntime(
 
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
+  @Volatile private var gatewayHeartbeatRunning = false
   @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
   private val serverSummaryTaskIds = Collections.synchronizedSet(mutableSetOf<String>())
   /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
@@ -156,6 +157,22 @@ class OpenCrayRuntime(
       current.copy(
         memoryRecords = memoryRecords,
         recentEvents = listOf("Preference deleted: ${removed.value.take(32)}") + current.recentEvents,
+      ),
+    )
+    return true
+  }
+
+  fun updateLongPreference(
+    index: Int,
+    preference: String,
+  ): Boolean {
+    val current = snapshot()
+    val (memoryRecords, updated) = memoryManager.updateLongPreferenceAt(current.memoryRecords, index, preference)
+    if (updated == null) return false
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = memoryRecords,
+        recentEvents = listOf("Preference updated: ${updated.value.take(32)}") + current.recentEvents,
       ),
     )
     return true
@@ -250,6 +267,7 @@ class OpenCrayRuntime(
     // Prefer the same plan/execute pipeline as chat so quick skills are genuinely usable.
     val quickGoal =
       when (skillId) {
+        "get_assignments" -> "请获取当前课程作业和 DDL"
         "get_campus_activities" -> "请获取最近校园活动并给出摘要"
         "read_notifications" -> "请读取当前未读通知并总结"
         "create_reminder" -> "请创建提醒事项"
@@ -319,33 +337,108 @@ class OpenCrayRuntime(
     tlsEnabled: Boolean,
   ) {
     runtimeRepository.updateConnectionConfig(host = host, port = port, tlsEnabled = tlsEnabled)
-    runtimeRepository.updateConnectionStatus("Connecting to $host:$port ...")
+    runtimeRepository.updateConnectionStatus("连接到服务器...")
     runtimeRepository.appendEvent("Gateway pairing started: $host:$port")
 
     thread(name = "opencray-gateway-register", isDaemon = true) {
-      val result =
-        gatewayClient.registerDevice(
-          config = currentGatewayConfig(),
-          userId = "android_user",
-          deviceId = deviceId,
-          capabilities = supportedGatewayCapabilities(),
-        )
-      if (result.success) {
-        gatewayRegistered = true
-        runtimeRepository.updateConnectionStatus("Connected to $host:$port")
-        runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
-        chatRepository.appendMessage(ChatRole.System, "Agent-Core 连接成功，后续将走服务端任务分发。")
-      } else {
-        gatewayRegistered = false
-        runtimeRepository.updateConnectionStatus("Gateway connection failed")
-        runtimeRepository.appendEvent("Gateway register failed: ${result.code} ${result.message}")
-        chatRepository.appendMessage(
-          ChatRole.System,
-          "Agent-Core 连接失败（${result.code}），将继续使用本地链路。",
-        )
+      var lastResultCode = "NETWORK_ERROR"
+      var lastMessage = ""
+      for (attempt in 1..3) {
+        runtimeRepository.updateConnectionStatus("连接到服务器... 第 $attempt/3 次")
+        val result =
+          gatewayClient.registerDevice(
+            config = currentGatewayConfig(),
+            userId = "android_user",
+            deviceId = deviceId,
+            capabilities = supportedGatewayCapabilities(),
+          )
+        if (result.success) {
+          gatewayRegistered = true
+          runtimeRepository.updateConnectionStatus("已连接服务器")
+          runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
+          chatRepository.appendMessage(ChatRole.System, "Agent-Core 连接成功，后续将走服务端任务分发。")
+          startGatewayHeartbeatLoop()
+          return@thread
+        }
+        lastResultCode = result.code
+        lastMessage = result.message
+        runtimeRepository.appendEvent("Gateway register attempt $attempt failed: ${result.code} ${result.message}")
+        Thread.sleep(700L * attempt)
+      }
+
+      gatewayRegistered = false
+      runtimeRepository.updateConnectionStatus("服务器未连接")
+      runtimeRepository.appendEvent("Gateway register failed after retries: $lastResultCode $lastMessage")
+      chatRepository.appendMessage(
+        ChatRole.System,
+        "Agent-Core 连接失败（$lastResultCode），将继续使用本地链路。点击顶部连接状态可重试。",
+      )
+    }
+  }
+
+  private fun startGatewayHeartbeatLoop() {
+    if (gatewayHeartbeatRunning) return
+    gatewayHeartbeatRunning = true
+    thread(name = "opencray-gateway-heartbeat", isDaemon = true) {
+      try {
+        while (gatewayRegistered) {
+          Thread.sleep(30_000L)
+          val result = gatewayClient.healthCheck(currentGatewayConfig())
+          if (result.success) {
+            runtimeRepository.updateConnectionStatus("已连接服务器")
+          } else {
+            gatewayRegistered = false
+            gatewayHeartbeatRunning = false
+            runtimeRepository.updateConnectionStatus("连接到服务器...")
+            runtimeRepository.appendEvent("Gateway heartbeat failed: ${result.code} ${result.message}")
+            connectToGateway(
+              host = snapshot().host,
+              port = snapshot().port,
+              tlsEnabled = snapshot().tlsEnabled,
+            )
+            return@thread
+          }
+        }
+      } finally {
+        gatewayHeartbeatRunning = false
       }
     }
   }
+
+  fun reconnectGateway() {
+    val current = snapshot()
+    connectToGateway(
+      host = current.host.ifBlank { "10.0.2.2" },
+      port = current.port.takeIf { it > 0 } ?: 18789,
+      tlsEnabled = current.tlsEnabled,
+    )
+  }
+
+  fun updateGatewayTls(enabled: Boolean) {
+    val current = snapshot()
+    runtimeRepository.updateConnectionConfig(
+      host = current.host.ifBlank { "10.0.2.2" },
+      port = current.port.takeIf { it > 0 } ?: 18789,
+      tlsEnabled = enabled,
+    )
+    if (gatewayRegistered) {
+      reconnectGateway()
+    }
+  }
+
+  fun updateConfiguredModel(model: String) {
+    val normalized = model.trim().ifBlank { "gpt-4.1-mini" }
+    appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+      .edit()
+      .putString("llm_model", normalized)
+      .apply()
+  }
+
+  fun configuredModel(): String =
+    appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+      .getString("llm_model", "gpt-4.1-mini")
+      .orEmpty()
+      .ifBlank { "gpt-4.1-mini" }
 
   fun setCapabilityEnabled(
     capabilityId: String,
@@ -909,11 +1002,18 @@ class OpenCrayRuntime(
   private fun agentCoreUnavailableMessage(): String =
     "Agent-Core 没有连接好，无法执行任务。请先在设置里连接 Agent-Core；如果只是普通聊天，也需要先配置可用的模型服务。"
 
-  private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
-    chatRepository.getMessages()
+  private fun buildGatewayChatHistory(limit: Int = 20): List<Map<String, String>> {
+    val messages =
+      chatRepository.getMessages()
       .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
       .dropLast(1)
-      .takeLast(limit)
+    val selected =
+      if (messages.size <= limit) {
+        messages
+      } else {
+        messages.take(2) + messages.takeLast((limit - 2).coerceAtLeast(0))
+      }
+    return selected
       .map { message ->
         mapOf(
           "role" to when (message.role) {
@@ -924,12 +1024,20 @@ class OpenCrayRuntime(
           "text" to message.text,
         )
       }
+  }
 
-  private fun localChatHistoryForLlm(limit: Int = 8): List<Map<String, String>> =
-    chatRepository.getMessages()
+  private fun localChatHistoryForLlm(limit: Int = 12): List<Map<String, String>> {
+    val messages =
+      chatRepository.getMessages()
       .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
       .dropLast(1)
-      .takeLast(limit)
+    val selected =
+      if (messages.size <= limit) {
+        messages
+      } else {
+        messages.take(2) + messages.takeLast((limit - 2).coerceAtLeast(0))
+      }
+    return selected
       .map { message ->
         mapOf(
           "role" to when (message.role) {
@@ -940,6 +1048,7 @@ class OpenCrayRuntime(
           "text" to message.text.take(1000),
         )
       }
+  }
 
   private fun localLlmConfig(): LocalLlmConfig? {
     val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
@@ -991,6 +1100,7 @@ class OpenCrayRuntime(
       "get_semesters",
       "get_courses",
       "get_course_schedule",
+      "get_assignments",
       "get_campus_activities",
       "search",
       "get_homework_cookie",
@@ -1855,6 +1965,7 @@ class OpenCrayRuntime(
       "get_courses" -> "整理课程列表，筛出本次目标真正相关的课程。"
       "get_semesters" -> "确认学期范围，再继续查询课表、课程或作业。"
       "get_academic_calendar" -> "读取校历节点，把考试、假期和关键截止时间拆成后续计划。"
+      "get_assignments" -> "拉取课程 DDL 与作业列表，优先处理未提交或临近截止项。"
       "crawl_course_homeworks",
       "crawl_unsubmitted_homeworks" -> "核对作业标题、课程和截止时间，优先处理未提交或临近截止项。"
       "read_notifications" -> "读取通知后，只保留需要行动、提醒或加入日历的信息。"
@@ -1917,6 +2028,8 @@ class OpenCrayRuntime(
       "goal" to task.goal.take(160),
       "confirmation" to if (action.requiresApproval) "需要确认" else "可自动执行",
       "confidence" to "${action.confidence}%",
+      "risk" to action.riskLevel,
+      "recommendation" to recommendationTier(action),
     )
     val target = actionValue(action, "title", "label", "name", "query", "keyword")
     val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
@@ -1924,6 +2037,16 @@ class OpenCrayRuntime(
     if (time.isNotBlank()) metadata["time"] = time.take(80)
     return metadata
   }
+
+  private fun recommendationTier(action: SystemAction): String =
+    when {
+      action.status == "ignored" -> "已忽略"
+      action.status == "snoozed" -> "稍后处理"
+      action.requiresApproval || action.riskLevel.equals("high", ignoreCase = true) -> "强提醒"
+      action.confidence >= 80 -> "强推荐"
+      action.confidence >= 60 -> "中推荐"
+      else -> "弱推荐"
+    }
 
   private fun actionPlanningCard(
     task: AgentTask,
@@ -2004,6 +2127,7 @@ class OpenCrayRuntime(
         "get_courses" -> "课程列表"
         "get_semesters" -> "学期信息"
         "get_academic_calendar" -> "校历信息"
+        "get_assignments" -> "课程 DDL"
         "crawl_course_homeworks" -> "作业列表"
         "crawl_unsubmitted_homeworks" -> "未交作业"
         "create_calendar_event" -> "日历事项"
