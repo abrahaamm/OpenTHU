@@ -19,11 +19,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
@@ -60,9 +57,6 @@ class MainActivity : AppCompatActivity() {
     private const val PREF_TIMEZONE = "timezone"
     private const val PREF_TIMEZONE_FOLLOW_SYSTEM = "timezone_follow_system"
   }
-
-  private val modelOptions =
-    listOf("gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "moonshot-v1-8k", "deepseek-chat")
 
   private lateinit var viewModel: MainViewModel
   private lateinit var markwon: Markwon
@@ -135,7 +129,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var planningDeveloperFlowSection: LinearLayout
   private lateinit var planningDeveloperToggleButton: Button
   private lateinit var openAiKeyInput: EditText
-  private lateinit var llmModelSpinner: Spinner
+  private lateinit var llmModelInput: EditText
   private lateinit var llmBaseUrlInput: EditText
   private lateinit var userIdInput: EditText
   private lateinit var webvpnCookieInput: EditText
@@ -309,7 +303,7 @@ class MainActivity : AppCompatActivity() {
     planningDeveloperFlowSection = findViewById(R.id.planning_developer_flow_section)
     planningDeveloperToggleButton = findViewById(R.id.planning_dev_toggle_button)
     openAiKeyInput = findViewById(R.id.setting_openai_key_input)
-    llmModelSpinner = findViewById(R.id.setting_llm_model_input)
+    llmModelInput = findViewById(R.id.setting_llm_model_input)
     llmBaseUrlInput = findViewById(R.id.setting_llm_base_url_input)
     userIdInput = findViewById(R.id.setting_user_id_input)
     webvpnCookieInput = findViewById(R.id.setting_webvpn_cookie_input)
@@ -333,15 +327,7 @@ class MainActivity : AppCompatActivity() {
     adbSerialInput = findViewById(R.id.setting_adb_serial_input)
     timezoneFollowSystemToggle = findViewById(R.id.setting_timezone_follow_system_toggle)
     timezoneInput = findViewById(R.id.setting_timezone_input)
-    configureModelSpinner()
     loadSettingsInputs()
-  }
-
-  private fun configureModelSpinner() {
-    llmModelSpinner.adapter =
-      ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, modelOptions).apply {
-        setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-      }
   }
 
   private fun decorateUi() {
@@ -444,6 +430,7 @@ class MainActivity : AppCompatActivity() {
     val settingInputs =
       listOf(
         openAiKeyInput,
+        llmModelInput,
         llmBaseUrlInput,
         userIdInput,
         webvpnCookieInput,
@@ -469,21 +456,6 @@ class MainActivity : AppCompatActivity() {
     settingInputs.forEach { input ->
       input.syncToViewModel { scheduleSettingsAutoSave() }
     }
-    llmModelSpinner.onItemSelectedListener =
-      object : AdapterView.OnItemSelectedListener {
-        override fun onItemSelected(
-          parent: AdapterView<*>?,
-          view: View?,
-          position: Int,
-          id: Long,
-        ) {
-          val model = modelOptions.getOrNull(position) ?: "gpt-4.1-mini"
-          viewModel.updateConfiguredModel(model)
-          scheduleSettingsAutoSave()
-        }
-
-        override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-      }
     tlsToggle.setOnCheckedChangeListener { _, isChecked ->
       viewModel.updateTlsEnabled(isChecked)
       scheduleSettingsAutoSave()
@@ -2158,7 +2130,7 @@ class MainActivity : AppCompatActivity() {
     )
     tlsToggle.isChecked = pref.getBoolean(PREF_TLS_ENABLED, state.tlsEnabled)
     openAiKeyInput.setText(pref.getString("openai_api_key", ""))
-    setSelectedModel(pref.getString("llm_model", "gpt-4.1-mini").orEmpty())
+    setModelInputText(pref.getString("llm_model", "gpt-4.1-mini").orEmpty())
     llmBaseUrlInput.setText(pref.getString("llm_base_url", ""))
     userIdInput.setText(pref.getString("user_id", "demo_user"))
     webvpnCookieInput.setText(pref.getString("webvpn_cookie", ""))
@@ -2258,12 +2230,11 @@ class MainActivity : AppCompatActivity() {
   private fun systemTimezoneId(): String = ZoneId.systemDefault().id
 
   private fun selectedModel(): String =
-    (llmModelSpinner.selectedItem as? String)?.trim()?.ifBlank { null } ?: "gpt-4.1-mini"
+    llmModelInput.text.toString().trim().ifBlank { "gpt-4.1-mini" }
 
-  private fun setSelectedModel(model: String) {
+  private fun setModelInputText(model: String) {
     val normalized = model.trim().ifBlank { "gpt-4.1-mini" }
-    val index = modelOptions.indexOf(normalized).takeIf { it >= 0 } ?: 0
-    llmModelSpinner.setSelection(index)
+    llmModelInput.setText(normalized)
   }
 
   private fun setPlanningDetailsVisible(visible: Boolean) {
