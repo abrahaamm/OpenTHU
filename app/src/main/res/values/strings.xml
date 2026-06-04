@@ -119,6 +119,7 @@
     <string name="setting_adb_bin_label">ADB 路径</string>
     <string name="setting_adb_serial_label">ADB 设备序列号</string>
     <string name="setting_timezone_label">日历时区</string>
+    <string name="setting_timezone_follow_system">跟随系统时区</string>
 
     <string name="host_description">校园数据源服务地址，用于连接 Agent-Core 或本地网关。</string>
     <string name="port_description">校园数据源服务端口，通常与服务地址配套填写。</string>

@@ -1,6 +1,7 @@
 package ai.opencray.app
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.domain.model.AgentTask
@@ -109,6 +110,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   init {
+    loadSavedConnectionConfig(app)
     runtime.boot()
     val initialConnection = runtime.snapshot()
     runtime.connectToGateway(
@@ -180,6 +182,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.updateGatewayTls(enabled)
   }
 
+  fun applyConnectionDraft(reconnectIfRegistered: Boolean = true): Boolean {
+    val host = hostText.trim()
+    val port = portText.trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: return false
+    if (host.isBlank()) return false
+    hostText = host
+    portText = port.toString()
+    runtime.applyGatewayConfig(
+      host = host,
+      port = port,
+      tlsEnabled = tlsEnabled,
+      reconnectIfRegistered = reconnectIfRegistered,
+    )
+    return true
+  }
+
   fun updateConfiguredModel(model: String) {
     runtime.updateConfiguredModel(model)
   }
@@ -187,12 +204,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun configuredModel(): String = runtime.configuredModel()
 
   fun connectToGateway() {
-    runtime.reconnectGateway()
+    if (applyConnectionDraft(reconnectIfRegistered = false)) {
+      runtime.reconnectGateway()
+    }
     selectedDestination = AppDestination.Planning
   }
 
   fun reconnectGateway() {
     runtime.reconnectGateway()
+  }
+
+  private fun loadSavedConnectionConfig(app: Application) {
+    val pref = app.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    val current = runtime.snapshot()
+    val savedHost = pref.getString("host", current.host).orEmpty().trim().ifBlank { current.host.ifBlank { "10.0.2.2" } }
+    val savedPort =
+      (
+        if (pref.contains("port")) {
+          pref.getInt("port", current.port)
+        } else {
+          current.port
+        }
+      ).takeIf { it in 1..65535 } ?: 18789
+    val savedTls = pref.getBoolean("tls_enabled", current.tlsEnabled)
+    hostText = savedHost
+    portText = savedPort.toString()
+    tlsEnabled = savedTls
+    runtime.applyGatewayConfig(
+      host = savedHost,
+      port = savedPort,
+      tlsEnabled = savedTls,
+      reconnectIfRegistered = false,
+    )
   }
 
   fun toggleCapability(

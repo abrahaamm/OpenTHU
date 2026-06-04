@@ -48,11 +48,17 @@ import ai.opencray.app.feature.chat.ChatRole
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.image.ImagesPlugin
+import java.time.ZoneId
 
 class MainActivity : AppCompatActivity() {
   companion object {
     private const val CALENDAR_PERMISSION_REQUEST = 1201
     private const val PREF_SHOW_PLANNING_DETAILS = "show_planning_details"
+    private const val PREF_HOST = "host"
+    private const val PREF_PORT = "port"
+    private const val PREF_TLS_ENABLED = "tls_enabled"
+    private const val PREF_TIMEZONE = "timezone"
+    private const val PREF_TIMEZONE_FOLLOW_SYSTEM = "timezone_follow_system"
   }
 
   private val modelOptions =
@@ -151,6 +157,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var memoryHalfLifeInput: EditText
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
+  private lateinit var timezoneFollowSystemToggle: CheckBox
   private lateinit var timezoneInput: EditText
   private var showPlanningDetails: Boolean = false
   private var selectedChatFileUri: Uri? = null
@@ -324,6 +331,7 @@ class MainActivity : AppCompatActivity() {
     memoryHalfLifeInput = findViewById(R.id.setting_memory_half_life_input)
     adbBinInput = findViewById(R.id.setting_adb_bin_input)
     adbSerialInput = findViewById(R.id.setting_adb_serial_input)
+    timezoneFollowSystemToggle = findViewById(R.id.setting_timezone_follow_system_toggle)
     timezoneInput = findViewById(R.id.setting_timezone_input)
     configureModelSpinner()
     loadSettingsInputs()
@@ -481,6 +489,13 @@ class MainActivity : AppCompatActivity() {
       scheduleSettingsAutoSave()
       render()
     }
+    timezoneFollowSystemToggle.setOnCheckedChangeListener { _, isChecked ->
+      if (isChecked) {
+        timezoneInput.setText(systemTimezoneId())
+      }
+      syncTimezoneInputState()
+      scheduleSettingsAutoSave()
+    }
   }
 
   private fun scheduleSettingsAutoSave() {
@@ -633,7 +648,6 @@ class MainActivity : AppCompatActivity() {
     connectButton.setOnClickListener {
       viewModel.updateHost(hostInput.text.toString())
       viewModel.updatePort(portInput.text.toString())
-      viewModel.updateTlsEnabled(tlsToggle.isChecked)
       viewModel.connectToGateway()
       render()
     }
@@ -710,8 +724,20 @@ class MainActivity : AppCompatActivity() {
       render()
     }
 
-    hostInput.syncToViewModel { value -> viewModel.updateHost(value) }
-    portInput.syncToViewModel { value -> viewModel.updatePort(value) }
+    hostInput.syncToViewModel { value ->
+      viewModel.updateHost(value)
+      scheduleSettingsAutoSave()
+    }
+    portInput.syncToViewModel { value ->
+      viewModel.updatePort(value)
+      scheduleSettingsAutoSave()
+    }
+    hostInput.setOnFocusChangeListener { _, hasFocus ->
+      if (!hasFocus) uiRefreshHandler.post { applyConnectionDraftIfIdle() }
+    }
+    portInput.setOnFocusChangeListener { _, hasFocus ->
+      if (!hasFocus) uiRefreshHandler.post { applyConnectionDraftIfIdle() }
+    }
     installSettingsAutoSave()
   }
 
@@ -803,6 +829,7 @@ class MainActivity : AppCompatActivity() {
     if (!hostInput.hasFocus() && hostInput.text.toString() != state.host) hostInput.setText(state.host)
     if (!portInput.hasFocus() && portInput.text.toString() != state.port) portInput.setText(state.port)
     tlsToggle.isChecked = state.tlsEnabled
+    syncTimezoneInputState()
 
     contextSummaryView.text =
       buildString {
@@ -2118,6 +2145,18 @@ class MainActivity : AppCompatActivity() {
   private fun loadSettingsInputs() {
     suppressSettingsAutosave = true
     val pref = getSharedPreferences("openthu_settings", MODE_PRIVATE)
+    val state = viewModel.getUiState()
+    hostInput.setText(pref.getString(PREF_HOST, state.host).orEmpty().ifBlank { state.host })
+    portInput.setText(
+      (
+        if (pref.contains(PREF_PORT)) {
+          pref.getInt(PREF_PORT, state.port.toIntOrNull() ?: 18789)
+        } else {
+          state.port.toIntOrNull() ?: 18789
+        }
+      ).toString(),
+    )
+    tlsToggle.isChecked = pref.getBoolean(PREF_TLS_ENABLED, state.tlsEnabled)
     openAiKeyInput.setText(pref.getString("openai_api_key", ""))
     setSelectedModel(pref.getString("llm_model", "gpt-4.1-mini").orEmpty())
     llmBaseUrlInput.setText(pref.getString("llm_base_url", ""))
@@ -2142,13 +2181,33 @@ class MainActivity : AppCompatActivity() {
     memoryHalfLifeInput.setText(pref.getString("memory_half_life", "30"))
     adbBinInput.setText(pref.getString("adb_bin", "adb"))
     adbSerialInput.setText(pref.getString("adb_serial", ""))
-    timezoneInput.setText(pref.getString("timezone", "UTC"))
+    val followSystemTimezone = pref.getBoolean(PREF_TIMEZONE_FOLLOW_SYSTEM, !pref.contains(PREF_TIMEZONE))
+    timezoneFollowSystemToggle.isChecked = followSystemTimezone
+    timezoneInput.setText(
+      if (followSystemTimezone) {
+        systemTimezoneId()
+      } else {
+        pref.getString(PREF_TIMEZONE, "UTC").orEmpty().ifBlank { systemTimezoneId() }
+      },
+    )
+    syncTimezoneInputState()
     suppressSettingsAutosave = false
   }
 
   private fun persistSettings(): Boolean {
     val pref = getSharedPreferences("openthu_settings", MODE_PRIVATE)
+    val host = hostInput.text.toString().trim()
+    val port = portInput.text.toString().trim().toIntOrNull()?.takeIf { it in 1..65535 }
+    val hasValidConnectionConfig = host.isNotBlank() && port != null
+    val timezone = timezoneInput.text.toString().trim().ifBlank { systemTimezoneId() }
     pref.edit()
+      .apply {
+        if (hasValidConnectionConfig) {
+          putString(PREF_HOST, host)
+          putInt(PREF_PORT, port!!)
+        }
+        putBoolean(PREF_TLS_ENABLED, tlsToggle.isChecked)
+      }
       .putString("openai_api_key", openAiKeyInput.text.toString().trim())
       .putString("llm_model", selectedModel())
       .putString("llm_base_url", llmBaseUrlInput.text.toString().trim())
@@ -2172,10 +2231,31 @@ class MainActivity : AppCompatActivity() {
       .putString("memory_half_life", memoryHalfLifeInput.text.toString().trim())
       .putString("adb_bin", adbBinInput.text.toString().trim())
       .putString("adb_serial", adbSerialInput.text.toString().trim())
-      .putString("timezone", timezoneInput.text.toString().trim())
+      .putBoolean(PREF_TIMEZONE_FOLLOW_SYSTEM, timezoneFollowSystemToggle.isChecked)
+      .putString(PREF_TIMEZONE, timezone)
       .apply()
-    return true
+    return hasValidConnectionConfig
   }
+
+  private fun applyConnectionDraftIfIdle() {
+    if (hostInput.hasFocus() || portInput.hasFocus()) return
+    viewModel.updateHost(hostInput.text.toString())
+    viewModel.updatePort(portInput.text.toString())
+    if (persistSettings() && viewModel.applyConnectionDraft(reconnectIfRegistered = true)) {
+      render()
+    }
+  }
+
+  private fun syncTimezoneInputState() {
+    val followSystemTimezone = timezoneFollowSystemToggle.isChecked
+    timezoneInput.isEnabled = !followSystemTimezone
+    timezoneInput.alpha = if (followSystemTimezone) 0.65f else 1f
+    if (followSystemTimezone && !timezoneInput.hasFocus() && timezoneInput.text.toString() != systemTimezoneId()) {
+      timezoneInput.setText(systemTimezoneId())
+    }
+  }
+
+  private fun systemTimezoneId(): String = ZoneId.systemDefault().id
 
   private fun selectedModel(): String =
     (llmModelSpinner.selectedItem as? String)?.trim()?.ifBlank { null } ?: "gpt-4.1-mini"

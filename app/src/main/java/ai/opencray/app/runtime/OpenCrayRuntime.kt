@@ -38,6 +38,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.time.ZoneId
 import kotlin.concurrent.thread
 import java.util.Collections
 import java.util.UUID
@@ -375,6 +376,24 @@ class OpenCrayRuntime(
         ChatRole.System,
         "Agent-Core 连接失败（$lastResultCode），将继续使用本地链路。点击顶部连接状态可重试。",
       )
+    }
+  }
+
+  fun applyGatewayConfig(
+    host: String,
+    port: Int,
+    tlsEnabled: Boolean,
+    reconnectIfRegistered: Boolean = false,
+  ) {
+    val normalizedHost = host.trim().ifBlank { "10.0.2.2" }
+    val normalizedPort = port.takeIf { it in 1..65535 } ?: 18789
+    runtimeRepository.updateConnectionConfig(
+      host = normalizedHost,
+      port = normalizedPort,
+      tlsEnabled = tlsEnabled,
+    )
+    if (reconnectIfRegistered && gatewayRegistered) {
+      reconnectGateway()
     }
   }
 
@@ -1147,7 +1166,13 @@ class OpenCrayRuntime(
     val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
     val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
-    val timezone = pref.getString("timezone", "").orEmpty().trim()
+    val timezoneFollowSystem = pref.getBoolean("timezone_follow_system", !pref.contains("timezone"))
+    val timezone =
+      if (timezoneFollowSystem) {
+        ZoneId.systemDefault().id
+      } else {
+        pref.getString("timezone", "").orEmpty().trim().ifBlank { ZoneId.systemDefault().id }
+      }
     val memoryContext = buildGatewayMemoryContext()
 
     val session = linkedMapOf<String, Any?>()

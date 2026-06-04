@@ -1454,6 +1454,14 @@
                             style="@style/OpenCraySettingsFieldHelp"
                             android:text="@string/setting_timezone_description" />
 
+                        <CheckBox
+                            android:id="@+id/setting_timezone_follow_system_toggle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/setting_timezone_follow_system"
+                            android:textColor="@color/opencray_ink" />
+
                         <EditText
                             android:id="@+id/setting_timezone_input"
                             android:layout_width="match_parent"
