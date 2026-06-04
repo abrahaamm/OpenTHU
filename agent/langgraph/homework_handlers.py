@@ -731,30 +731,22 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         args = invocation.args
         homework_id = str(args.get("homework_id", "")).strip()
+        submission_session_id = str(args.get("submission_session_id", "")).strip()
         lookup_hint = str(args.get("lookup_hint") or args.get("homework_title") or "").strip()
-        confirmed = _coerce_bool(args.get("confirm_submit"), default=False)
-        if not confirmed:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="APPROVAL_REQUIRED",
-                data={
-                    "status": "awaiting_confirmation",
-                    "high_risk": True,
-                    "message": "confirm_submit=true is required for submit_homework",
-                },
-            )
-        if not homework_id and not lookup_hint:
+        if not homework_id and not lookup_hint and not submission_session_id:
             return self._result(
                 skill_name=invocation.skill_name,
                 request_id=invocation.request_id,
                 code="INVALID_PARAM",
-                data={"status": "invalid_param", "message": "homework_id or lookup_hint is required"},
+                data={"status": "invalid_param", "message": "submission_session_id, homework_id, or lookup_hint is required"},
             )
         attachment_tokens = _coerce_string_list(args.get("attachment_tokens"))
         local_file_paths = _coerce_string_list(args.get("local_file_paths"))
         has_content = any(
             [
+                submission_session_id,
+                homework_id,
+                lookup_hint,
                 str(args.get("submission_text", "")).strip(),
                 str(args.get("file_path", "")).strip(),
                 str(args.get("file_uri", "")).strip(),
@@ -771,7 +763,8 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
             )
         if homework_id:
             args["homework_id"] = homework_id
-        args["confirm_submit"] = True
+        if submission_session_id:
+            args["submission_session_id"] = submission_session_id
         args["attachment_tokens"] = attachment_tokens
         args["local_file_paths"] = local_file_paths
         return self._dispatch_to_bridge(invocation, state)

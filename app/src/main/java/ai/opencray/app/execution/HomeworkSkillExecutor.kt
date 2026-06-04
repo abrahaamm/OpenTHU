@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -56,6 +57,8 @@ private data class HomeworkCourse(
   val courseUrl: String = "",
   val homeworkPageUrl: String = "",
 )
+
+private const val HOMEWORK_SUBMISSION_SESSION_TTL_MS = 2L * 60L * 60L * 1000L
 
 class HomeworkSkillExecutor(
   private val appContext: Context,
@@ -339,61 +342,79 @@ class HomeworkSkillExecutor(
         cachedHomework?.studentHomeworkId.orEmpty(),
         resolvedHomeworkId,
       )
+    val wlkcid =
+      firstNonBlank(
+        readActionString(action, "wlkcid"),
+        readActionString(action, "course_id"),
+        cachedHomework?.courseId.orEmpty(),
+      )
+    if (wlkcid.isBlank()) {
+      return homeworkFailure(
+        "upload_homework_attachment requires wlkcid/course_id. Run crawl_unsubmitted_homeworks first or pass course_id.",
+        "missing_course_id",
+        recoverable = false,
+        extra = mapOf("homework_id" to resolvedHomeworkId, "xszyid" to xszyid),
+      )
+    }
     val fileRef = readActionString(action, "file_path")
     val fileUri = readActionString(action, "file_uri")
     if (fileRef.isBlank() && fileUri.isBlank()) {
-      val pickerIntent =
-        Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-          addCategory(Intent.CATEGORY_OPENABLE)
-          type = "*/*"
-          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-      appContext.startActivity(pickerIntent)
-      val openUrl =
-        readActionString(action, "homework_detail_url").ifBlank {
-          cachedHomework?.detailUrl.orEmpty().ifBlank {
-            "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$resolvedHomeworkId"
-          }
-        }
-      openWebPage(openUrl)
       return ActionExecutionReport(
         success = false,
-        message = "No file provided. Opened file picker and homework page for manual selection.",
+        message = "No file provided. Automatic homework attachment upload requires file_path or file_uri.",
         recoverable = false,
-        semantic = "homework_awaiting_file_selection",
+        semantic = "invalid_param",
         metadata =
           mapOf(
-            "status" to "awaiting_file_selection",
+            "status" to "failed",
             "reason" to "missing_file",
             "homework_id" to resolvedHomeworkId,
             "xszyid" to xszyid,
-            "opened_url" to openUrl,
+            "wlkcid" to wlkcid,
           ),
       )
     }
 
     return runCatching {
       val filePart = resolveFilePart(fileRef, fileUri, readActionString(action, "file_name"))
+      val submitPageUrl =
+        cachedHomework?.submitUrl.orEmpty().ifBlank {
+          "${auth.baseUrl}/f/wlxt/kczy/zy/student/tijiao?wlkcid=$wlkcid&xszyid=$xszyid"
+        }
+      val submitPage = getForm(url = submitPageUrl, auth = auth, referer = submitPageUrl, htmlAccept = true)
+      val form = parseSubmitForm(submitPage)
+      val fields = form.fields.toMutableMap()
+      fields["xszyid"] = xszyid
+      fields["isDeleted"] = fields["isDeleted"].orEmpty().ifBlank { "0" }
+      fields["zynr"] = readActionString(action, "submission_text")
       val responseBody =
         postMultipart(
           url = "${auth.baseUrl}/b/wlxt/kczy/zy/student/tjzy",
           auth = auth,
-          textParts =
-            mapOf(
-              "xszyid" to xszyid,
-              "zynr" to readActionString(action, "submission_text"),
-              "isDeleted" to "0",
-            ),
+          referer = submitPageUrl,
+          textParts = fields,
           filePart = filePart,
+          fileFieldName = form.fileFieldName,
         )
-      val token = "upload_${System.currentTimeMillis()}"
-      val openUrl =
-        readActionString(action, "homework_detail_url").ifBlank {
-          cachedHomework?.detailUrl.orEmpty().ifBlank {
-            "${auth.baseUrl}/f/wlxt/kczy/zy/student/viewZy?zyid=$resolvedHomeworkId"
-          }
-        }
-      openWebPage(openUrl)
+      val nowMs = System.currentTimeMillis()
+      val session =
+        HomeworkSubmissionSession(
+          sessionId = createSubmissionSessionId(action, xszyid),
+          homeworkId = resolvedHomeworkId,
+          zyid = cachedHomework?.homeworkId.orEmpty().ifBlank { resolvedHomeworkId },
+          xszyid = xszyid,
+          wlkcid = wlkcid,
+          homeworkTitle = cachedHomework?.title.orEmpty().ifBlank { lookupHint },
+          courseName = cachedHomework?.courseName.orEmpty(),
+          submitPageUrl = submitPageUrl,
+          formFields = fields,
+          fileFieldName = form.fileFieldName,
+          fileName = filePart.fileName,
+          upstreamResponseExcerpt = responseBody.take(512),
+          createdAtEpochMs = nowMs,
+          expiresAtEpochMs = nowMs + HOMEWORK_SUBMISSION_SESSION_TTL_MS,
+        )
+      persistSubmissionSession(session)
       ActionExecutionReport(
         success = true,
         message = "Homework attachment uploaded successfully.",
@@ -404,35 +425,37 @@ class HomeworkSkillExecutor(
             "status" to "uploaded",
             "homework_id" to resolvedHomeworkId,
             "xszyid" to xszyid,
-            "attachment_token" to token,
+            "wlkcid" to wlkcid,
+            "submission_session_id" to session.sessionId,
             "file_name" to filePart.fileName,
-            "opened_url" to openUrl,
+            "homework_title" to session.homeworkTitle,
+            "course_name" to session.courseName,
+            "submit_page_url" to submitPageUrl,
+            "submit_preview" to buildSubmitPreview(session),
+            "session_expires_at" to Instant.ofEpochMilli(session.expiresAtEpochMs).toString(),
             "upstream_response_excerpt" to responseBody.take(512),
           ),
       )
     }.getOrElse { throwable ->
       homeworkAuthFailure(
         throwable,
-        extra = mapOf("homework_id" to resolvedHomeworkId, "xszyid" to xszyid),
+        extra = mapOf("homework_id" to resolvedHomeworkId, "xszyid" to xszyid, "wlkcid" to wlkcid),
       ) ?: homeworkFailure(
         message = "Upload homework attachment failed: ${throwable.message ?: "unknown"}",
         reason = "upload_failed",
         recoverable = true,
-        extra = mapOf("homework_id" to resolvedHomeworkId, "xszyid" to xszyid, "exception" to (throwable.message ?: "unknown")),
+        extra =
+          mapOf(
+            "homework_id" to resolvedHomeworkId,
+            "xszyid" to xszyid,
+            "wlkcid" to wlkcid,
+            "exception" to (throwable.message ?: "unknown"),
+          ),
       )
     }
   }
 
   private fun executeSubmitHomework(action: SystemAction): ActionExecutionReport {
-    val confirmed = readActionString(action, "confirm_submit").toBooleanStrictOrNull() ?: false
-    if (!confirmed) {
-      return homeworkFailure(
-        message = "Submit blocked: confirm_submit=true is required for high-risk homework submission.",
-        reason = "confirm_submit_required",
-        recoverable = false,
-        semantic = "approval_required",
-      )
-    }
     val auth = resolveHomeworkAuth(action)
     if (!auth.ok) {
       return homeworkFailure(
@@ -442,9 +465,28 @@ class HomeworkSkillExecutor(
         semantic = "homework_cookie_login_required",
       )
     }
+    val requestedSessionId = readActionString(action, "submission_session_id")
     val requestedId = readActionString(action, "homework_id")
     val requestedXszyid = readActionString(action, "xszyid")
     val lookupHint = homeworkLookupHint(action)
+    val session =
+      findSubmissionSession(
+        sessionId = requestedSessionId,
+        homeworkOrStudentId = firstNonBlank(requestedId, requestedXszyid),
+        lookupHint = lookupHint,
+      )
+        ?: return homeworkFailure(
+          message = "submit_homework requires an attachment upload session. Run upload_homework_attachment first.",
+          reason = "missing_submission_session",
+          recoverable = false,
+          extra =
+            mapOf(
+              "submission_session_id" to requestedSessionId,
+              "homework_id" to requestedId,
+              "xszyid" to requestedXszyid,
+              "lookup_hint" to lookupHint,
+            ),
+        )
     var cachedHomework =
       findCachedHomework(firstNonBlank(requestedId, requestedXszyid))
         ?: findCachedHomeworkByHint(lookupHint)
@@ -453,9 +495,11 @@ class HomeworkSkillExecutor(
       if (!crawlReport.success) return crawlReport
       cachedHomework = findCachedHomeworkByHint(lookupHint) ?: singleCachedUnsubmittedHomework()
     }
-    val xszyid = firstNonBlank(requestedXszyid, cachedHomework?.studentHomeworkId.orEmpty(), requestedId)
+    val xszyid = firstNonBlank(session.xszyid, requestedXszyid, cachedHomework?.studentHomeworkId.orEmpty(), requestedId)
     val zyid =
       firstNonBlank(
+        session.zyid,
+        session.homeworkId,
         readActionString(action, "zyid"),
         readActionString(action, "homework_zyid"),
         cachedHomework?.homeworkId.orEmpty(),
@@ -463,6 +507,7 @@ class HomeworkSkillExecutor(
       )
     val wlkcid =
       firstNonBlank(
+        session.wlkcid,
         readActionString(action, "wlkcid"),
         readActionString(action, "course_id"),
         cachedHomework?.courseId.orEmpty(),
@@ -480,31 +525,16 @@ class HomeworkSkillExecutor(
     }
 
     val submissionText = readActionString(action, "submission_text")
-    var fileRef = readActionString(action, "file_path")
-    var fileUri = readActionString(action, "file_uri")
     val localFilePaths = parseCsvOrJsonArray(action.params["local_file_paths"])
-    if (fileRef.isBlank() && fileUri.isBlank() && localFilePaths.isNotEmpty()) {
-      fileRef = localFilePaths.first()
-    }
     val attachmentTokens = parseCsvOrJsonArray(action.params["attachment_tokens"])
-    val hasFile = fileRef.isNotBlank() || fileUri.isNotBlank()
-    if (submissionText.isBlank() && !hasFile && attachmentTokens.isEmpty()) {
-      return homeworkFailure(
-        "submit_homework requires submission_text or file_path/file_uri/local_file_paths or attachment_tokens.",
-        "missing_submission_content",
-        recoverable = false,
-      )
-    }
 
     return runCatching {
-      val filePart = if (hasFile) resolveFilePart(fileRef, fileUri, readActionString(action, "file_name")) else null
-      val submitPageUrl = "${auth.baseUrl}/f/wlxt/kczy/zy/student/tijiao?wlkcid=$wlkcid&xszyid=$xszyid"
-      val submitPage = getForm(url = submitPageUrl, auth = auth, referer = submitPageUrl, htmlAccept = true)
-      val form = parseSubmitForm(submitPage)
-      val fields = form.fields.toMutableMap()
+      val fields = session.formFields.toMutableMap()
       fields["xszyid"] = xszyid
       fields["isDeleted"] = fields["isDeleted"].orEmpty().ifBlank { "0" }
-      fields["zynr"] = submissionText
+      if (submissionText.isNotBlank()) {
+        fields["zynr"] = submissionText
+      }
       val attachmentTokenText = attachmentTokens.joinToString(",")
       if (attachmentTokenText.isNotBlank()) {
         fields["fjids"] = attachmentTokenText
@@ -513,16 +543,12 @@ class HomeworkSkillExecutor(
         postMultipart(
           url = "${auth.baseUrl}/b/wlxt/kczy/zy/student/tjzy",
           auth = auth,
-          referer = submitPageUrl,
+          referer = session.submitPageUrl,
           textParts = fields,
-          filePart = filePart,
-          fileFieldName = form.fileFieldName,
+          filePart = null,
+          fileFieldName = session.fileFieldName,
         )
-      val openUrl =
-        readActionString(action, "homework_detail_url").ifBlank {
-          cachedHomework?.detailUrl.orEmpty().ifBlank { submitPageUrl }
-        }
-      openWebPage(openUrl)
+      removeSubmissionSession(session.sessionId)
       ActionExecutionReport(
         success = true,
         message = "Homework submitted successfully.",
@@ -534,10 +560,13 @@ class HomeworkSkillExecutor(
             "homework_id" to zyid,
             "xszyid" to xszyid,
             "wlkcid" to wlkcid,
+            "submission_session_id" to session.sessionId,
             "submitted_at" to Instant.now().toString(),
             "attachment_tokens" to attachmentTokens,
             "local_file_paths" to localFilePaths,
-            "opened_url" to openUrl,
+            "file_name" to session.fileName,
+            "homework_title" to session.homeworkTitle,
+            "course_name" to session.courseName,
             "upstream_response_excerpt" to responseBody.take(512),
           ),
       )
@@ -582,6 +611,23 @@ class HomeworkSkillExecutor(
   private data class SubmitForm(
     val fields: Map<String, String>,
     val fileFieldName: String,
+  )
+
+  private data class HomeworkSubmissionSession(
+    val sessionId: String,
+    val homeworkId: String,
+    val zyid: String,
+    val xszyid: String,
+    val wlkcid: String,
+    val homeworkTitle: String,
+    val courseName: String,
+    val submitPageUrl: String,
+    val formFields: Map<String, String>,
+    val fileFieldName: String,
+    val fileName: String,
+    val upstreamResponseExcerpt: String,
+    val createdAtEpochMs: Long,
+    val expiresAtEpochMs: Long,
   )
 
   private fun resolveHomeworkAuth(action: SystemAction): HomeworkAuth {
@@ -691,6 +737,8 @@ class HomeworkSkillExecutor(
 
   private fun homeworkCacheFile(): File = File(homeworkCacheDir(), "homeworks.json")
 
+  private fun submissionSessionsFile(): File = File(homeworkCacheDir(), "submission_sessions.json")
+
   private fun persistHomeworkCourses(courses: List<HomeworkCourse>) {
     val root =
       JSONObject()
@@ -734,6 +782,82 @@ class HomeworkSkillExecutor(
         .put("updated_at", Instant.now().toString())
         .put("homeworks", JSONArray(records.map { JSONObject(it.toDataMap()) }))
     homeworkCacheFile().writeText(root.toString(2), Charsets.UTF_8)
+  }
+
+  @Synchronized
+  private fun persistSubmissionSession(session: HomeworkSubmissionSession) {
+    val sessions =
+      readSubmissionSessions(includeExpired = false)
+        .filterNot { existing ->
+          existing.sessionId == session.sessionId ||
+            existing.xszyid == session.xszyid ||
+            (existing.homeworkId.isNotBlank() && existing.homeworkId == session.homeworkId)
+        } + session
+    writeSubmissionSessions(sessions)
+  }
+
+  @Synchronized
+  private fun removeSubmissionSession(sessionId: String) {
+    if (sessionId.isBlank()) return
+    writeSubmissionSessions(readSubmissionSessions(includeExpired = true).filterNot { it.sessionId == sessionId })
+  }
+
+  private fun findSubmissionSession(
+    sessionId: String,
+    homeworkOrStudentId: String,
+    lookupHint: String,
+  ): HomeworkSubmissionSession? {
+    val sessions = readSubmissionSessions(includeExpired = false).sortedByDescending { it.createdAtEpochMs }
+    val normalizedSessionId = normalizeNullableText(sessionId)
+    if (normalizedSessionId.isNotBlank()) {
+      return sessions.firstOrNull { it.sessionId == normalizedSessionId }
+    }
+
+    val normalizedId = normalizeNullableText(homeworkOrStudentId)
+    if (normalizedId.isNotBlank()) {
+      sessions.firstOrNull { session ->
+        normalizedId == session.homeworkId ||
+          normalizedId == session.zyid ||
+          normalizedId == session.xszyid
+      }?.let { return it }
+    }
+
+    val normalizedHint = normalizeForHomeworkMatch(lookupHint)
+    if (normalizedHint.isBlank()) return sessions.singleOrNull()
+    return sessions.firstOrNull { session ->
+      val title = normalizeForHomeworkMatch(session.homeworkTitle)
+      val course = normalizeForHomeworkMatch(session.courseName)
+      (title.isNotBlank() && (normalizedHint.contains(title) || title.contains(normalizedHint))) ||
+        (course.isNotBlank() && normalizedHint.contains(course))
+    }
+  }
+
+  private fun readSubmissionSessions(includeExpired: Boolean = false): List<HomeworkSubmissionSession> {
+    val file = submissionSessionsFile()
+    if (!file.exists()) return emptyList()
+    val nowMs = System.currentTimeMillis()
+    return runCatching {
+      val arr = JSONObject(file.readText(Charsets.UTF_8)).optJSONArray("sessions") ?: JSONArray()
+      val result = mutableListOf<HomeworkSubmissionSession>()
+      for (i in 0 until arr.length()) {
+        val item = arr.optJSONObject(i) ?: continue
+        val session = item.toHomeworkSubmissionSession() ?: continue
+        if (includeExpired || session.expiresAtEpochMs > nowMs) {
+          result += session
+        }
+      }
+      result
+    }.getOrElse { emptyList() }
+  }
+
+  private fun writeSubmissionSessions(sessions: List<HomeworkSubmissionSession>) {
+    val nowMs = System.currentTimeMillis()
+    val active = sessions.filter { it.expiresAtEpochMs > nowMs }
+    val root =
+      JSONObject()
+        .put("updated_at", Instant.now().toString())
+        .put("sessions", JSONArray(active.map { it.toJson() }))
+    submissionSessionsFile().writeText(root.toString(2), Charsets.UTF_8)
   }
 
   private fun findCachedHomework(id: String): HomeworkRecord? {
@@ -1475,6 +1599,82 @@ class HomeworkSkillExecutor(
       put("detail_url", detailUrl)
       put("submit_url", submitUrl)
     }
+
+  private fun HomeworkSubmissionSession.toJson(): JSONObject =
+    JSONObject()
+      .put("submission_session_id", sessionId)
+      .put("homework_id", homeworkId)
+      .put("zyid", zyid)
+      .put("xszyid", xszyid)
+      .put("wlkcid", wlkcid)
+      .put("homework_title", homeworkTitle)
+      .put("course_name", courseName)
+      .put("submit_page_url", submitPageUrl)
+      .put("form_fields", JSONObject(formFields))
+      .put("file_field_name", fileFieldName)
+      .put("file_name", fileName)
+      .put("upstream_response_excerpt", upstreamResponseExcerpt)
+      .put("created_at_epoch_ms", createdAtEpochMs)
+      .put("expires_at_epoch_ms", expiresAtEpochMs)
+
+  private fun JSONObject.toHomeworkSubmissionSession(): HomeworkSubmissionSession? {
+    val sessionId = normalizeNullableText(optString("submission_session_id"))
+    val xszyid = normalizeNullableText(optString("xszyid"))
+    val wlkcid = normalizeNullableText(optString("wlkcid"))
+    if (sessionId.isBlank() || xszyid.isBlank() || wlkcid.isBlank()) return null
+    val createdAt = optLong("created_at_epoch_ms", 0L).takeIf { it > 0L } ?: return null
+    val expiresAt =
+      optLong("expires_at_epoch_ms", 0L)
+        .takeIf { it > 0L }
+        ?: (createdAt + HOMEWORK_SUBMISSION_SESSION_TTL_MS)
+    return HomeworkSubmissionSession(
+      sessionId = sessionId,
+      homeworkId = normalizeNullableText(optString("homework_id")),
+      zyid = normalizeNullableText(optString("zyid")),
+      xszyid = xszyid,
+      wlkcid = wlkcid,
+      homeworkTitle = normalizeNullableText(optString("homework_title")),
+      courseName = normalizeNullableText(optString("course_name")),
+      submitPageUrl = normalizeNullableText(optString("submit_page_url")),
+      formFields = jsonObjectToStringMap(optJSONObject("form_fields")),
+      fileFieldName = normalizeNullableText(optString("file_field_name")).ifBlank { "fileupload" },
+      fileName = normalizeNullableText(optString("file_name")),
+      upstreamResponseExcerpt = normalizeNullableText(optString("upstream_response_excerpt")),
+      createdAtEpochMs = createdAt,
+      expiresAtEpochMs = expiresAt,
+    )
+  }
+
+  private fun jsonObjectToStringMap(obj: JSONObject?): Map<String, String> {
+    if (obj == null) return emptyMap()
+    val result = linkedMapOf<String, String>()
+    val keys = obj.keys()
+    while (keys.hasNext()) {
+      val key = keys.next()
+      result[key] = obj.opt(key)?.toString().orEmpty()
+    }
+    return result
+  }
+
+  private fun createSubmissionSessionId(
+    action: SystemAction,
+    xszyid: String,
+  ): String {
+    val seed = firstNonBlank(action.requestId.orEmpty(), xszyid, System.currentTimeMillis().toString())
+    val safeSeed = Regex("""[^A-Za-z0-9_\-]""").replace(seed, "_").take(40).ifBlank { "session" }
+    return "hws_${safeSeed}_${UUID.randomUUID().toString().take(8)}"
+  }
+
+  private fun buildSubmitPreview(session: HomeworkSubmissionSession): Map<String, Any> =
+    mapOf(
+      "homework_title" to session.homeworkTitle,
+      "course_name" to session.courseName,
+      "file_name" to session.fileName,
+      "homework_id" to session.homeworkId,
+      "xszyid" to session.xszyid,
+      "wlkcid" to session.wlkcid,
+      "session_expires_at" to Instant.ofEpochMilli(session.expiresAtEpochMs).toString(),
+    )
 
   private fun HomeworkCourse.toDataMap(): Map<String, Any> =
     mapOf(

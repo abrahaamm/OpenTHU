@@ -212,32 +212,6 @@ class PythonSkillBridgeExecutorTest {
   }
 
   @Test
-  fun mapsHomeworkSubmitConfirmRequirementToApprovalRequired() {
-    val gateway =
-      CapturingGateway(
-        ActionExecutionReport(
-          success = false,
-          message = "Submit blocked: confirm_submit=true is required for high-risk homework submission.",
-          recoverable = false,
-          metadata = mapOf("reason" to "confirm_submit_required"),
-        ),
-      )
-    val executor = PythonSkillBridgeExecutor(gateway)
-    val invocation =
-      JSONObject()
-        .put("request_id", "req_hw_submit_1")
-        .put("skill_name", "submit_homework")
-        .put("args", JSONObject().put("homework_id", "hw_1").put("confirm_submit", false))
-
-    val result = executor.executeSkillInvocation(invocation)
-    assertEquals("APPROVAL_REQUIRED", result.getString("code"))
-    val data = result.getJSONObject("data")
-    assertEquals("awaiting_confirmation", data.getString("status"))
-    assertTrue(data.getBoolean("high_risk"))
-    assertEquals("confirm_submit_required", data.getString("reason"))
-  }
-
-  @Test
   fun mapsHomeworkCrawlStructuredMetadataFromReport() {
     val homeworks =
       listOf(

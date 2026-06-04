@@ -41,6 +41,7 @@ class PythonSkillBridgeExecutor(
     val action =
       SystemAction(
         id = skillName,
+        requestId = requestId,
         title = skillName,
         summary = "invoked from python bridge",
         riskLevel = riskLevel,
@@ -65,17 +66,14 @@ class PythonSkillBridgeExecutor(
     val message = report.message
     if (
       reason == "conflict_strategy_required" ||
-      reason == "allow_conflict_delete_not_set" ||
-      reason == "confirm_submit_required"
+      reason == "allow_conflict_delete_not_set"
     ) {
       return "APPROVAL_REQUIRED"
     }
     if (reason == "login_required" || report.semantic == "homework_cookie_login_required" || report.semantic == "course_info_auth") {
       return "NOT_CONFIGURED"
     }
-    if (message.contains("confirm_delete=true", ignoreCase = true) ||
-      message.contains("confirm_submit=true", ignoreCase = true)
-    ) {
+    if (message.contains("confirm_delete=true", ignoreCase = true)) {
       return "APPROVAL_REQUIRED"
     }
     if (skillName == "create_calendar_event" &&
@@ -90,6 +88,7 @@ class PythonSkillBridgeExecutor(
       reason == "missing_homework_id" ||
       reason == "missing_course_id" ||
       reason == "missing_submission_content" ||
+      reason == "missing_submission_session" ||
       reason == "missing_file" ||
       message.contains("Invalid", ignoreCase = true) ||
       message.contains("Missing", ignoreCase = true) ||

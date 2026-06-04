@@ -201,11 +201,14 @@ def test_decide_turn_homework_submit_fallback() -> None:
     skill_names = [item["skill_name"] for item in planned]
     _expect(data["source"] == "deterministic_after_llm_empty", str(data))
     _expect(data["should_plan"] is True, str(data))
+    _expect("upload_homework_attachment" in skill_names, str(planned))
     _expect("submit_homework" in skill_names, str(planned))
+    upload = next(item for item in planned if item["skill_name"] == "upload_homework_attachment")
     submit = next(item for item in planned if item["skill_name"] == "submit_homework")
-    _expect(submit["args"]["file_uri"].startswith("content://"), str(submit))
-    _expect(submit["args"]["file_name"] == "report.docx", str(submit))
-    _expect(submit["args"]["confirm_submit"] is True, str(submit))
+    _expect(upload["args"]["file_uri"].startswith("content://"), str(upload))
+    _expect(upload["args"]["file_name"] == "report.docx", str(upload))
+    _expect("file_uri" not in submit["args"], str(submit))
+    _expect("file_name" not in submit["args"], str(submit))
 
 
 def test_decide_turn_includes_memory_context() -> None:

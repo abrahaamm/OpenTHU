@@ -941,6 +941,8 @@ class OpenTHULangGraphAgent:
             "For requests about unsubmitted/not submitted/missing homework or 未交/未提交作业, "
             "prefer crawl_unsubmitted_homeworks. For all homework lists, use crawl_course_homeworks. "
             "For explicit homework submission/turn-in/提交/递交 requests, use submit_homework; "
+            "if that explicit submit request includes an attached file, plan upload_homework_attachment first "
+            "and then submit_homework. Do not satisfy submit/递交/提交 intent with upload_homework_attachment alone. "
             "for upload-only homework attachment requests, use upload_homework_attachment. "
             "For class timetable/课表, use get_semesters first, then get_course_schedule. For campus events/活动/讲座, "
             "use get_campus_activities. For web or campus retrieval searches, use search. "
@@ -1110,8 +1112,6 @@ class OpenTHULangGraphAgent:
             id_args = self._extract_homework_identifier_args(text)
             action_args = {**id_args, **attached_args}
             constraints = self._extract_attached_file_constraints(text)
-            if submit_intent:
-                action_args["confirm_submit"] = True
             if not any(key in action_args for key in ("homework_id", "zyid", "homework_zyid", "xszyid", "student_homework_id")):
                 action_args["lookup_hint"] = text
             planned_payloads: list[dict[str, Any]] = []
@@ -1123,17 +1123,39 @@ class OpenTHULangGraphAgent:
                         "description": "先读取未提交作业列表，帮助确认要提交的作业对象。",
                     }
                 )
-            planned_payloads.append(
-                {
-                    "skill_name": "submit_homework" if submit_intent else "upload_homework_attachment",
-                    "args": action_args,
-                    "description": (
-                        "提交作业内容或附件。"
-                        if submit_intent
-                        else "把本地附件上传到作业提交表单。"
-                    ),
+            if submit_intent and attached_args:
+                upload_args = dict(action_args)
+                planned_payloads.append(
+                    {
+                        "skill_name": "upload_homework_attachment",
+                        "args": upload_args,
+                        "description": "先把本地附件上传到作业提交表单并准备提交会话。",
+                    }
+                )
+                submit_args = {
+                    key: value
+                    for key, value in action_args.items()
+                    if key not in {"file_uri", "file_path", "file_name"}
                 }
-            )
+                planned_payloads.append(
+                    {
+                        "skill_name": "submit_homework",
+                        "args": submit_args,
+                        "description": "在附件上传完成后提交作业。",
+                    }
+                )
+            else:
+                planned_payloads.append(
+                    {
+                        "skill_name": "submit_homework" if submit_intent else "upload_homework_attachment",
+                        "args": action_args,
+                        "description": (
+                            "提交作业内容或附件。"
+                            if submit_intent
+                            else "把本地附件上传到作业提交表单。"
+                        ),
+                    }
+                )
             structured_prompt: StructuredPrompt = {
                 "objective": text,
                 "entities": ["homework", "submit" if submit_intent else "upload"],
@@ -2009,6 +2031,8 @@ class OpenTHULangGraphAgent:
             "For course assignment DDL/deadline queries, use `get_assignments`; for Tsinghua Learn homework crawl queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "
             "phrases like `check my homework that is not submitted`, `unsubmitted assignments`, `未交作业`, `未提交作业` map to crawl_unsubmitted_homeworks; "
             "when the user explicitly asks to submit/turn in/递交/提交 homework, use submit_homework; "
+            "when that explicit submit/turn-in/递交/提交 request includes an attached file, plan upload_homework_attachment immediately followed by submit_homework; "
+            "never plan upload_homework_attachment alone for a submit/turn-in/递交/提交 request. "
             "when the user asks only to upload/stage an attached file, use upload_homework_attachment; "
             "use get_homework_cookie only when the user provides a Learn cookie. "
             "Use conversation_context to resolve follow-up references like `the second one`, `that activity`, `刚才那个`, `第二个`, or `上一个`; "
@@ -2016,7 +2040,7 @@ class OpenTHULangGraphAgent:
             "Use conversation_context.memory_context as durable user preferences and feedback; "
             "prefer plans that align with long-term preferences and avoid actions the user recently ignored, "
             "unless the latest user_input clearly asks otherwise. "
-            "If user_input or structured_prompt constraints include an [attached_file] block with file_uri/file_name, copy those exact values into upload_homework_attachment or submit_homework args when the user asks to upload or submit homework."
+            "If user_input or structured_prompt constraints include an [attached_file] block with file_uri/file_name, copy those exact values into upload_homework_attachment args when the user asks to upload or submit homework."
         )
 
         try:
