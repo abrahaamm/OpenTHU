@@ -215,7 +215,6 @@ class FakeRuntimeRepository(
   private fun initialMemoryRecords(): List<MemoryRecord> =
     memoryStore
       ?.load()
-      ?.takeIf { it.isNotEmpty() }
       ?: listOf(
         MemoryRecord(
           id = UUID.randomUUID().toString(),

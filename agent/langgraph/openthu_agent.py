@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
@@ -58,6 +59,83 @@ class StructuredPrompt(TypedDict):
     constraints: list[str]
     success_criteria: list[str]
     sensitivity: str
+
+
+@dataclass(frozen=True)
+class ModelContextProfile:
+    name: str
+    context_tokens: int
+    output_reserve_tokens: int
+    system_reserve_tokens: int
+    memory_reserve_tokens: int
+    max_history_tokens: int
+    min_history_tokens: int
+    max_history_messages: int
+    per_message_token_limit: int
+    anchor_message_token_limit: int
+    memory_entry_limit: int
+    memory_value_char_limit: int
+    memory_summary_char_limit: int
+
+
+def model_context_profile(model: str) -> ModelContextProfile:
+    normalized = str(model or "").strip().lower()
+    if "gpt-4.1" in normalized:
+        return ModelContextProfile("openai_1m", 1_000_000, 8_192, 2_048, 8_192, 180_000, 8_000, 160, 8_000, 1_200, 16, 480, 2_400)
+    if "gpt-4o-mini" in normalized or "gpt-4o" in normalized:
+        return ModelContextProfile("openai_128k", 128_000, 4_096, 2_048, 4_096, 80_000, 6_000, 96, 4_000, 900, 12, 360, 1_800)
+    if "moonshot-v1-128k" in normalized or "moonshot-1-128k" in normalized:
+        return ModelContextProfile("moonshot_128k", 131_072, 4_096, 2_048, 4_096, 82_000, 6_000, 96, 4_000, 900, 12, 360, 1_800)
+    if "moonshot-v1-32k" in normalized or "moonshot-1-32k" in normalized:
+        return ModelContextProfile("moonshot_32k", 32_768, 2_048, 1_200, 1_800, 22_000, 3_000, 48, 2_000, 700, 8, 260, 1_200)
+    if "moonshot-v1-8k" in normalized or "moonshot-1-8k" in normalized:
+        return ModelContextProfile("moonshot_8k", 8_192, 1_024, 800, 900, 4_200, 900, 18, 900, 360, 4, 180, 700)
+    if "deepseek" in normalized:
+        return ModelContextProfile("deepseek_64k", 64_000, 4_096, 1_800, 3_000, 42_000, 4_000, 72, 3_000, 800, 10, 320, 1_500)
+    return ModelContextProfile("default_32k", 32_768, 2_048, 1_200, 1_800, 20_000, 3_000, 48, 2_000, 700, 8, 260, 1_200)
+
+
+def estimate_context_tokens(text: str) -> int:
+    if not text or not str(text).strip():
+        return 0
+    tokens = 0
+    latin_run = 0
+
+    def flush_latin() -> None:
+        nonlocal tokens, latin_run
+        if latin_run:
+            tokens += max(1, (latin_run + 3) // 4)
+            latin_run = 0
+
+    for char in str(text):
+        if char.isspace():
+            flush_latin()
+        elif "\u4e00" <= char <= "\u9fff" or "\u3400" <= char <= "\u4dbf" or "\u3040" <= char <= "\u30ff" or "\uac00" <= char <= "\ud7af":
+            flush_latin()
+            tokens += 1
+        elif char.isalnum():
+            latin_run += 1
+        else:
+            flush_latin()
+            tokens += 1
+    flush_latin()
+    return tokens
+
+
+def trim_text_to_token_budget(text: str, token_budget: int) -> str:
+    value = str(text or "").strip()
+    if token_budget <= 0 or not value:
+        return ""
+    if estimate_context_tokens(value) <= token_budget:
+        return value
+    low, high = 0, len(value)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if estimate_context_tokens(value[:mid]) <= token_budget - 1:
+            low = mid
+        else:
+            high = mid - 1
+    return value[:low].rstrip() + "…"
 
 
 def utc_now() -> str:
@@ -662,19 +740,63 @@ class OpenTHULangGraphAgent:
         self,
         history: list[dict[str, Any]],
         *,
-        limit: int = 8,
+        limit: int | None = None,
+        profile: ModelContextProfile | None = None,
+        current_user_input: str = "",
+        fixed_prompt_text: str = "",
     ) -> list[dict[str, str]]:
-        selected_history = history if len(history) <= limit else [*history[:2], *history[-max(limit - 2, 0):]]
-        compact_history: list[dict[str, str]] = []
-        for item in selected_history:
+        resolved_profile = profile or model_context_profile("")
+        eligible: list[tuple[int, str, str]] = []
+        for index, item in enumerate(history):
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role", "")).strip().lower()
             text = str(item.get("text", item.get("content", ""))).strip()
             if role not in {"user", "assistant"} or not text:
                 continue
-            compact_history.append({"role": role, "content": text[:1000]})
-        return compact_history
+            eligible.append((index, role, text))
+        if not eligible:
+            return []
+
+        fixed_tokens = estimate_context_tokens(current_user_input) + estimate_context_tokens(fixed_prompt_text)
+        raw_history_budget = (
+            resolved_profile.context_tokens
+            - resolved_profile.output_reserve_tokens
+            - resolved_profile.system_reserve_tokens
+            - resolved_profile.memory_reserve_tokens
+            - fixed_tokens
+        )
+        if raw_history_budget <= 0:
+            history_budget = 0
+        else:
+            history_budget = min(max(resolved_profile.min_history_tokens, raw_history_budget), resolved_profile.max_history_tokens)
+        max_messages = min(limit, resolved_profile.max_history_messages) if limit is not None else resolved_profile.max_history_messages
+        selected: list[tuple[int, dict[str, str]]] = []
+        used_indexes: set[int] = set()
+        remaining = history_budget
+
+        for index, role, text in reversed(eligible):
+            if len(selected) >= max_messages:
+                break
+            text_budget = min(resolved_profile.per_message_token_limit, remaining - 6)
+            if text_budget < 48:
+                break
+            compact_text = trim_text_to_token_budget(text, text_budget)
+            if not compact_text:
+                continue
+            selected.append((index, {"role": role, "content": compact_text}))
+            used_indexes.add(index)
+            remaining -= estimate_context_tokens(compact_text) + 6
+
+        if remaining > 128:
+            anchors = [item for item in eligible[:2] if item[0] not in used_indexes]
+            anchor_budget = min(resolved_profile.anchor_message_token_limit, remaining // max(len(anchors), 1)) if anchors else 0
+            for index, role, text in anchors:
+                compact_text = trim_text_to_token_budget(text, anchor_budget - 6)
+                if compact_text:
+                    selected.append((index, {"role": role, "content": compact_text}))
+
+        return [item for _, item in sorted(selected, key=lambda pair: pair[0])]
 
     def _build_conversation_context(
         self,
@@ -684,7 +806,14 @@ class OpenTHULangGraphAgent:
         session: dict[str, Any] | None = None,
         user_id: str = "",
     ) -> dict[str, Any]:
-        recent_messages = self._compact_chat_history(history, limit=10)
+        _, model, _ = self._llm_config_from_session(session or {})
+        profile = model_context_profile(model)
+        recent_messages = self._compact_chat_history(
+            history,
+            profile=profile,
+            current_user_input=user_input,
+            fixed_prompt_text=str((session or {}).get("memory_context", "")),
+        )
         current = user_input.strip()
         if (
             recent_messages
@@ -715,18 +844,36 @@ class OpenTHULangGraphAgent:
                         }
                     )
 
-        session_memory = self._compact_session_memory_context(session or {})
-        stored_memory = self._compact_stored_memory_context(user_id=user_id, user_input=current)
-        memory_context = self._merge_memory_context(session_memory, stored_memory)
+        session_memory = self._compact_session_memory_context(session or {}, profile=profile)
+        stored_memory = self._compact_stored_memory_context(
+            user_id=user_id,
+            user_input=current,
+            limit=profile.memory_entry_limit,
+            value_limit=profile.memory_value_char_limit,
+            summary_limit=profile.memory_summary_char_limit,
+        )
+        memory_context = self._merge_memory_context(
+            session_memory,
+            stored_memory,
+            limit=profile.memory_entry_limit,
+            summary_limit=profile.memory_summary_char_limit,
+        )
 
         return {
             "latest_user_input": current,
             "recent_messages": recent_messages,
             "reference_candidates": reference_candidates[-12:],
             "memory_context": memory_context,
+            "context_window": asdict(profile),
         }
 
-    def _compact_session_memory_context(self, session: dict[str, Any]) -> dict[str, Any]:
+    def _compact_session_memory_context(
+        self,
+        session: dict[str, Any],
+        *,
+        profile: ModelContextProfile | None = None,
+    ) -> dict[str, Any]:
+        resolved_profile = profile or model_context_profile("")
         raw_memory = session.get("memory_context") or session.get("memory_records") or session.get("memories")
         if not raw_memory:
             return {}
@@ -734,7 +881,8 @@ class OpenTHULangGraphAgent:
             try:
                 raw_memory = json.loads(raw_memory)
             except Exception:
-                return {"summary": raw_memory.strip()[:1500]} if raw_memory.strip() else {}
+                summary = raw_memory.strip()[: resolved_profile.memory_summary_char_limit]
+                return {"summary": summary} if summary else {}
 
         if isinstance(raw_memory, list):
             raw_memory = {"entries": raw_memory}
@@ -756,7 +904,7 @@ class OpenTHULangGraphAgent:
                 {
                     "scope": str(item.get("scope", "")).strip()[:20],
                     "key": str(item.get("key", "")).strip()[:80],
-                    "value": value[:500],
+                    "value": value[: resolved_profile.memory_value_char_limit],
                     "weight": self._safe_int(item.get("weight"), default=0),
                     "updated_at_epoch_ms": self._safe_int(
                         item.get("updated_at_epoch_ms", item.get("updatedAtEpochMs")),
@@ -773,7 +921,7 @@ class OpenTHULangGraphAgent:
             ),
             reverse=True,
         )
-        entries = entries[:12]
+        entries = entries[: resolved_profile.memory_entry_limit]
         summary = str(raw_memory.get("summary", "")).strip()
         if not summary and entries:
             summary = "\n".join(
@@ -781,7 +929,7 @@ class OpenTHULangGraphAgent:
                 for item in entries[:8]
             )
         return {
-            "summary": summary[:1500],
+            "summary": summary[: resolved_profile.memory_summary_char_limit],
             "entries": entries,
         } if summary or entries else {}
 
@@ -791,6 +939,8 @@ class OpenTHULangGraphAgent:
         user_id: str,
         user_input: str,
         limit: int = 8,
+        value_limit: int = 500,
+        summary_limit: int = 1500,
     ) -> dict[str, Any]:
         memory = self._load_memory()
         entries_raw = memory.get("entries", [])
@@ -823,7 +973,7 @@ class OpenTHULangGraphAgent:
                 {
                     "scope": "mid",
                     "key": "agent_task_history",
-                    "value": value[:500],
+                    "value": value[:value_limit],
                     "weight": weight,
                     "updated_at_epoch_ms": ts,
                     "_overlap": overlap,
@@ -845,13 +995,14 @@ class OpenTHULangGraphAgent:
             f"- [{item['scope']}/{item['key']}/w{item['weight']}] {item['value'][:160]}"
             for item in entries[:6]
         )
-        return {"summary": summary[:1500], "entries": entries}
+        return {"summary": summary[:summary_limit], "entries": entries}
 
     def _merge_memory_context(
         self,
         primary: dict[str, Any],
         secondary: dict[str, Any],
         limit: int = 12,
+        summary_limit: int = 1500,
     ) -> dict[str, Any]:
         entries: list[dict[str, Any]] = []
         summaries: list[str] = []
@@ -891,7 +1042,7 @@ class OpenTHULangGraphAgent:
                 f"- [{item.get('scope', '')}/{item.get('key', '')}/w{item.get('effective_weight', item.get('weight', 0))}] {str(item.get('value', ''))[:160]}"
                 for item in merged_entries[:8]
             )
-        return {"summary": summary[:1500], "entries": merged_entries} if summary or merged_entries else {}
+        return {"summary": summary[:summary_limit], "entries": merged_entries} if summary or merged_entries else {}
 
     def _memory_tokens(self, text: str) -> set[str]:
         return {

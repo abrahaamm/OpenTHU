@@ -90,6 +90,8 @@ class OpenCrayRuntime(
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
   @Volatile private var gatewayHeartbeatRunning = false
+  @Volatile private var appInForeground = true
+  @Volatile private var lastUserActivityEpochMs = System.currentTimeMillis()
   @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
   private val serverSummaryTaskIds = Collections.synchronizedSet(mutableSetOf<String>())
   /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
@@ -181,6 +183,18 @@ class OpenCrayRuntime(
     return true
   }
 
+  fun clearAllMemory(): Boolean {
+    val current = snapshot()
+    if (current.memoryRecords.isEmpty()) return false
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = emptyList(),
+        recentEvents = listOf("All runtime memory cleared.") + current.recentEvents,
+      ),
+    )
+    return true
+  }
+
   fun snoozeAction(actionId: String): Boolean =
     markActionFeedback(actionId = actionId, status = "snoozed", feedback = "snooze", result = "已标记为稍后处理。")
 
@@ -255,6 +269,15 @@ class OpenCrayRuntime(
     }
   }
 
+  fun setAppInForeground(foreground: Boolean) {
+    appInForeground = foreground
+    if (foreground) markUserActivity()
+  }
+
+  fun markUserActivity() {
+    lastUserActivityEpochMs = System.currentTimeMillis()
+  }
+
   fun sendChatMessage(text: String) {
     chatRepository.sendMessage(text)
   }
@@ -267,6 +290,7 @@ class OpenCrayRuntime(
     skillId: String,
     args: Map<String, String> = emptyMap(),
   ) {
+    markUserActivity()
     // Prefer the same plan/execute pipeline as chat so quick skills are genuinely usable.
     val quickGoal =
       when (skillId) {
@@ -403,7 +427,7 @@ class OpenCrayRuntime(
     thread(name = "opencray-gateway-heartbeat", isDaemon = true) {
       try {
         while (gatewayRegistered) {
-          Thread.sleep(30_000L)
+          Thread.sleep(gatewayHeartbeatIntervalMs())
           val result = gatewayClient.healthCheck(currentGatewayConfig())
           if (result.success) {
             runtimeRepository.updateConnectionStatus("已连接服务器")
@@ -426,7 +450,14 @@ class OpenCrayRuntime(
     }
   }
 
+  private fun gatewayHeartbeatIntervalMs(): Long {
+    if (!appInForeground) return GATEWAY_HEARTBEAT_BACKGROUND_MS
+    val activeRecently = System.currentTimeMillis() - lastUserActivityEpochMs <= GATEWAY_ACTIVE_WINDOW_MS
+    return if (activeRecently) GATEWAY_HEARTBEAT_ACTIVE_MS else GATEWAY_HEARTBEAT_IDLE_MS
+  }
+
   fun reconnectGateway() {
+    markUserActivity()
     val current = snapshot()
     connectToGateway(
       host = current.host.ifBlank { "10.0.2.2" },
@@ -471,6 +502,7 @@ class OpenCrayRuntime(
   }
 
   fun executeAction(actionId: String) {
+    markUserActivity()
     val current = snapshot()
     val action = current.systemActions.firstOrNull { it.id == actionId }
     if (action == null) {
@@ -549,6 +581,7 @@ class OpenCrayRuntime(
     eventId: String,
     decision: String,
   ) {
+    markUserActivity()
     if (taskId.isBlank() || requestId.isBlank() || eventId.isBlank()) {
       chatRepository.appendMessage(ChatRole.Assistant, "这个确认项缺少执行上下文，我没法继续处理。")
       return
@@ -631,6 +664,7 @@ class OpenCrayRuntime(
   ): Boolean {
     if (plannerGoal.isBlank() || displayGoal.isBlank()) return false
 
+    markUserActivity()
     chatRepository.sendMessage(displayGoal)
 
     if (maybeDeleteManualPlanningCard(displayGoal)) {
@@ -746,21 +780,25 @@ class OpenCrayRuntime(
   private fun generateLocalLlmChatReply(message: String): String? {
     val config = localLlmConfig() ?: return null
     val endpoint = config.chatCompletionsEndpoint()
-    val memoryText = buildMemoryPromptText()
+    val profile = ContextWindowManager.profileFor(config.model)
+    val memoryText = buildMemoryPromptText(profile)
+    val systemContent =
+      "你是 OpenTHU 移动端里的对话式校园助手。" +
+        "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。" +
+        "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。" +
+        memoryText
     val messages = JSONArray()
       .put(
         JSONObject()
           .put("role", "system")
-          .put(
-            "content",
-            "你是 OpenTHU 移动端里的对话式校园助手。"
-              + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。"
-              + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。"
-              + memoryText,
-          ),
+          .put("content", systemContent),
       )
 
-    localChatHistoryForLlm().forEach { item ->
+    localChatHistoryForLlm(
+      profile = profile,
+      currentMessage = message,
+      fixedPromptText = systemContent,
+    ).forEach { item ->
       messages.put(
         JSONObject()
           .put("role", item["role"].orEmpty())
@@ -774,7 +812,7 @@ class OpenCrayRuntime(
         .put("model", config.model)
         .put("messages", messages)
         .put("temperature", 0.8)
-        .put("max_tokens", 500)
+        .put("max_tokens", profile.localMaxOutputTokens)
 
     return runCatching {
       val connection =
@@ -845,7 +883,7 @@ class OpenCrayRuntime(
           message = message,
           approveSensitive = false,
           session = buildGatewaySession(),
-          history = buildGatewayChatHistory(),
+          history = buildGatewayChatHistory(currentMessage = message),
         ) { event ->
           when (event.type) {
             "assistant_delta" -> updateAssistantText(event.content)
@@ -918,7 +956,7 @@ class OpenCrayRuntime(
           deviceId = deviceId,
           message = message,
           session = buildGatewaySession(),
-          history = buildGatewayChatHistory(),
+          history = buildGatewayChatHistory(currentMessage = message),
         )
       if (!result.success || result.data == null) {
         runtimeRepository.appendEvent("Gateway chat failed: ${result.code} ${result.message}")
@@ -1023,59 +1061,60 @@ class OpenCrayRuntime(
   private fun agentCoreUnavailableMessage(): String =
     "Agent-Core 没有连接好，无法执行任务。请先在设置里连接 Agent-Core；如果只是普通聊天，也需要先配置可用的模型服务。"
 
-  private fun buildGatewayChatHistory(limit: Int = 20): List<Map<String, String>> {
+  private fun buildGatewayChatHistory(currentMessage: String): List<Map<String, String>> {
+    val profile = ContextWindowManager.profileFor(selectedLlmModel())
     val messages =
       chatRepository.getMessages()
-      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
-      .dropLast(1)
-    val selected =
-      if (messages.size <= limit) {
-        messages
-      } else {
-        messages.take(2) + messages.takeLast((limit - 2).coerceAtLeast(0))
-      }
-    return selected
+        .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+        .dropLast(1)
+    return ContextWindowManager
+      .compactChatMessages(
+        messages = messages,
+        profile = profile,
+        currentUserText = currentMessage,
+      )
       .map { message ->
         mapOf(
-          "role" to when (message.role) {
-            ChatRole.User -> "user"
-            ChatRole.Assistant -> "assistant"
-            ChatRole.System -> "system"
-          },
+          "role" to message.role,
           "text" to message.text,
         )
       }
   }
 
-  private fun localChatHistoryForLlm(limit: Int = 12): List<Map<String, String>> {
+  private fun localChatHistoryForLlm(
+    profile: ContextWindowProfile,
+    currentMessage: String,
+    fixedPromptText: String,
+  ): List<Map<String, String>> {
     val messages =
       chatRepository.getMessages()
-      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
-      .dropLast(1)
-    val selected =
-      if (messages.size <= limit) {
-        messages
-      } else {
-        messages.take(2) + messages.takeLast((limit - 2).coerceAtLeast(0))
-      }
-    return selected
+        .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+        .dropLast(1)
+    return ContextWindowManager
+      .compactChatMessages(
+        messages = messages,
+        profile = profile,
+        currentUserText = currentMessage,
+        fixedPromptText = fixedPromptText,
+      )
       .map { message ->
         mapOf(
-          "role" to when (message.role) {
-            ChatRole.User -> "user"
-            ChatRole.Assistant -> "assistant"
-            ChatRole.System -> "system"
-          },
-          "text" to message.text.take(1000),
+          "role" to message.role,
+          "text" to message.text,
         )
       }
+  }
+
+  private fun selectedLlmModel(): String {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    return pref.getString("llm_model", "gpt-4.1-mini").orEmpty().trim().ifBlank { "gpt-4.1-mini" }
   }
 
   private fun localLlmConfig(): LocalLlmConfig? {
     val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
     val apiKey = pref.getString("openai_api_key", "").orEmpty().trim()
     if (apiKey.isBlank()) return null
-    val model = pref.getString("llm_model", "gpt-4.1-mini").orEmpty().trim().ifBlank { "gpt-4.1-mini" }
+    val model = selectedLlmModel()
     val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
     return LocalLlmConfig(apiKey = apiKey, model = model, baseUrl = baseUrl)
   }
@@ -1102,6 +1141,7 @@ class OpenCrayRuntime(
   }
 
   fun runActions(actionIds: Set<String>? = null) {
+    markUserActivity()
     if (actionIds == null && gatewayRegistered) {
       runGatewayDispatchLoop()
       return
@@ -1157,7 +1197,8 @@ class OpenCrayRuntime(
     val homeworkCsrf = pref.getString("homework_csrf", "").orEmpty().trim()
     val learnBaseUrl = pref.getString("learn_base_url", "").orEmpty().trim()
     val openAiKey = pref.getString("openai_api_key", "").orEmpty().trim()
-    val model = pref.getString("llm_model", "").orEmpty().trim()
+    val model = selectedLlmModel()
+    val profile = ContextWindowManager.profileFor(model)
     val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
     val userId = pref.getString("user_id", "").orEmpty().trim()
     val campusFile = pref.getString("campus_file", "").orEmpty().trim()
@@ -1173,7 +1214,7 @@ class OpenCrayRuntime(
       } else {
         pref.getString("timezone", "").orEmpty().trim().ifBlank { ZoneId.systemDefault().id }
       }
-    val memoryContext = buildGatewayMemoryContext()
+    val memoryContext = buildGatewayMemoryContext(profile)
 
     val session = linkedMapOf<String, Any?>()
     if (cookie.isNotEmpty()) {
@@ -1196,6 +1237,7 @@ class OpenCrayRuntime(
     if (learnBaseUrl.isNotEmpty()) session["learn_base_url"] = learnBaseUrl
     if (openAiKey.isNotEmpty()) session["openai_api_key"] = openAiKey
     if (model.isNotEmpty()) session["llm_model"] = model
+    session["context_window"] = profile.toSessionMap()
     if (baseUrl.isNotEmpty()) session["llm_base_url"] = baseUrl
     if (userId.isNotEmpty()) session["user_id"] = userId
     if (timezone.isNotEmpty()) session["timezone"] = timezone
@@ -1226,12 +1268,13 @@ class OpenCrayRuntime(
     val ageDays: Double,
   )
 
-  private fun buildGatewayMemoryContext(limit: Int = 12): Map<String, Any?> {
-    val entries = rankedMemoryEntries(limit)
+  private fun buildGatewayMemoryContext(profile: ContextWindowProfile): Map<String, Any?> {
+    val entries = rankedMemoryEntries(profile.memoryEntryLimit)
     if (entries.isEmpty()) return emptyMap()
     val policy = memoryPolicy()
+    val valueLimit = profile.memoryValueCharLimit
     return mapOf(
-      "summary" to memorySummaryText(entries, valueLimit = 160),
+      "summary" to memorySummaryText(entries, valueLimit = (valueLimit / 2).coerceAtLeast(120)).take(profile.memorySummaryCharLimit),
       "policy" to mapOf(
         "long_ttl_days" to policy.longTtlDays,
         "mid_ttl_days" to policy.midTtlDays,
@@ -1242,7 +1285,7 @@ class OpenCrayRuntime(
         mapOf(
           "scope" to record.record.scope,
           "key" to record.record.key,
-          "value" to record.record.value.take(300),
+          "value" to record.record.value.take(valueLimit),
           "weight" to record.record.weight,
           "effective_weight" to record.effectiveWeight,
           "age_days" to ((record.ageDays * 100.0).roundToInt() / 100.0),
@@ -1252,10 +1295,15 @@ class OpenCrayRuntime(
     )
   }
 
-  private fun buildMemoryPromptText(limit: Int = 8): String {
-    val entries = rankedMemoryEntries(limit)
+  private fun buildMemoryPromptText(profile: ContextWindowProfile): String {
+    val entries = rankedMemoryEntries(profile.memoryEntryLimit.coerceAtMost(8))
     if (entries.isEmpty()) return ""
-    return "\n可参考用户记忆和反馈，但不要逐字暴露这些内部记录：\n${memorySummaryText(entries, valueLimit = 120)}"
+    val summary =
+      memorySummaryText(
+        records = entries,
+        valueLimit = (profile.memoryValueCharLimit / 2).coerceAtLeast(100),
+      ).take(profile.memorySummaryCharLimit)
+    return "\n可参考用户记忆和反馈，但不要逐字暴露这些内部记录：\n$summary"
   }
 
   private fun rankedMemoryEntries(limit: Int): List<RankedMemoryRecord> {
@@ -1346,6 +1394,10 @@ class OpenCrayRuntime(
 
   private companion object {
     private const val MILLIS_PER_DAY = 86_400_000.0
+    private const val GATEWAY_ACTIVE_WINDOW_MS = 2L * 60L * 1000L
+    private const val GATEWAY_HEARTBEAT_ACTIVE_MS = 15L * 1000L
+    private const val GATEWAY_HEARTBEAT_IDLE_MS = 30L * 1000L
+    private const val GATEWAY_HEARTBEAT_BACKGROUND_MS = 120L * 1000L
   }
 
   private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
@@ -1365,7 +1417,7 @@ class OpenCrayRuntime(
           goal = goal,
           approveSensitive = true,
           session = buildGatewaySession(),
-          history = buildGatewayChatHistory(),
+          history = buildGatewayChatHistory(currentMessage = goal),
         )
       if (!result.success || result.data == null) {
         gatewayRegistered = false

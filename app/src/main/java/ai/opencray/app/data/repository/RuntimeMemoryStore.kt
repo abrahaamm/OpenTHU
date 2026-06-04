@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 interface RuntimeMemoryStore {
-  fun load(): List<MemoryRecord>
+  fun load(): List<MemoryRecord>?
 
   fun save(records: List<MemoryRecord>)
 }
@@ -17,7 +17,8 @@ class SharedPreferencesRuntimeMemoryStore(
   private val preferences =
     context.applicationContext.getSharedPreferences("openthu_runtime_memory", Context.MODE_PRIVATE)
 
-  override fun load(): List<MemoryRecord> {
+  override fun load(): List<MemoryRecord>? {
+    if (!preferences.contains(KEY_MEMORY_RECORDS)) return null
     val raw = preferences.getString(KEY_MEMORY_RECORDS, "").orEmpty()
     if (raw.isBlank()) return emptyList()
     return runCatching {
@@ -39,7 +40,7 @@ class SharedPreferencesRuntimeMemoryStore(
           )
       }
       records
-    }.getOrElse { emptyList() }
+    }.getOrElse { null }
   }
 
   override fun save(records: List<MemoryRecord>) {

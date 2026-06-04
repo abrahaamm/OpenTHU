@@ -131,7 +131,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun getUiState(): MainUiState = buildUiState()
 
+  fun setAppInForeground(foreground: Boolean) {
+    runtime.setAppInForeground(foreground)
+  }
+
   fun selectDestination(destination: AppDestination) {
+    runtime.markUserActivity()
     selectedDestination = destination
   }
 
@@ -285,6 +290,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     preference: String,
   ): Boolean =
     runtime.updateLongPreference(index, preference)
+
+  fun clearAllMemory(): Boolean =
+    runtime.clearAllMemory()
 
   fun snoozeAction(actionId: String): Boolean {
     val ok = runtime.snoozeAction(actionId)

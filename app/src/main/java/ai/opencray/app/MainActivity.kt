@@ -149,6 +149,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var memoryMidTtlInput: EditText
   private lateinit var memoryShortTtlInput: EditText
   private lateinit var memoryHalfLifeInput: EditText
+  private lateinit var memoryClearAllButton: Button
   private lateinit var adbBinInput: EditText
   private lateinit var adbSerialInput: EditText
   private lateinit var timezoneFollowSystemToggle: CheckBox
@@ -159,6 +160,8 @@ class MainActivity : AppCompatActivity() {
   private var editingPreferenceIndex: Int? = null
   private var suppressSettingsAutosave: Boolean = false
   private var pendingSettingsSave: Runnable? = null
+  private var lastConnectionUiState: String = ""
+  private var connectionPulseActive: Boolean = false
 
   private val learnCookieLoginLauncher =
     registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -230,7 +233,23 @@ class MainActivity : AppCompatActivity() {
     uiRefreshHandler.post(uiRefreshTicker)
   }
 
+  override fun onStart() {
+    super.onStart()
+    viewModel.setAppInForeground(true)
+  }
+
+  override fun onPause() {
+    flushPendingSettingsSave()
+    super.onPause()
+  }
+
+  override fun onStop() {
+    viewModel.setAppInForeground(false)
+    super.onStop()
+  }
+
   override fun onDestroy() {
+    flushPendingSettingsSave()
     uiRefreshHandler.removeCallbacks(uiRefreshTicker)
     super.onDestroy()
   }
@@ -323,6 +342,7 @@ class MainActivity : AppCompatActivity() {
     memoryMidTtlInput = findViewById(R.id.setting_memory_mid_ttl_input)
     memoryShortTtlInput = findViewById(R.id.setting_memory_short_ttl_input)
     memoryHalfLifeInput = findViewById(R.id.setting_memory_half_life_input)
+    memoryClearAllButton = findViewById(R.id.memory_clear_all_button)
     adbBinInput = findViewById(R.id.setting_adb_bin_input)
     adbSerialInput = findViewById(R.id.setting_adb_serial_input)
     timezoneFollowSystemToggle = findViewById(R.id.setting_timezone_follow_system_toggle)
@@ -475,12 +495,23 @@ class MainActivity : AppCompatActivity() {
     pendingSettingsSave?.let { uiRefreshHandler.removeCallbacks(it) }
     val task =
       Runnable {
+        pendingSettingsSave = null
         if (persistSettings()) {
           viewModel.updateConfiguredModel(selectedModel())
         }
       }
     pendingSettingsSave = task
     uiRefreshHandler.postDelayed(task, 450L)
+  }
+
+  private fun flushPendingSettingsSave() {
+    if (suppressSettingsAutosave || !::openAiKeyInput.isInitialized) return
+    val pending = pendingSettingsSave ?: return
+    uiRefreshHandler.removeCallbacks(pending)
+    pendingSettingsSave = null
+    if (persistSettings()) {
+      viewModel.updateConfiguredModel(selectedModel())
+    }
   }
 
   private fun EditText.syncToViewModel(onChanged: (String) -> Unit) {
@@ -517,16 +548,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     chatTab.setOnClickListener {
+      flushPendingSettingsSave()
       viewModel.selectDestination(AppDestination.Chat)
       drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     planningTab.setOnClickListener {
+      flushPendingSettingsSave()
       viewModel.selectDestination(AppDestination.Planning)
       drawerLayout.closeDrawer(GravityCompat.START)
       render()
     }
     settingsTab.setOnClickListener {
+      flushPendingSettingsSave()
       viewModel.selectDestination(AppDestination.Settings)
       drawerLayout.closeDrawer(GravityCompat.START)
       render()
@@ -609,6 +643,20 @@ class MainActivity : AppCompatActivity() {
     preferenceDelete1Button.setOnClickListener { deletePreferenceAt(0) }
     preferenceDelete2Button.setOnClickListener { deletePreferenceAt(1) }
     preferenceDelete3Button.setOnClickListener { deletePreferenceAt(2) }
+    memoryClearAllButton.setOnClickListener {
+      val cleared = viewModel.clearAllMemory()
+      if (cleared) {
+        editingPreferenceIndex = null
+        preferenceInput.setText("")
+        preferenceAddButton.text = getString(R.string.preference_add)
+      }
+      Toast.makeText(
+        this,
+        getString(if (cleared) R.string.memory_clear_all_done else R.string.memory_clear_all_empty),
+        Toast.LENGTH_SHORT,
+      ).show()
+      render()
+    }
 
     statusView.setOnClickListener {
       viewModel.reconnectGateway()
@@ -618,12 +666,15 @@ class MainActivity : AppCompatActivity() {
     transportView.visibility = View.GONE
 
     connectButton.setOnClickListener {
+      flushPendingSettingsSave()
       viewModel.updateHost(hostInput.text.toString())
       viewModel.updatePort(portInput.text.toString())
       viewModel.connectToGateway()
       render()
     }
     saveSettingsButton.setOnClickListener {
+      pendingSettingsSave?.let { uiRefreshHandler.removeCallbacks(it) }
+      pendingSettingsSave = null
       if (persistSettings()) {
         Toast.makeText(this, getString(R.string.settings_saved), Toast.LENGTH_SHORT).show()
       } else {
@@ -631,6 +682,7 @@ class MainActivity : AppCompatActivity() {
       }
     }
     testSettingsButton.setOnClickListener {
+      flushPendingSettingsSave()
       val warnings = buildSettingsWarnings()
       val message =
         if (warnings.isEmpty()) {
@@ -777,9 +829,11 @@ class MainActivity : AppCompatActivity() {
         getString(R.string.planning_details_show)
       }
 
-    statusView.text = connectionStatusText(state.snapshot.connectionStatus)
-    statusView.setTextColor(ContextCompat.getColor(this, connectionStatusTextColor(state.snapshot.connectionStatus)))
-    statusView.setBackgroundColor(ContextCompat.getColor(this, connectionStatusBackgroundColor(state.snapshot.connectionStatus)))
+    val connectionStatus = state.snapshot.connectionStatus
+    statusView.text = connectionStatusText(connectionStatus)
+    statusView.setTextColor(ContextCompat.getColor(this, connectionStatusTextColor(connectionStatus)))
+    statusView.setBackgroundResource(connectionStatusBackgroundResource(connectionStatus))
+    syncConnectionStatusEffects(connectionStatus)
     transportView.visibility = View.GONE
     pageTitleView.text =
       when (state.currentDestination) {
@@ -981,6 +1035,7 @@ class MainActivity : AppCompatActivity() {
       getString(if (editingPreferenceIndex == null) R.string.preference_add else R.string.preference_update)
     renderPreferenceList(state.memoryRecords)
     configurePreferenceDeleteButtons(state.memoryRecords)
+    configureMemoryClearButton(state.memoryRecords)
 
     eventsView.text =
       state.snapshot.recentEvents
@@ -1884,20 +1939,68 @@ class MainActivity : AppCompatActivity() {
       else -> "服务器状态：$status"
     }
 
-  private fun connectionStatusBackgroundColor(status: String): Int =
+  private fun connectionStatusBackgroundResource(status: String): Int =
     when {
-      status.contains("未连接") || status.contains("failed", ignoreCase = true) -> R.color.opencray_danger_soft
-      status.contains("连接到服务器") || status.contains("Connecting", ignoreCase = true) -> R.color.opencray_neutral_soft
-      status.contains("已连接") || status.contains("Connected", ignoreCase = true) -> R.color.opencray_accent_soft
-      else -> R.color.opencray_primary_soft
+      connectionStatusUiState(status) == "disconnected" -> R.drawable.connection_status_disconnected
+      connectionStatusUiState(status) == "connecting" -> R.drawable.connection_status_connecting
+      connectionStatusUiState(status) == "connected" -> R.drawable.connection_status_connected
+      else -> R.drawable.chat_status_chip_surface
     }
 
   private fun connectionStatusTextColor(status: String): Int =
     when {
-      status.contains("未连接") || status.contains("failed", ignoreCase = true) -> R.color.opencray_danger
-      status.contains("已连接") || status.contains("Connected", ignoreCase = true) -> R.color.opencray_success
+      connectionStatusUiState(status) == "disconnected" -> R.color.opencray_danger
+      connectionStatusUiState(status) == "connected" -> R.color.opencray_success
       else -> R.color.opencray_primary_dark
     }
+
+  private fun connectionStatusUiState(status: String): String =
+    when {
+      status.contains("未连接") || status.contains("failed", ignoreCase = true) -> "disconnected"
+      status.contains("连接到服务器") || status.contains("Connecting", ignoreCase = true) -> "connecting"
+      status.contains("已连接") || status.contains("Connected", ignoreCase = true) -> "connected"
+      else -> "unknown"
+    }
+
+  private fun syncConnectionStatusEffects(status: String) {
+    val state = connectionStatusUiState(status)
+    if (state != lastConnectionUiState) {
+      when (state) {
+        "connecting" -> Toast.makeText(this, "连接到服务器", Toast.LENGTH_SHORT).show()
+        "disconnected" -> Toast.makeText(this, "服务器未连接", Toast.LENGTH_SHORT).show()
+      }
+      lastConnectionUiState = state
+    }
+    if (state == "connecting") {
+      startConnectionPulse()
+    } else {
+      stopConnectionPulse()
+    }
+  }
+
+  private fun startConnectionPulse() {
+    if (connectionPulseActive) return
+    connectionPulseActive = true
+    pulseConnectionChip(toAlpha = 0.58f)
+  }
+
+  private fun pulseConnectionChip(toAlpha: Float) {
+    if (!connectionPulseActive) return
+    statusView.animate()
+      .alpha(toAlpha)
+      .setDuration(520L)
+      .withEndAction {
+        pulseConnectionChip(if (toAlpha < 1f) 1f else 0.58f)
+      }
+      .start()
+  }
+
+  private fun stopConnectionPulse() {
+    if (!connectionPulseActive && statusView.alpha == 1f) return
+    connectionPulseActive = false
+    statusView.animate().cancel()
+    statusView.alpha = 1f
+  }
 
   private fun configurePreferenceDeleteButtons(memoryRecords: List<MemoryRecord>) {
     val count = memoryRecords.count { it.scope == "long" }
@@ -1908,6 +2011,11 @@ class MainActivity : AppCompatActivity() {
         button.alpha = if (button.isEnabled) 1f else 0.45f
         button.text = if (button.isEnabled) "删${index + 1}" else "X"
       }
+  }
+
+  private fun configureMemoryClearButton(memoryRecords: List<MemoryRecord>) {
+    memoryClearAllButton.isEnabled = memoryRecords.isNotEmpty()
+    memoryClearAllButton.alpha = if (memoryClearAllButton.isEnabled) 1f else 0.45f
   }
 
   private fun renderPreferenceList(memoryRecords: List<MemoryRecord>) {

@@ -55,6 +55,9 @@
     <string name="preference_delete_empty">这里还没有可删除的偏好。</string>
     <string name="preference_updated">偏好已更新。</string>
     <string name="preference_update">保存修改</string>
+    <string name="memory_clear_all">清除全部记忆</string>
+    <string name="memory_clear_all_done">已清除全部记忆。</string>
+    <string name="memory_clear_all_empty">当前没有可清除的记忆。</string>
 
     <string name="planning_snapshot_title">学习与执行快照</string>
     <string name="planning_cards_title">下一步计划</string>
@@ -143,6 +146,7 @@
     <string name="setting_memory_mid_ttl_description">中期记忆保留天数，过期后不会进入模型上下文。</string>
     <string name="setting_memory_short_ttl_description">短期记忆保留天数，过期后不会进入模型上下文。</string>
     <string name="setting_memory_half_life_description">记忆衰减半衰期，单位为天，会影响记忆有效权重排序。</string>
+    <string name="setting_memory_clear_description">清除长期偏好、中期反馈和短期任务记忆；清除后不会在重启时恢复默认记忆。</string>
     <string name="preference_description">补充一条用户偏好描述，保存后会作为长期记忆参与后续规划。</string>
     <string name="setting_adb_bin_description">ADB 可执行文件路径，后续设备联动能力会读取这里。</string>
     <string name="setting_adb_serial_description">目标 Android 设备序列号，多设备调试时用于指定设备。</string>

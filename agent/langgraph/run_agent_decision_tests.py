@@ -39,10 +39,10 @@ def _install_fake_langgraph_if_needed() -> None:
 _install_fake_langgraph_if_needed()
 
 try:
-    from .openthu_agent import OpenTHULangGraphAgent
+    from .openthu_agent import OpenTHULangGraphAgent, estimate_context_tokens
     from .skill_manager import SkillManager
 except ImportError:
-    from openthu_agent import OpenTHULangGraphAgent
+    from openthu_agent import OpenTHULangGraphAgent, estimate_context_tokens
     from skill_manager import SkillManager
 
 
@@ -279,6 +279,32 @@ def test_decide_turn_includes_stored_memory_context() -> None:
     _expect(any("作业 DDL" in value for value in stored_values), str(captured_memory))
 
 
+def test_decide_turn_applies_model_context_window_to_history() -> None:
+    _install_fake_openai()
+    history = []
+    for index in range(40):
+        history.append({"role": "user", "text": f"用户消息 {index} " + "清华校园活动" * 180})
+        history.append({"role": "assistant", "text": f"助手回复 {index} " + "候选活动和时间地点" * 180})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        agent = OpenTHULangGraphAgent(memory_file=Path(tmpdir) / "memory.json")
+        agent.decide_turn(
+            "继续说最近的活动",
+            user_id="decision_test_user",
+            session={"openai_api_key": "test-key", "llm_model": "moonshot-v1-8k"},
+            history=history,
+        )
+
+    context = FAKE_COMPLETION_PAYLOADS[-1].get("conversation_context", {})
+    profile = context.get("context_window", {})
+    recent_messages = context.get("recent_messages", [])
+    token_count = sum(estimate_context_tokens(item.get("content", "")) + 6 for item in recent_messages)
+    _expect(profile.get("name") == "moonshot_8k", str(profile))
+    _expect(len(recent_messages) <= profile.get("max_history_messages", 0), str(recent_messages))
+    _expect(token_count <= profile.get("max_history_tokens", 0), str(token_count))
+    _expect("39" in recent_messages[-1].get("content", ""), str(recent_messages[-1]))
+
+
 def run_suite() -> list[tuple[str, bool, str]]:
     cases = [
         ("skill_metadata", test_skill_metadata),
@@ -287,6 +313,7 @@ def run_suite() -> list[tuple[str, bool, str]]:
         ("decide_turn_homework_submit_fallback", test_decide_turn_homework_submit_fallback),
         ("decide_turn_includes_memory_context", test_decide_turn_includes_memory_context),
         ("decide_turn_includes_stored_memory_context", test_decide_turn_includes_stored_memory_context),
+        ("decide_turn_applies_model_context_window_to_history", test_decide_turn_applies_model_context_window_to_history),
     ]
     results: list[tuple[str, bool, str]] = []
     for name, fn in cases:

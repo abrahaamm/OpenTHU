@@ -33,10 +33,21 @@ class FakeRuntimeRepositoryTest {
     assertTrue(repository.getSnapshot().memoryRecords.any { it.key == "default_preference" })
   }
 
-  private class InMemoryRuntimeMemoryStore : RuntimeMemoryStore {
-    private var records: List<MemoryRecord> = emptyList()
+  @Test
+  fun savedEmptyMemoryRestoresAsEmptyInsteadOfDefaultSeed() {
+    val store = InMemoryRuntimeMemoryStore()
+    val repository = FakeRuntimeRepository(memoryStore = store)
 
-    override fun load(): List<MemoryRecord> = records
+    repository.replaceSnapshot(repository.getSnapshot().copy(memoryRecords = emptyList()))
+
+    val restored = FakeRuntimeRepository(memoryStore = store)
+    assertEquals(emptyList<MemoryRecord>(), restored.getSnapshot().memoryRecords)
+  }
+
+  private class InMemoryRuntimeMemoryStore : RuntimeMemoryStore {
+    private var records: List<MemoryRecord>? = null
+
+    override fun load(): List<MemoryRecord>? = records
 
     override fun save(records: List<MemoryRecord>) {
       this.records = records

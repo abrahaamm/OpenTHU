@@ -20,6 +20,11 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import ai.opencray.app.domain.model.SystemAction
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -73,11 +78,41 @@ private data class CampusActivityRecord(
     ).filterValues { it.isNotBlank() }
 }
 
+private data class CampusActivityLoadResult(
+  val activities: List<CampusActivityRecord> = emptyList(),
+  val source: String = "",
+  val error: String = "",
+  val warnings: List<String> = emptyList(),
+  val sourceDetails: List<Map<String, Any?>> = emptyList(),
+)
+
 class ActionExecutor(
   private val appContext: Context,
 ) {
   private val homeworkSkillExecutor = HomeworkSkillExecutor(appContext)
   private val courseSkillExecutor = CourseSkillExecutor(appContext)
+
+  private companion object {
+    private const val WEBVPN_COOKIE_URL =
+      "https://webvpn.tsinghua.edu.cn/" +
+        "wengine-vpn/cookie?method=get&host=info.tsinghua.edu.cn&scheme=https&path=/f/info/gxfw_fg/common/index"
+    private const val INFO_NEWS_LIST_URL =
+      "https://webvpn.tsinghua.edu.cn/https/" +
+        "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de/" +
+        "b/info/xxfb_fg/xnzx/template/more?oType=xs&lydw="
+    private const val INFO_SEARCH_URL =
+      "https://webvpn.tsinghua.edu.cn/https/" +
+        "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de/" +
+        "b/xnzx/search/info/xxfb_fg/teacher/getMobilePageList"
+    private const val INFO_REDIRECT_URL =
+      "https://webvpn.tsinghua.edu.cn/https/" +
+        "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de"
+    private const val DEFAULT_DUCKDUCKGO_ENDPOINT = "https://lite.duckduckgo.com/lite/"
+    private val activityChannels =
+      listOf("LM_HB", "LM_XJ_XSSQDT", "LM_JYGG", "LM_KYTZ", "LM_XJ_XTWBGTZ")
+    private val defaultActivityKeywords =
+      listOf("讲座", "活动", "论坛", "沙龙", "报名")
+  }
 
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
     val actionId = action.id.substringBefore("#")
@@ -136,25 +171,6 @@ class ActionExecutor(
   }
 
   private fun executeGetCampusActivities(action: SystemAction): ActionExecutionReport {
-    val (activities, source, loadError) = loadConfiguredCampusActivities()
-    if (activities.isEmpty()) {
-      return ActionExecutionReport(
-        success = false,
-        message =
-          loadError.ifBlank {
-            "手机端未配置校园活动数据源。请在设置页填写「校园活动文件」，或先同步校园活动 JSON 到设备。"
-          },
-        recoverable = false,
-        semantic = "not_configured",
-        metadata =
-          mapOf(
-            "activities" to emptyList<Map<String, String>>(),
-            "source" to if (source.isBlank()) "not_configured" else source,
-            "reason" to "missing_mobile_campus_source",
-          ),
-      )
-    }
-
     val query = firstNonBlank(
       readActionString(action, "query"),
       readActionString(action, "question"),
@@ -163,11 +179,57 @@ class ActionExecutor(
     val keywords =
       parseCsvOrJsonArray(readActionString(action, "keywords"))
         .ifEmpty { tokenizeCampusQuery(query) }
+        .ifEmpty { defaultActivityKeywords }
     val limit = readActionString(action, "limit").toIntOrNull()?.coerceIn(1, 30) ?: 10
+
+    val infoLoad = loadInfoCampusActivities(keywords, limit)
+    val configuredLoad =
+      if (infoLoad.activities.isEmpty()) {
+        loadConfiguredCampusActivities()
+      } else {
+        CampusActivityLoadResult()
+      }
+    val publicLoad =
+      if (infoLoad.activities.isEmpty() && configuredLoad.activities.isEmpty()) {
+        loadPublicCampusSearchActivities(query, keywords, limit)
+      } else {
+        CampusActivityLoadResult()
+      }
+    val load =
+      listOf(infoLoad, configuredLoad, publicLoad)
+        .firstOrNull { it.activities.isNotEmpty() }
+        ?: CampusActivityLoadResult(
+          warnings = infoLoad.warnings + configuredLoad.warnings + publicLoad.warnings,
+          sourceDetails = infoLoad.sourceDetails + configuredLoad.sourceDetails + publicLoad.sourceDetails,
+          error = firstNonBlank(infoLoad.error, configuredLoad.error, publicLoad.error),
+        )
+
+    if (load.activities.isEmpty()) {
+      val loadError = firstNonBlank(
+        load.error,
+        configuredLoad.error,
+        publicLoad.error,
+        "手机端未获取到校园活动数据。请配置 WebVPN 登录态，或配置 duckduckgo / searxng / brave 搜索兜底。",
+      )
+      return ActionExecutionReport(
+        success = false,
+        message = loadError,
+        recoverable = false,
+        semantic = if (publicLoad.error.isNotBlank()) "upstream_unavailable" else "not_configured",
+        metadata =
+          mapOf(
+            "activities" to emptyList<Map<String, String>>(),
+            "source" to firstNonBlank(load.source, configuredLoad.source, publicLoad.source, "not_configured"),
+            "reason" to "missing_mobile_campus_source",
+            "warnings" to load.warnings,
+            "sources" to load.sourceDetails,
+          ),
+      )
+    }
     val filtered =
-      filterCampusActivities(activities, keywords)
+      filterCampusActivities(load.activities, keywords)
         .take(limit)
-    val result = if (filtered.isNotEmpty()) filtered else activities.take(limit)
+    val result = if (filtered.isNotEmpty()) filtered else load.activities.take(limit)
     val summary =
       buildString {
         append("手机端校园活动检索完成：")
@@ -192,13 +254,15 @@ class ActionExecutor(
           "summary" to summary,
           "activities" to result.map { it.toDataMap() },
           "count" to result.size,
-          "source" to source,
+          "source" to load.source,
+          "sources" to load.sourceDetails,
+          "warnings" to load.warnings,
           "query" to query,
         ),
     )
   }
 
-  private fun loadConfiguredCampusActivities(): Triple<List<CampusActivityRecord>, String, String> {
+  private fun loadConfiguredCampusActivities(): CampusActivityLoadResult {
     val inlineJson = readSetting("campus_activities_json")
     if (inlineJson.isNotBlank()) {
       return parseCampusActivities(inlineJson, "settings:campus_activities_json")
@@ -206,26 +270,26 @@ class ActionExecutor(
 
     val pathText = readSetting("campus_file")
     if (pathText.isBlank()) {
-      return Triple(emptyList(), "", "")
+      return CampusActivityLoadResult()
     }
     val file = File(pathText)
     if (!file.isFile || !file.canRead()) {
-      return Triple(emptyList(), pathText, "手机端无法读取校园活动文件：$pathText")
+      return CampusActivityLoadResult(source = pathText, error = "手机端无法读取校园活动文件：$pathText")
     }
     if (file.length() > 2L * 1024L * 1024L) {
-      return Triple(emptyList(), pathText, "校园活动文件超过 2MB，暂不在手机端读取：$pathText")
+      return CampusActivityLoadResult(source = pathText, error = "校园活动文件超过 2MB，暂不在手机端读取：$pathText")
     }
     return runCatching {
       parseCampusActivities(file.readText(Charsets.UTF_8), pathText)
     }.getOrElse { throwable ->
-      Triple(emptyList(), pathText, "校园活动文件解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
+      CampusActivityLoadResult(source = pathText, error = "校园活动文件解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
     }
   }
 
   private fun parseCampusActivities(
     rawJson: String,
     source: String,
-  ): Triple<List<CampusActivityRecord>, String, String> =
+  ): CampusActivityLoadResult =
     runCatching {
       val trimmed = rawJson.trim()
       val array =
@@ -242,10 +306,311 @@ class ActionExecutor(
         (0 until array.length())
           .mapNotNull { index -> array.optJSONObject(index)?.toCampusActivityRecord() }
           .filter { it.title.isNotBlank() }
-      Triple(records, source, "")
+      CampusActivityLoadResult(
+        activities = records,
+        source = source,
+        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to source, "count" to records.size)),
+      )
     }.getOrElse { throwable ->
-      Triple(emptyList(), source, "校园活动 JSON 解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
+      CampusActivityLoadResult(source = source, error = "校园活动 JSON 解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
     }
+
+  private fun loadInfoCampusActivities(
+    keywords: List<String>,
+    limit: Int,
+  ): CampusActivityLoadResult {
+    val cookie = firstNonBlank(readSetting("webvpn_cookie"), readSetting("info_cookie"))
+    val csrfSetting = firstNonBlank(readSetting("webvpn_csrf"), readSetting("csrf"), readSetting("csrf_token"))
+    if (cookie.isBlank() && csrfSetting.isBlank()) {
+      return CampusActivityLoadResult(
+        warnings = listOf("未配置 WebVPN Cookie，已跳过 INFO 校内资讯接口。"),
+        sourceDetails = listOf(mapOf("type" to "info_webvpn_api", "status" to "skipped", "reason" to "missing_cookie")),
+      )
+    }
+
+    val warnings = mutableListOf<String>()
+    val sources = mutableListOf<Map<String, Any?>>()
+    val records = linkedMapOf<String, CampusActivityRecord>()
+    val csrf =
+      runCatching { csrfSetting.ifBlank { fetchWebVpnCsrf(cookie) } }
+        .getOrElse { throwable ->
+          return CampusActivityLoadResult(
+            source = "info_webvpn_api",
+            error = "INFO/WebVPN 登录态不可用：${throwable.message ?: throwable.javaClass.simpleName}",
+            sourceDetails = listOf(mapOf("type" to "info_webvpn_api", "status" to "failed")),
+          )
+        }
+
+    activityChannels.forEach { channel ->
+      val url =
+        "$INFO_NEWS_LIST_URL&lmid=$channel&currentPage=1&length=20&_csrf=${encodeQueryValue(csrf)}"
+      val channelResult =
+        runCatching {
+          val rows = JSONObject(httpRequest(url, cookie = cookie)).optJSONObject("object")
+            ?.optJSONArray("dataList")
+            ?: JSONArray()
+          var count = 0
+          for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            val activity = row.toInfoCampusActivityRecord(channel)
+            if (activity.title.isNotBlank() && looksCampusActivityRelated(activity, keywords)) {
+              records[activity.url.ifBlank { "${activity.title}:${activity.startTime}" }] = activity
+              count += 1
+            }
+          }
+          count
+        }
+      sources +=
+        channelResult.fold(
+          onSuccess = { count ->
+            mapOf("type" to "info_channel", "channel" to channel, "status" to "ok", "count" to count)
+          },
+          onFailure = { throwable ->
+            mapOf(
+              "type" to "info_channel",
+              "channel" to channel,
+              "status" to "failed",
+              "message" to (throwable.message ?: throwable.javaClass.simpleName),
+            )
+          },
+        )
+    }
+
+    keywords.take(5).forEach { keyword ->
+      val searchResult =
+        runCatching {
+          val rows = JSONObject(httpRequest(
+            urlText = "$INFO_SEARCH_URL?_csrf=${encodeQueryValue(csrf)}",
+            method = "POST",
+            body = "esParamClass=${encodeQueryValue(infoSearchPayload(keyword))}",
+            cookie = cookie,
+          )).optJSONObject("object")
+            ?.optJSONArray("resultsList")
+            ?: JSONArray()
+          var count = 0
+          for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            val activity = row.toInfoCampusActivityRecord("")
+            if (activity.title.isNotBlank()) {
+              records[activity.url.ifBlank { "${activity.title}:${activity.startTime}" }] = activity
+              count += 1
+            }
+          }
+          count
+        }
+      sources +=
+        searchResult.fold(
+          onSuccess = { count ->
+            mapOf("type" to "info_search", "keyword" to keyword, "status" to "ok", "count" to count)
+          },
+          onFailure = { throwable ->
+            mapOf(
+              "type" to "info_search",
+              "keyword" to keyword,
+              "status" to "failed",
+              "message" to (throwable.message ?: throwable.javaClass.simpleName),
+            )
+          },
+        )
+    }
+
+    if (records.isEmpty()) {
+      warnings += "INFO/WebVPN 未返回可用校园活动。"
+    }
+    return CampusActivityLoadResult(
+      activities = records.values.take(limit * 2).toList(),
+      source = if (records.isEmpty()) "" else "info_webvpn_api",
+      warnings = warnings,
+      sourceDetails = sources,
+    )
+  }
+
+  private fun loadPublicCampusSearchActivities(
+    query: String,
+    keywords: List<String>,
+    limit: Int,
+  ): CampusActivityLoadResult {
+    val provider = readSetting("search_provider").ifBlank { "duckduckgo" }.lowercase(Locale.ROOT)
+    if (provider == "mock") {
+      return CampusActivityLoadResult(
+        source = "public_campus_search",
+        error = "mock 搜索提供方已移除，请配置 duckduckgo、searxng 或 brave。",
+        sourceDetails = listOf(mapOf("type" to "public_search", "provider" to provider, "status" to "failed")),
+      )
+    }
+    val searchQuery = buildCampusSearchQuery(query, keywords)
+    val result =
+      when (provider) {
+        "duckduckgo" -> searchDuckDuckGo(searchQuery, limit)
+        "searxng" -> searchSearxng(searchQuery, limit)
+        "brave" -> searchBrave(searchQuery, limit)
+        else ->
+          CampusActivityLoadResult(
+            source = "public_campus_search",
+            error = "不支持的搜索提供方：$provider。请使用 duckduckgo、searxng 或 brave。",
+            sourceDetails = listOf(mapOf("type" to "public_search", "provider" to provider, "status" to "failed")),
+          )
+      }
+    if (result.activities.isEmpty()) return result
+    return result.copy(
+      warnings = result.warnings + "INFO/WebVPN 和本地文件未返回可用数据，已使用公开校内网页搜索结果补充。",
+      sourceDetails =
+        result.sourceDetails.map { detail ->
+          detail + ("query" to searchQuery)
+        },
+    )
+  }
+
+  private fun searchDuckDuckGo(
+    query: String,
+    limit: Int,
+  ): CampusActivityLoadResult {
+    val endpoint = normalizeDuckDuckGoEndpoint(readSetting("search_endpoint"))
+    return runCatching {
+      val html = httpRequest(urlWithQuery(endpoint, mapOf("q" to query)), cookie = "")
+      val records = parseDuckDuckGoCampusResults(html).take(limit)
+      val sourceDetails =
+        listOf(
+          mapOf("type" to "public_search", "provider" to "duckduckgo", "status" to "ok", "count" to records.size),
+        )
+      if (records.isEmpty()) {
+        return@runCatching CampusActivityLoadResult(
+          source = "public_campus_search",
+          error = "DuckDuckGo 未返回可解析的校园活动搜索结果。",
+          sourceDetails = sourceDetails,
+        )
+      }
+      CampusActivityLoadResult(
+        activities = records,
+        source = "public_campus_search",
+        sourceDetails = sourceDetails,
+      )
+    }.getOrElse { throwable ->
+      CampusActivityLoadResult(
+        source = "public_campus_search",
+        error = "公开校园搜索不可用：${throwable.message ?: throwable.javaClass.simpleName}",
+        sourceDetails = listOf(mapOf("type" to "public_search", "provider" to "duckduckgo", "status" to "failed")),
+      )
+    }
+  }
+
+  private fun searchSearxng(
+    query: String,
+    limit: Int,
+  ): CampusActivityLoadResult {
+    val endpoint = readSetting("search_endpoint")
+    if (endpoint.isBlank()) {
+      return CampusActivityLoadResult(
+        source = "public_campus_search",
+        error = "searxng 需要配置搜索接口地址。",
+        sourceDetails = listOf(mapOf("type" to "public_search", "provider" to "searxng", "status" to "failed")),
+      )
+    }
+    return runCatching {
+      val json = JSONObject(httpRequest(urlWithQuery(endpoint, mapOf("q" to query, "format" to "json", "language" to "zh-CN"))))
+      val rows = json.optJSONArray("results") ?: JSONArray()
+      val records =
+        (0 until rows.length())
+          .mapNotNull { rows.optJSONObject(it) }
+          .mapNotNull { row ->
+            val title = cleanHtmlText(firstJsonString(row, "title"))
+            val url = firstJsonString(row, "url")
+            if (title.isBlank() || url.isBlank()) null else {
+              CampusActivityRecord(
+                title = title,
+                abstract = cleanHtmlText(firstJsonString(row, "content", "snippet")),
+                url = url,
+                category = "campus",
+                source = "searxng",
+              )
+            }
+          }
+          .take(limit)
+      val sourceDetails =
+        listOf(mapOf("type" to "public_search", "provider" to "searxng", "status" to "ok", "count" to records.size))
+      if (records.isEmpty()) {
+        return@runCatching CampusActivityLoadResult(
+          source = "public_campus_search",
+          error = "SearxNG 未返回可解析的校园活动搜索结果。",
+          sourceDetails = sourceDetails,
+        )
+      }
+      CampusActivityLoadResult(
+        activities = records,
+        source = "public_campus_search",
+        sourceDetails = sourceDetails,
+      )
+    }.getOrElse { throwable ->
+      CampusActivityLoadResult(
+        source = "public_campus_search",
+        error = "公开校园搜索不可用：${throwable.message ?: throwable.javaClass.simpleName}",
+        sourceDetails = listOf(mapOf("type" to "public_search", "provider" to "searxng", "status" to "failed")),
+      )
+    }
+  }
+
+  private fun searchBrave(
+    query: String,
+    limit: Int,
+  ): CampusActivityLoadResult {
+    val apiKey = readSetting("search_api_key")
+    if (apiKey.isBlank()) {
+      return CampusActivityLoadResult(
+        source = "public_campus_search",
+        error = "brave 搜索需要配置 API Key。",
+        sourceDetails = listOf(mapOf("type" to "public_search", "provider" to "brave", "status" to "failed")),
+      )
+    }
+    val endpoint = readSetting("search_endpoint").ifBlank { "https://api.search.brave.com/res/v1/web/search" }
+    return runCatching {
+      val json =
+        JSONObject(
+          httpRequest(
+            urlText = urlWithQuery(endpoint, mapOf("q" to query, "count" to limit.coerceAtMost(10).toString())),
+            cookie = "",
+            headers = mapOf("X-Subscription-Token" to apiKey, "Accept" to "application/json"),
+          ),
+        )
+      val rows = json.optJSONObject("web")?.optJSONArray("results") ?: JSONArray()
+      val records =
+        (0 until rows.length())
+          .mapNotNull { rows.optJSONObject(it) }
+          .mapNotNull { row ->
+            val title = cleanHtmlText(firstJsonString(row, "title"))
+            val url = firstJsonString(row, "url")
+            if (title.isBlank() || url.isBlank()) null else {
+              CampusActivityRecord(
+                title = title,
+                abstract = cleanHtmlText(firstJsonString(row, "description", "snippet")),
+                url = url,
+                category = "campus",
+                source = "brave",
+              )
+            }
+          }
+          .take(limit)
+      val sourceDetails =
+        listOf(mapOf("type" to "public_search", "provider" to "brave", "status" to "ok", "count" to records.size))
+      if (records.isEmpty()) {
+        return@runCatching CampusActivityLoadResult(
+          source = "public_campus_search",
+          error = "Brave 未返回可解析的校园活动搜索结果。",
+          sourceDetails = sourceDetails,
+        )
+      }
+      CampusActivityLoadResult(
+        activities = records,
+        source = "public_campus_search",
+        sourceDetails = sourceDetails,
+      )
+    }.getOrElse { throwable ->
+      CampusActivityLoadResult(
+        source = "public_campus_search",
+        error = "公开校园搜索不可用：${throwable.message ?: throwable.javaClass.simpleName}",
+        sourceDetails = listOf(mapOf("type" to "public_search", "provider" to "brave", "status" to "failed")),
+      )
+    }
+  }
 
   private fun JSONObject.toCampusActivityRecord(): CampusActivityRecord =
     CampusActivityRecord(
@@ -326,6 +691,218 @@ class ActionExecutor(
       if (value.isNotBlank() && value != "null") return value
     }
     return ""
+  }
+
+  private fun JSONObject.toInfoCampusActivityRecord(channel: String): CampusActivityRecord {
+    val rawUrl = firstJsonString(this, "url", "link", "detail_url")
+    return CampusActivityRecord(
+      title = cleanHtmlText(firstJsonString(this, "bt", "title", "name")),
+      startTime = firstJsonString(this, "time", "publish_time", "date"),
+      organizer = cleanHtmlText(firstJsonString(this, "dwmc_show", "organizer", "source", "dwmc")),
+      category = firstNonBlank(channel, firstJsonString(this, "lmid", "channel", "category")),
+      abstract = cleanHtmlText(firstJsonString(this, "zy", "abstract", "summary", "content", "snippet")),
+      url = normalizeInfoUrl(rawUrl),
+      source = "info_webvpn_api",
+    )
+  }
+
+  private fun fetchWebVpnCsrf(cookie: String): String {
+    val html = httpRequest(WEBVPN_COOKIE_URL, cookie = cookie)
+    return Regex("XSRF-TOKEN=(.+?);").find("$html;")?.groupValues?.getOrNull(1)?.trim()
+      ?.takeIf { it.isNotBlank() }
+      ?: throw IllegalStateException("Unable to locate XSRF-TOKEN from WebVPN cookie endpoint")
+  }
+
+  private fun infoSearchPayload(keyword: String): String {
+    val params =
+      JSONObject()
+        .put("bt", keyword)
+        .put("tag", keyword)
+        .put("xxfl", keyword)
+    return JSONObject()
+      .put("params", params)
+      .put("filterParams", JSONObject())
+      .put("orderMap", JSONObject().put("sort", "time"))
+      .put("matchExact", "否")
+      .put("currentPage", 1)
+      .toString()
+  }
+
+  private fun looksCampusActivityRelated(
+    activity: CampusActivityRecord,
+    keywords: List<String>,
+  ): Boolean {
+    val normalizedKeywords =
+      (keywords + defaultActivityKeywords)
+        .map { it.lowercase(Locale.getDefault()) }
+        .filter { it.isNotBlank() }
+        .distinct()
+    val haystack =
+      listOf(
+        activity.title,
+        activity.abstract,
+        activity.location,
+        activity.organizer,
+        activity.category,
+      ).joinToString(" ").lowercase(Locale.getDefault())
+    return normalizedKeywords.any { keyword -> haystack.contains(keyword) }
+  }
+
+  private fun buildCampusSearchQuery(
+    query: String,
+    keywords: List<String>,
+  ): String {
+    val seed = query.ifBlank { keywords.take(4).joinToString(" ") }.ifBlank { "校园活动 讲座" }
+    return if (listOf("清华", "校园", "活动", "讲座", "论坛").any { seed.contains(it) }) {
+      seed
+    } else {
+      "清华 校园活动 $seed"
+    }
+  }
+
+  private fun parseDuckDuckGoCampusResults(html: String): List<CampusActivityRecord> {
+    val links =
+      Regex("(?is)<a\\b([^>]*)>(.*?)</a>")
+        .findAll(html)
+        .filter { match ->
+          val attrs = match.groupValues[1]
+          Regex("(?is)class=['\"][^'\"]*(result-link|result__a)[^'\"]*['\"]").containsMatchIn(attrs)
+        }
+        .toList()
+    val records = mutableListOf<CampusActivityRecord>()
+    val seenUrls = mutableSetOf<String>()
+    links.forEachIndexed { index, match ->
+      val attrs = match.groupValues[1]
+      val href = Regex("(?is)href=['\"]([^'\"]+)['\"]").find(attrs)?.groupValues?.getOrNull(1).orEmpty()
+      val url = unwrapDuckDuckGoRedirect(decodeHtmlEntities(href))
+      val title = cleanHtmlText(match.groupValues[2])
+      if (url.isBlank() || title.isBlank() || !seenUrls.add(url)) return@forEachIndexed
+      val nextStart = links.getOrNull(index + 1)?.range?.first ?: html.length
+      val block = html.substring(match.range.last.coerceAtMost(html.length - 1), nextStart)
+      val snippet =
+        Regex("(?is)<(td|a|div)[^>]+class=['\"][^'\"]*(result-snippet|result__snippet)[^'\"]*['\"][^>]*>(.*?)</\\1>")
+          .find(block)
+          ?.groupValues
+          ?.getOrNull(3)
+          .orEmpty()
+      records +=
+        CampusActivityRecord(
+          title = title,
+          abstract = cleanHtmlText(snippet),
+          url = url,
+          category = "campus",
+          source = "duckduckgo",
+        )
+    }
+    return records
+  }
+
+  private fun normalizeInfoUrl(rawUrl: String): String {
+    val url = rawUrl.trim()
+    return when {
+      url.isBlank() -> ""
+      url.startsWith("http://") || url.startsWith("https://") -> url
+      url.startsWith("/") -> INFO_REDIRECT_URL + url
+      else -> url
+    }
+  }
+
+  private fun normalizeDuckDuckGoEndpoint(rawEndpoint: String): String {
+    val endpoint = rawEndpoint.trim().ifBlank { DEFAULT_DUCKDUCKGO_ENDPOINT }
+    return when (endpoint) {
+      "https://duckduckgo.com/html/",
+      "https://html.duckduckgo.com/html/" -> DEFAULT_DUCKDUCKGO_ENDPOINT
+      else -> endpoint
+    }
+  }
+
+  private fun unwrapDuckDuckGoRedirect(rawUrl: String): String {
+    val normalized = if (rawUrl.startsWith("//")) "https:$rawUrl" else rawUrl
+    if (!normalized.contains("duckduckgo.com") || !normalized.contains("uddg=")) return normalized
+    val encoded = Regex("[?&]uddg=([^&]+)").find(normalized)?.groupValues?.getOrNull(1).orEmpty()
+    return if (encoded.isBlank()) normalized else URLDecoder.decode(encoded, StandardCharsets.UTF_8.name())
+  }
+
+  private fun urlWithQuery(
+    endpoint: String,
+    params: Map<String, String>,
+  ): String {
+    val separator = if (endpoint.contains("?")) "&" else "?"
+    return endpoint + separator + params.entries.joinToString("&") { (key, value) ->
+      "${encodeQueryValue(key)}=${encodeQueryValue(value)}"
+    }
+  }
+
+  private fun encodeQueryValue(value: String): String =
+    URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+
+  private fun cleanHtmlText(value: String): String {
+    val withoutScripts = value.replace(Regex("(?is)<(script|style).*?>.*?</\\1>"), " ")
+    val withoutTags = withoutScripts.replace(Regex("(?s)<[^>]+>"), " ")
+    return decodeHtmlEntities(withoutTags)
+      .replace(Regex("\\s+"), " ")
+      .trim()
+  }
+
+  private fun decodeHtmlEntities(value: String): String =
+    Regex("&#(x?[0-9a-fA-F]+);").replace(
+      value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " "),
+    ) { match ->
+      val raw = match.groupValues[1]
+      val codePoint =
+        if (raw.startsWith("x", ignoreCase = true)) raw.drop(1).toIntOrNull(16) else raw.toIntOrNull()
+      codePoint?.let { String(Character.toChars(it)) } ?: match.value
+    }
+
+  private fun httpRequest(
+    urlText: String,
+    method: String = "GET",
+    body: String = "",
+    cookie: String = "",
+    headers: Map<String, String> = emptyMap(),
+  ): String {
+    val connection = URL(urlText).openConnection() as HttpURLConnection
+    return try {
+      connection.requestMethod = method
+      connection.connectTimeout = 12_000
+      connection.readTimeout = 12_000
+      connection.instanceFollowRedirects = true
+      connection.setRequestProperty(
+        "User-Agent",
+        "Mozilla/5.0 (Linux; Android) OpenTHU-Agent/1.0",
+      )
+      if (cookie.isNotBlank()) {
+        connection.setRequestProperty("Cookie", cookie)
+      }
+      headers.forEach { (key, value) -> connection.setRequestProperty(key, value) }
+      if (body.isNotBlank()) {
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+        connection.outputStream.use { stream ->
+          stream.write(body.toByteArray(StandardCharsets.UTF_8))
+        }
+      }
+      val code = connection.responseCode
+      val stream =
+        if (code in 200..299) {
+          connection.inputStream
+        } else {
+          connection.errorStream ?: connection.inputStream
+        }
+      val text = stream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
+      if (code !in 200..299) {
+        throw IllegalStateException("HTTP $code: ${text.take(160)}")
+      }
+      text
+    } finally {
+      connection.disconnect()
+    }
   }
 
   private fun executeShowSummary(action: SystemAction): ActionExecutionReport {
