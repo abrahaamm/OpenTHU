@@ -25,6 +25,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -55,6 +56,7 @@ private data class CalendarEventBrief(
 )
 
 private data class CampusActivityRecord(
+  val activityId: String = "",
   val title: String,
   val startTime: String = "",
   val location: String = "",
@@ -66,6 +68,7 @@ private data class CampusActivityRecord(
 ) {
   fun toDataMap(): Map<String, String> =
     mapOf(
+      "activity_id" to activityId,
       "title" to title,
       "start_time" to startTime,
       "time" to startTime,
@@ -82,9 +85,29 @@ private data class CampusActivityLoadResult(
   val activities: List<CampusActivityRecord> = emptyList(),
   val source: String = "",
   val error: String = "",
+  val status: String = "",
+  val reason: String = "",
   val warnings: List<String> = emptyList(),
   val sourceDetails: List<Map<String, Any?>> = emptyList(),
 )
+
+private data class InfoHttpResponse(
+  val statusCode: Int,
+  val body: String,
+  val setCookies: List<String> = emptyList(),
+)
+
+private data class InfoSession(
+  val cookie: String,
+  val csrf: String,
+  val csrfSource: String,
+)
+
+private class InfoHttpException(
+  val statusCode: Int,
+  val responseExcerpt: String,
+  message: String,
+) : RuntimeException(message)
 
 class ActionExecutor(
   private val appContext: Context,
@@ -93,18 +116,23 @@ class ActionExecutor(
   private val courseSkillExecutor = CourseSkillExecutor(appContext)
 
   private companion object {
-    private const val WEBVPN_COOKIE_URL =
+    private const val INFO_PUBLIC_BASE_URL = "https://info.tsinghua.edu.cn"
+    private const val INFO_ACTIVITY_INDEX_URL = "$INFO_PUBLIC_BASE_URL/f/info/hdrc_fg/teacher/index"
+    private const val INFO_ACTIVITY_ALL_URL = "$INFO_PUBLIC_BASE_URL/b/hdrc_fg/index/all"
+    private const val INFO_ACTIVITY_DETAIL_URL = "$INFO_PUBLIC_BASE_URL/f/info/hdrc_fg/common/detail?hdrc_id="
+    private const val CAMPUS_ACTIVITY_CANDIDATE_LIMIT = 50
+    private const val LEGACY_WEBVPN_COOKIE_URL =
       "https://webvpn.tsinghua.edu.cn/" +
         "wengine-vpn/cookie?method=get&host=info.tsinghua.edu.cn&scheme=https&path=/f/info/gxfw_fg/common/index"
-    private const val INFO_NEWS_LIST_URL =
+    private const val LEGACY_INFO_NEWS_LIST_URL =
       "https://webvpn.tsinghua.edu.cn/https/" +
         "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de/" +
         "b/info/xxfb_fg/xnzx/template/more?oType=xs&lydw="
-    private const val INFO_SEARCH_URL =
+    private const val LEGACY_INFO_SEARCH_URL =
       "https://webvpn.tsinghua.edu.cn/https/" +
         "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de/" +
         "b/xnzx/search/info/xxfb_fg/teacher/getMobilePageList"
-    private const val INFO_REDIRECT_URL =
+    private const val LEGACY_INFO_REDIRECT_URL =
       "https://webvpn.tsinghua.edu.cn/https/" +
         "77726476706e69737468656265737421f9f9479369247b59700f81b9991b2631506205de"
     private const val DEFAULT_DUCKDUCKGO_ENDPOINT = "https://lite.duckduckgo.com/lite/"
@@ -112,6 +140,8 @@ class ActionExecutor(
       listOf("LM_HB", "LM_XJ_XSSQDT", "LM_JYGG", "LM_KYTZ", "LM_XJ_XTWBGTZ")
     private val defaultActivityKeywords =
       listOf("讲座", "活动", "论坛", "沙龙", "报名")
+    private val cookieAttributeNames =
+      setOf("path", "domain", "expires", "max-age", "secure", "httponly", "samesite")
   }
 
   fun execute(action: SystemAction, goal: String): ActionExecutionReport {
@@ -181,59 +211,61 @@ class ActionExecutor(
         .ifEmpty { tokenizeCampusQuery(query) }
         .ifEmpty { defaultActivityKeywords }
     val limit = readActionString(action, "limit").toIntOrNull()?.coerceIn(1, 30) ?: 10
+    val startDate = firstNonBlank(readActionString(action, "start_date"), readActionString(action, "startDate"))
+    val endDate = firstNonBlank(readActionString(action, "end_date"), readActionString(action, "endDate"))
 
-    val infoLoad = loadInfoCampusActivities(keywords, limit)
+    val infoLoad = loadInfoCampusActivities(CAMPUS_ACTIVITY_CANDIDATE_LIMIT)
     val configuredLoad =
       if (infoLoad.activities.isEmpty()) {
         loadConfiguredCampusActivities()
       } else {
         CampusActivityLoadResult()
       }
-    val publicLoad =
-      if (infoLoad.activities.isEmpty() && configuredLoad.activities.isEmpty()) {
-        loadPublicCampusSearchActivities(query, keywords, limit)
-      } else {
-        CampusActivityLoadResult()
-      }
     val load =
-      listOf(infoLoad, configuredLoad, publicLoad)
+      listOf(infoLoad, configuredLoad)
         .firstOrNull { it.activities.isNotEmpty() }
         ?: CampusActivityLoadResult(
-          warnings = infoLoad.warnings + configuredLoad.warnings + publicLoad.warnings,
-          sourceDetails = infoLoad.sourceDetails + configuredLoad.sourceDetails + publicLoad.sourceDetails,
-          error = firstNonBlank(infoLoad.error, configuredLoad.error, publicLoad.error),
+          source = firstNonBlank(infoLoad.source, configuredLoad.source, "not_configured"),
+          status = campusActivitiesFailureStatus(infoLoad, configuredLoad),
+          reason = campusActivitiesFailureReason(infoLoad, configuredLoad),
+          warnings = infoLoad.warnings + configuredLoad.warnings,
+          sourceDetails = infoLoad.sourceDetails + configuredLoad.sourceDetails,
+          error = firstNonBlank(infoLoad.error, configuredLoad.error),
         )
 
     if (load.activities.isEmpty()) {
       val loadError = firstNonBlank(
         load.error,
         configuredLoad.error,
-        publicLoad.error,
-        "手机端未获取到校园活动数据。请配置 WebVPN 登录态，或配置 duckduckgo / searxng / brave 搜索兜底。",
+        "手机端未获取到校园活动数据。当前 get_campus_activities 仅使用 INFO/WebVPN 校内接口或本地校园活动文件。",
       )
       return ActionExecutionReport(
         success = false,
         message = loadError,
         recoverable = false,
-        semantic = if (publicLoad.error.isNotBlank()) "upstream_unavailable" else "not_configured",
+        semantic = if (load.reason == "missing_webvpn_cookie") "not_configured" else "upstream_unavailable",
         metadata =
           mapOf(
+            "status" to firstNonBlank(load.status, "source_unavailable"),
             "activities" to emptyList<Map<String, String>>(),
-            "source" to firstNonBlank(load.source, configuredLoad.source, publicLoad.source, "not_configured"),
-            "reason" to "missing_mobile_campus_source",
+            "source" to firstNonBlank(load.source, configuredLoad.source, "not_configured"),
+            "reason" to firstNonBlank(load.reason, "source_unavailable"),
             "warnings" to load.warnings,
             "sources" to load.sourceDetails,
           ),
       )
     }
+    val dateFilteredCandidates =
+      filterCampusActivitiesByDate(load.activities, startDate, endDate)
+        .take(CAMPUS_ACTIVITY_CANDIDATE_LIMIT)
     val filtered =
-      filterCampusActivities(load.activities, keywords)
+      filterCampusActivities(dateFilteredCandidates, keywords)
         .take(limit)
-    val result = if (filtered.isNotEmpty()) filtered else load.activities.take(limit)
+    val result = if (filtered.isNotEmpty()) filtered else dateFilteredCandidates.take(limit)
     val summary =
       buildString {
         append("手机端校园活动检索完成：")
-        append(if (filtered.isNotEmpty()) "匹配到 ${filtered.size} 条" else "未命中关键词，返回前 ${result.size} 条候选")
+        append(if (filtered.isNotEmpty()) "匹配到 ${filtered.size} 条" else "未命中关键词或日期条件，返回前 ${result.size} 条候选")
         append("。")
         result.take(6).forEach { item ->
           append("\n- ").append(item.title)
@@ -253,11 +285,23 @@ class ActionExecutor(
           "answer" to summary,
           "summary" to summary,
           "activities" to result.map { it.toDataMap() },
+          "candidate_activities" to dateFilteredCandidates.map { it.toDataMap() },
           "count" to result.size,
+          "candidate_count" to dateFilteredCandidates.size,
+          "raw_count" to load.activities.size,
           "source" to load.source,
           "sources" to load.sourceDetails,
           "warnings" to load.warnings,
           "query" to query,
+          "filter_input" to
+            mapOf(
+              "query" to query,
+              "keywords" to keywords,
+              "start_date" to startDate,
+              "end_date" to endDate,
+              "limit" to limit,
+              "candidate_limit" to CAMPUS_ACTIVITY_CANDIDATE_LIMIT,
+            ),
         ),
     )
   }
@@ -274,15 +318,33 @@ class ActionExecutor(
     }
     val file = File(pathText)
     if (!file.isFile || !file.canRead()) {
-      return CampusActivityLoadResult(source = pathText, error = "手机端无法读取校园活动文件：$pathText")
+      return CampusActivityLoadResult(
+        source = pathText,
+        error = "手机端无法读取校园活动文件：$pathText",
+        status = "source_unavailable",
+        reason = "configured_file_unavailable",
+        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to pathText, "status" to "failed", "reason" to "unreadable")),
+      )
     }
     if (file.length() > 2L * 1024L * 1024L) {
-      return CampusActivityLoadResult(source = pathText, error = "校园活动文件超过 2MB，暂不在手机端读取：$pathText")
+      return CampusActivityLoadResult(
+        source = pathText,
+        error = "校园活动文件超过 2MB，暂不在手机端读取：$pathText",
+        status = "source_unavailable",
+        reason = "configured_file_unavailable",
+        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to pathText, "status" to "failed", "reason" to "too_large")),
+      )
     }
     return runCatching {
       parseCampusActivities(file.readText(Charsets.UTF_8), pathText)
     }.getOrElse { throwable ->
-      CampusActivityLoadResult(source = pathText, error = "校园活动文件解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
+      CampusActivityLoadResult(
+        source = pathText,
+        error = "校园活动文件解析失败：${throwable.message ?: throwable.javaClass.simpleName}",
+        status = "source_unavailable",
+        reason = "configured_file_unavailable",
+        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to pathText, "status" to "failed", "message" to safeErrorMessage(throwable))),
+      )
     }
   }
 
@@ -309,119 +371,273 @@ class ActionExecutor(
       CampusActivityLoadResult(
         activities = records,
         source = source,
-        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to source, "count" to records.size)),
+        status = if (records.isEmpty()) "source_unavailable" else "ok",
+        reason = if (records.isEmpty()) "configured_file_unavailable" else "",
+        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to source, "status" to "ok", "count" to records.size)),
       )
     }.getOrElse { throwable ->
-      CampusActivityLoadResult(source = source, error = "校园活动 JSON 解析失败：${throwable.message ?: throwable.javaClass.simpleName}")
+      CampusActivityLoadResult(
+        source = source,
+        error = "校园活动 JSON 解析失败：${throwable.message ?: throwable.javaClass.simpleName}",
+        status = "source_unavailable",
+        reason = "configured_file_unavailable",
+        sourceDetails = listOf(mapOf("type" to "configured_file", "source" to source, "status" to "failed", "message" to safeErrorMessage(throwable))),
+      )
     }
 
-  private fun loadInfoCampusActivities(
+  private fun loadInfoCampusActivities(candidateLimit: Int): CampusActivityLoadResult {
+    val warnings = mutableListOf<String>()
+    val sources = mutableListOf<Map<String, Any?>>()
+    val records = linkedMapOf<String, CampusActivityRecord>()
+    val infoSession =
+      runCatching { preparePublicInfoSession() }
+        .getOrElse { throwable ->
+          return CampusActivityLoadResult(
+            source = "info_hdrc_public_api",
+            error = "INFO 公开活动日程页面不可用：${throwable.message ?: throwable.javaClass.simpleName}",
+            status = "info_failed",
+            reason = "info_request_failed",
+            sourceDetails = listOf(
+              mapOf(
+                "type" to "info_hdrc_public_api",
+                "status" to "failed",
+                "reason" to "info_request_failed",
+                "message" to safeErrorMessage(throwable),
+              ),
+            ),
+          )
+        }
+
+    val listResult =
+      runCatching {
+        val response = infoHttpRequest(
+          urlText = INFO_ACTIVITY_ALL_URL,
+          method = "POST",
+          body = "page=1&cjf=-1&hdlxm=&fbdwnm=",
+          cookie = infoSession.cookie,
+          csrf = infoSession.csrf,
+          referer = INFO_ACTIVITY_INDEX_URL,
+          ajax = true,
+        )
+        val root = JSONObject(response.body)
+        val resultList = root.optJSONObject("object")?.optJSONArray("resultList") ?: JSONArray()
+        var rawCount = 0
+        var filteredCount = 0
+        for (i in 0 until resultList.length()) {
+          val day = resultList.optJSONObject(i) ?: continue
+          val activities = day.optJSONArray("hdrcList") ?: JSONArray()
+          rawCount += activities.length()
+          for (j in 0 until activities.length()) {
+            val row = activities.optJSONObject(j) ?: continue
+            val activity = row.toHdrcCampusActivityRecord()
+            if (activity.title.isNotBlank()) {
+              records[activity.url.ifBlank { "${activity.title}:${activity.startTime}" }] = activity
+              filteredCount += 1
+            }
+          }
+        }
+        mapOf(
+          "type" to "info_hdrc_public_list",
+          "status" to "ok",
+          "http_status" to response.statusCode,
+          "raw_count" to rawCount,
+          "filtered_count" to filteredCount,
+          "count" to filteredCount,
+          "response_excerpt_length" to response.body.take(512).length,
+          "page" to 1,
+        )
+      }
+    sources += listResult.getOrElse { throwable ->
+      infoFailureDetail("info_hdrc_public_list", throwable, mapOf("page" to 1))
+    }
+
+    val sourceDetails =
+      listOf(
+        mapOf(
+          "type" to "info_hdrc_public_api",
+          "status" to "ready",
+          "has_cookie" to infoSession.cookie.isNotBlank(),
+          "cookie_names" to cookieNames(infoSession.cookie),
+          "has_csrf" to infoSession.csrf.isNotBlank(),
+          "csrf_source" to infoSession.csrfSource,
+          "index_url" to INFO_ACTIVITY_INDEX_URL,
+        ),
+      ) + sources
+
+    if (records.isEmpty()) {
+      warnings += if (sources.any { it["status"] == "failed" }) {
+        "INFO 公开活动日程接口请求失败或未返回可解析活动。"
+      } else {
+        "INFO 公开活动日程未返回匹配的校园活动。"
+      }
+    }
+    val hasFailedSource = sources.any { it["status"] == "failed" }
+    return CampusActivityLoadResult(
+      activities = records.values.take(candidateLimit).toList(),
+      source = "info_hdrc_public_api",
+      status = if (records.isEmpty()) if (hasFailedSource) "info_failed" else "info_empty" else "ok",
+      reason = if (records.isEmpty()) if (hasFailedSource) "info_request_failed" else "info_returned_no_records" else "",
+      warnings = warnings,
+      sourceDetails = sourceDetails,
+    )
+  }
+
+  private fun loadLegacyWebvpnCampusActivities(
     keywords: List<String>,
     limit: Int,
   ): CampusActivityLoadResult {
-    val cookie = firstNonBlank(readSetting("webvpn_cookie"), readSetting("info_cookie"))
+    val cookie = normalizeCookieHeader(firstNonBlank(readSetting("webvpn_cookie"), readSetting("info_cookie")))
     val csrfSetting = firstNonBlank(readSetting("webvpn_csrf"), readSetting("csrf"), readSetting("csrf_token"))
-    if (cookie.isBlank() && csrfSetting.isBlank()) {
+    if (cookie.isBlank()) {
       return CampusActivityLoadResult(
+        source = "info_webvpn_api",
+        status = "not_configured",
+        reason = "missing_webvpn_cookie",
         warnings = listOf("未配置 WebVPN Cookie，已跳过 INFO 校内资讯接口。"),
-        sourceDetails = listOf(mapOf("type" to "info_webvpn_api", "status" to "skipped", "reason" to "missing_cookie")),
+        sourceDetails = listOf(
+          mapOf(
+            "type" to "info_webvpn_api",
+            "status" to "skipped",
+            "reason" to "missing_webvpn_cookie",
+            "has_cookie" to false,
+            "has_csrf" to csrfSetting.isNotBlank(),
+          ),
+        ),
       )
     }
 
     val warnings = mutableListOf<String>()
     val sources = mutableListOf<Map<String, Any?>>()
     val records = linkedMapOf<String, CampusActivityRecord>()
-    val csrf =
-      runCatching { csrfSetting.ifBlank { fetchWebVpnCsrf(cookie) } }
+    val infoSession =
+      runCatching { prepareInfoSession(cookie, csrfSetting) }
         .getOrElse { throwable ->
           return CampusActivityLoadResult(
             source = "info_webvpn_api",
             error = "INFO/WebVPN 登录态不可用：${throwable.message ?: throwable.javaClass.simpleName}",
-            sourceDetails = listOf(mapOf("type" to "info_webvpn_api", "status" to "failed")),
+            status = "info_failed",
+            reason = "csrf_unavailable",
+            sourceDetails = listOf(
+              mapOf(
+                "type" to "info_webvpn_api",
+                "status" to "failed",
+                "reason" to "csrf_unavailable",
+                "message" to safeErrorMessage(throwable),
+                "has_cookie" to true,
+                "cookie_names" to cookieNames(cookie),
+                "has_csrf" to csrfSetting.isNotBlank(),
+              ),
+            ),
           )
         }
 
     activityChannels.forEach { channel ->
       val url =
-        "$INFO_NEWS_LIST_URL&lmid=$channel&currentPage=1&length=20&_csrf=${encodeQueryValue(csrf)}"
+        "$LEGACY_INFO_NEWS_LIST_URL&lmid=$channel&currentPage=1&length=20&_csrf=${encodeQueryValue(infoSession.csrf)}"
       val channelResult =
         runCatching {
-          val rows = JSONObject(httpRequest(url, cookie = cookie)).optJSONObject("object")
+          val response = infoHttpRequest(
+            urlText = url,
+            cookie = infoSession.cookie,
+            csrf = infoSession.csrf,
+            referer = LEGACY_INFO_REDIRECT_URL + "/f/info/gxfw_fg/common/index",
+            ajax = true,
+          )
+          val rows = JSONObject(response.body).optJSONObject("object")
             ?.optJSONArray("dataList")
             ?: JSONArray()
-          var count = 0
+          var filteredCount = 0
           for (i in 0 until rows.length()) {
             val row = rows.optJSONObject(i) ?: continue
             val activity = row.toInfoCampusActivityRecord(channel)
             if (activity.title.isNotBlank() && looksCampusActivityRelated(activity, keywords)) {
               records[activity.url.ifBlank { "${activity.title}:${activity.startTime}" }] = activity
-              count += 1
+              filteredCount += 1
             }
           }
-          count
+          mapOf(
+            "type" to "info_channel",
+            "channel" to channel,
+            "status" to "ok",
+            "http_status" to response.statusCode,
+            "raw_count" to rows.length(),
+            "filtered_count" to filteredCount,
+            "count" to filteredCount,
+            "response_excerpt_length" to response.body.take(512).length,
+          )
         }
-      sources +=
-        channelResult.fold(
-          onSuccess = { count ->
-            mapOf("type" to "info_channel", "channel" to channel, "status" to "ok", "count" to count)
-          },
-          onFailure = { throwable ->
-            mapOf(
-              "type" to "info_channel",
-              "channel" to channel,
-              "status" to "failed",
-              "message" to (throwable.message ?: throwable.javaClass.simpleName),
-            )
-          },
-        )
+      sources += channelResult.getOrElse { throwable ->
+        infoFailureDetail("info_channel", throwable, mapOf("channel" to channel))
+      }
     }
 
     keywords.take(5).forEach { keyword ->
       val searchResult =
         runCatching {
-          val rows = JSONObject(httpRequest(
-            urlText = "$INFO_SEARCH_URL?_csrf=${encodeQueryValue(csrf)}",
+          val response = infoHttpRequest(
+            urlText = "$LEGACY_INFO_SEARCH_URL?_csrf=${encodeQueryValue(infoSession.csrf)}",
             method = "POST",
             body = "esParamClass=${encodeQueryValue(infoSearchPayload(keyword))}",
-            cookie = cookie,
-          )).optJSONObject("object")
+            cookie = infoSession.cookie,
+            csrf = infoSession.csrf,
+            referer = LEGACY_INFO_REDIRECT_URL + "/f/info/gxfw_fg/common/index",
+            ajax = true,
+          )
+          val rows = JSONObject(response.body).optJSONObject("object")
             ?.optJSONArray("resultsList")
             ?: JSONArray()
-          var count = 0
+          var filteredCount = 0
           for (i in 0 until rows.length()) {
             val row = rows.optJSONObject(i) ?: continue
             val activity = row.toInfoCampusActivityRecord("")
             if (activity.title.isNotBlank()) {
               records[activity.url.ifBlank { "${activity.title}:${activity.startTime}" }] = activity
-              count += 1
+              filteredCount += 1
             }
           }
-          count
+          mapOf(
+            "type" to "info_search",
+            "keyword" to keyword,
+            "status" to "ok",
+            "http_status" to response.statusCode,
+            "raw_count" to rows.length(),
+            "filtered_count" to filteredCount,
+            "count" to filteredCount,
+            "response_excerpt_length" to response.body.take(512).length,
+          )
         }
-      sources +=
-        searchResult.fold(
-          onSuccess = { count ->
-            mapOf("type" to "info_search", "keyword" to keyword, "status" to "ok", "count" to count)
-          },
-          onFailure = { throwable ->
-            mapOf(
-              "type" to "info_search",
-              "keyword" to keyword,
-              "status" to "failed",
-              "message" to (throwable.message ?: throwable.javaClass.simpleName),
-            )
-          },
-        )
+      sources += searchResult.getOrElse { throwable ->
+        infoFailureDetail("info_search", throwable, mapOf("keyword" to keyword))
+      }
     }
 
+    val sourceDetails =
+      listOf(
+        mapOf(
+          "type" to "info_webvpn_api",
+          "status" to "ready",
+          "has_cookie" to true,
+          "cookie_names" to cookieNames(infoSession.cookie),
+          "has_csrf" to infoSession.csrf.isNotBlank(),
+          "csrf_source" to infoSession.csrfSource,
+        ),
+      ) + sources
+
     if (records.isEmpty()) {
-      warnings += "INFO/WebVPN 未返回可用校园活动。"
+      warnings += if (sources.any { it["status"] == "failed" }) {
+        "INFO/WebVPN 请求失败或未返回可解析活动。"
+      } else {
+        "INFO/WebVPN 未返回可用校园活动。"
+      }
     }
+    val hasFailedSource = sources.any { it["status"] == "failed" }
     return CampusActivityLoadResult(
       activities = records.values.take(limit * 2).toList(),
-      source = if (records.isEmpty()) "" else "info_webvpn_api",
+      source = "info_webvpn_api",
+      status = if (records.isEmpty()) if (hasFailedSource) "info_failed" else "info_empty" else "ok",
+      reason = if (records.isEmpty()) if (hasFailedSource) "info_request_failed" else "info_returned_no_records" else "",
       warnings = warnings,
-      sourceDetails = sources,
+      sourceDetails = sourceDetails,
     )
   }
 
@@ -614,6 +830,7 @@ class ActionExecutor(
 
   private fun JSONObject.toCampusActivityRecord(): CampusActivityRecord =
     CampusActivityRecord(
+      activityId = firstJsonString(this, "activity_id", "id", "hdrcid"),
       title = firstJsonString(this, "title", "name", "activity_title"),
       startTime = firstJsonString(this, "start_time", "time", "date", "event_time", "begin_time"),
       location = firstJsonString(this, "location", "venue", "place", "address"),
@@ -642,6 +859,55 @@ class ActionExecutor(
         ).joinToString(" ").lowercase(Locale.getDefault())
       normalizedKeywords.any { keyword -> haystack.contains(keyword) }
     }
+  }
+
+  private fun filterCampusActivitiesByDate(
+    activities: List<CampusActivityRecord>,
+    startDate: String,
+    endDate: String,
+  ): List<CampusActivityRecord> {
+    val startBound = parseActivityDateBound(startDate)
+    val endBound = parseActivityDateBound(endDate)
+    if (startBound == null && endBound == null) return activities
+    return activities.filter { activity ->
+      val activityDate = parseActivityDate(activity.startTime) ?: return@filter true
+      if (startBound != null && activityDate < startBound) return@filter false
+      if (endBound != null && activityDate > endBound) return@filter false
+      true
+    }
+  }
+
+  private fun parseActivityDateBound(raw: String): LocalDate? =
+    parseActivityDate(raw)
+
+  private fun parseActivityDate(raw: String): LocalDate? {
+    val text = raw.trim()
+    if (text.isBlank()) return null
+    Regex("(\\d{4})年\\s*(\\d{1,2})月\\s*(\\d{1,2})日").find(text)?.let { match ->
+      val year = match.groupValues[1].toIntOrNull()
+      val month = match.groupValues[2].toIntOrNull()
+      val day = match.groupValues[3].toIntOrNull()
+      if (year != null && month != null && day != null) {
+        return runCatching { LocalDate.of(year, month, day) }.getOrNull()
+      }
+    }
+    Regex("(\\d{4})[-/](\\d{1,2})[-/](\\d{1,2})").find(text)?.let { match ->
+      val year = match.groupValues[1].toIntOrNull()
+      val month = match.groupValues[2].toIntOrNull()
+      val day = match.groupValues[3].toIntOrNull()
+      if (year != null && month != null && day != null) {
+        return runCatching { LocalDate.of(year, month, day) }.getOrNull()
+      }
+    }
+    Regex("\\b(\\d{4})(\\d{2})(\\d{2})\\b").find(text)?.let { match ->
+      val year = match.groupValues[1].toIntOrNull()
+      val month = match.groupValues[2].toIntOrNull()
+      val day = match.groupValues[3].toIntOrNull()
+      if (year != null && month != null && day != null) {
+        return runCatching { LocalDate.of(year, month, day) }.getOrNull()
+      }
+    }
+    return null
   }
 
   private fun tokenizeCampusQuery(query: String): List<String> =
@@ -696,6 +962,7 @@ class ActionExecutor(
   private fun JSONObject.toInfoCampusActivityRecord(channel: String): CampusActivityRecord {
     val rawUrl = firstJsonString(this, "url", "link", "detail_url")
     return CampusActivityRecord(
+      activityId = firstJsonString(this, "id", "xxid", "info_id"),
       title = cleanHtmlText(firstJsonString(this, "bt", "title", "name")),
       startTime = firstJsonString(this, "time", "publish_time", "date"),
       organizer = cleanHtmlText(firstJsonString(this, "dwmc_show", "organizer", "source", "dwmc")),
@@ -706,12 +973,84 @@ class ActionExecutor(
     )
   }
 
-  private fun fetchWebVpnCsrf(cookie: String): String {
-    val html = httpRequest(WEBVPN_COOKIE_URL, cookie = cookie)
-    return Regex("XSRF-TOKEN=(.+?);").find("$html;")?.groupValues?.getOrNull(1)?.trim()
-      ?.takeIf { it.isNotBlank() }
-      ?: throw IllegalStateException("Unable to locate XSRF-TOKEN from WebVPN cookie endpoint")
+  private fun JSONObject.toHdrcCampusActivityRecord(): CampusActivityRecord {
+    val activityId = firstJsonString(this, "hdrcid", "id")
+    val date = firstJsonString(this, "hdrq", "date")
+    val start = firstJsonString(this, "kssj", "start_time")
+    val end = firstJsonString(this, "jssj", "end_time")
+    val time = listOf(date, listOf(start, end).filter { it.isNotBlank() }.joinToString("-"))
+      .filter { it.isNotBlank() }
+      .joinToString(" ")
+    val abstract = firstNonBlank(
+      cleanHtmlText(firstJsonString(this, "jj_ch", "abstract", "summary")),
+      cleanHtmlText(firstJsonString(this, "bgr", "speaker")),
+    )
+    return CampusActivityRecord(
+      activityId = activityId,
+      title = cleanHtmlText(firstJsonString(this, "bt", "title", "name")),
+      startTime = time,
+      location = cleanHtmlText(firstJsonString(this, "hddd", "location", "venue")),
+      organizer = cleanHtmlText(firstJsonString(this, "zbdw", "fbdwmc", "organizer")),
+      category = firstJsonString(this, "hdlxmc", "category", "type"),
+      abstract = abstract,
+      url = if (activityId.isBlank()) "" else INFO_ACTIVITY_DETAIL_URL + encodeQueryValue(activityId),
+      source = "info_hdrc_public_api",
+    )
   }
+
+  private fun preparePublicInfoSession(): InfoSession {
+    val response = infoHttpRequest(
+      urlText = INFO_ACTIVITY_INDEX_URL,
+      referer = INFO_PUBLIC_BASE_URL,
+      ajax = false,
+    )
+    val cookie = mergeCookieHeaders("", response.setCookies)
+    val csrf = extractCsrfFromText(response.body + ";" + response.setCookies.joinToString(";"))
+      .ifBlank { throw IllegalStateException("Unable to locate XSRF-TOKEN from INFO activity index") }
+    return InfoSession(cookie = cookie, csrf = csrf, csrfSource = "public_activity_index")
+  }
+
+  private fun prepareInfoSession(
+    cookie: String,
+    csrfSetting: String,
+  ): InfoSession {
+    val normalizedCookie = normalizeCookieHeader(cookie)
+    val cookieResponse = infoHttpRequest(
+      urlText = LEGACY_WEBVPN_COOKIE_URL,
+      cookie = normalizedCookie,
+      referer = "https://webvpn.tsinghua.edu.cn/",
+      ajax = false,
+    )
+    val mergedCookie = mergeCookieHeaders(normalizedCookie, cookieResponse.setCookies)
+    val csrfSource: String
+    val csrf =
+      if (csrfSetting.isNotBlank()) {
+        csrfSource = "setting"
+        csrfSetting
+      } else {
+        csrfSource = "webvpn_cookie_endpoint"
+        extractCsrfFromText(cookieResponse.body + ";" + cookieResponse.setCookies.joinToString(";"))
+          .ifBlank { throw IllegalStateException("Unable to locate XSRF-TOKEN from WebVPN cookie endpoint") }
+      }
+    warmUpInfoSession(mergedCookie, csrf)
+    return InfoSession(cookie = mergedCookie, csrf = csrf, csrfSource = csrfSource)
+  }
+
+  private fun warmUpInfoSession(
+    cookie: String,
+    csrf: String,
+  ) {
+    infoHttpRequest(
+      urlText = LEGACY_INFO_REDIRECT_URL + "/f/info/gxfw_fg/common/index",
+      cookie = cookie,
+      csrf = csrf,
+      referer = "https://webvpn.tsinghua.edu.cn/",
+      ajax = false,
+    )
+  }
+
+  private fun extractCsrfFromText(text: String): String =
+    Regex("XSRF-TOKEN=([^;]+)").find("$text;")?.groupValues?.getOrNull(1)?.trim().orEmpty()
 
   private fun infoSearchPayload(keyword: String): String {
     val params =
@@ -802,7 +1141,7 @@ class ActionExecutor(
     return when {
       url.isBlank() -> ""
       url.startsWith("http://") || url.startsWith("https://") -> url
-      url.startsWith("/") -> INFO_REDIRECT_URL + url
+      url.startsWith("/") -> LEGACY_INFO_REDIRECT_URL + url
       else -> url
     }
   }
@@ -859,6 +1198,153 @@ class ActionExecutor(
         if (raw.startsWith("x", ignoreCase = true)) raw.drop(1).toIntOrNull(16) else raw.toIntOrNull()
       codePoint?.let { String(Character.toChars(it)) } ?: match.value
     }
+
+  private fun infoHttpRequest(
+    urlText: String,
+    method: String = "GET",
+    body: String = "",
+    cookie: String = "",
+    csrf: String = "",
+    referer: String = "",
+    ajax: Boolean = true,
+  ): InfoHttpResponse {
+    val connection = URL(urlText).openConnection() as HttpURLConnection
+    return try {
+      connection.requestMethod = method
+      connection.connectTimeout = 12_000
+      connection.readTimeout = 24_000
+      connection.instanceFollowRedirects = true
+      connection.setRequestProperty(
+        "Accept",
+        if (ajax) "application/json, text/javascript, */*; q=0.01" else "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      )
+      connection.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+      connection.setRequestProperty("Cache-Control", "no-cache")
+      connection.setRequestProperty("Pragma", "no-cache")
+      connection.setRequestProperty(
+        "User-Agent",
+        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36 OpenTHU/1.0",
+      )
+      if (cookie.isNotBlank()) connection.setRequestProperty("Cookie", cookie)
+      if (referer.isNotBlank()) connection.setRequestProperty("Referer", referer)
+      if (ajax) connection.setRequestProperty("X-Requested-With", "XMLHttpRequest")
+      if (ajax) connection.setRequestProperty("Origin", originFrom(urlText))
+      setCsrfHeaders(connection, csrf)
+      if (body.isNotBlank()) {
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+        connection.outputStream.use { stream ->
+          stream.write(body.toByteArray(StandardCharsets.UTF_8))
+        }
+      }
+      val code = connection.responseCode
+      val stream = if (code in 200..299) connection.inputStream else connection.errorStream ?: connection.inputStream
+      val text = stream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
+      val cookies = connection.headerFields.orEmpty()
+        .filterKeys { key -> key != null && key.equals("Set-Cookie", ignoreCase = true) }
+        .values
+        .flatten()
+      if (code !in 200..299) {
+        throw InfoHttpException(code, text.take(512), "HTTP $code for INFO request: ${text.take(160)}")
+      }
+      InfoHttpResponse(statusCode = code, body = text, setCookies = cookies)
+    } finally {
+      connection.disconnect()
+    }
+  }
+
+  private fun setCsrfHeaders(
+    connection: HttpURLConnection,
+    csrf: String,
+  ) {
+    if (csrf.isBlank()) return
+    connection.setRequestProperty("X-XSRF-TOKEN", csrf)
+    connection.setRequestProperty("X-CSRF-TOKEN", csrf)
+    connection.setRequestProperty("X-XSRFToken", csrf)
+  }
+
+  private fun originFrom(urlText: String): String =
+    runCatching {
+      val url = URL(urlText)
+      "${url.protocol}://${url.host}"
+    }.getOrDefault("")
+
+  private fun normalizeCookieHeader(raw: String): String =
+    raw.split(';')
+      .map { it.trim() }
+      .filter { it.contains('=') }
+      .joinToString("; ")
+
+  private fun mergeCookieHeaders(
+    baseCookie: String,
+    setCookies: List<String>,
+  ): String {
+    val merged = linkedMapOf<String, String>()
+    fun add(header: String) {
+      header.split(';')
+        .map { it.trim() }
+        .filter { it.contains('=') }
+        .forEach { token ->
+          val name = token.substringBefore('=').trim()
+          val value = token.substringAfter('=').trim()
+          if (name.isNotBlank() && value.isNotBlank() && !cookieAttributeNames.contains(name.lowercase(Locale.ROOT))) {
+            merged[name] = value
+          }
+        }
+    }
+    add(baseCookie)
+    setCookies.forEach { add(it.substringBefore(';')) }
+    return merged.entries.joinToString("; ") { (name, value) -> "$name=$value" }
+  }
+
+  private fun cookieNames(cookieHeader: String): List<String> =
+    cookieHeader.split(';')
+      .map { it.trim().substringBefore('=').trim() }
+      .filter { it.isNotBlank() }
+
+  private fun safeErrorMessage(throwable: Throwable): String =
+    (throwable.message ?: throwable.javaClass.simpleName).take(512)
+
+  private fun infoFailureDetail(
+    type: String,
+    throwable: Throwable,
+    extra: Map<String, Any?>,
+  ): Map<String, Any?> {
+    val base = mutableMapOf<String, Any?>(
+      "type" to type,
+      "status" to "failed",
+      "reason" to "info_request_failed",
+      "message" to safeErrorMessage(throwable),
+    )
+    if (throwable is InfoHttpException) {
+      base["http_status"] = throwable.statusCode
+      base["response_excerpt_length"] = throwable.responseExcerpt.length
+    }
+    base.putAll(extra)
+    return base
+  }
+
+  private fun campusActivitiesFailureStatus(
+    infoLoad: CampusActivityLoadResult,
+    configuredLoad: CampusActivityLoadResult,
+  ): String =
+    firstNonBlank(
+      configuredLoad.status.takeIf { configuredLoad.error.isNotBlank() }.orEmpty(),
+      infoLoad.status,
+      configuredLoad.status,
+      "source_unavailable",
+    )
+
+  private fun campusActivitiesFailureReason(
+    infoLoad: CampusActivityLoadResult,
+    configuredLoad: CampusActivityLoadResult,
+  ): String =
+    firstNonBlank(
+      configuredLoad.reason.takeIf { configuredLoad.error.isNotBlank() }.orEmpty(),
+      infoLoad.reason,
+      configuredLoad.reason,
+      "source_unavailable",
+    )
 
   private fun httpRequest(
     urlText: String,

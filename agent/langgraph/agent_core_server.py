@@ -18,11 +18,13 @@ import uvicorn
 try:
     from .agent_events import agent_event, encode_ndjson
     from .calendar_handlers import CALENDAR_TIME_SKILLS, CalendarTimeResolutionError, resolve_calendar_time_args
+    from .campus_activity_filter import CampusActivityFilterAgent
     from .openthu_agent import OpenTHULangGraphAgent
     from .skill_core import MissingSkillHandler, SkillInvocation
 except ImportError:
     from agent_events import agent_event, encode_ndjson
     from calendar_handlers import CALENDAR_TIME_SKILLS, CalendarTimeResolutionError, resolve_calendar_time_args
+    from campus_activity_filter import CampusActivityFilterAgent
     from openthu_agent import OpenTHULangGraphAgent
     from skill_core import MissingSkillHandler, SkillInvocation
 
@@ -878,6 +880,22 @@ class AgentCoreStore:
             self._condition.notify_all()
             return dict(task_doc)
 
+    def replace_device_results(
+        self,
+        *,
+        task_id: str,
+        device_results: list[Any],
+    ) -> dict[str, Any]:
+        with self._lock:
+            task_doc = self._state["tasks"].get(task_id)
+            if not isinstance(task_doc, dict):
+                raise KeyError("task_not_found")
+            task_doc["device_results"] = device_results
+            task_doc["updated_at"] = utc_now()
+            self._save_locked()
+            self._condition.notify_all()
+            return dict(task_doc)
+
     def wait_for_task_update(
         self,
         *,
@@ -990,6 +1008,119 @@ def _task_session(task_doc: dict[str, Any], fallback: dict[str, Any] | None = No
     if isinstance(session, dict) and session:
         return session
     return dict(fallback or {})
+
+
+def postprocess_campus_activity_results(
+    *,
+    agent: OpenTHULangGraphAgent,
+    activity_filter: CampusActivityFilterAgent,
+    store: AgentCoreStore,
+    task_doc: dict[str, Any],
+    user_input: str,
+    session: dict[str, Any],
+    conversation_context: dict[str, Any],
+) -> dict[str, Any]:
+    results = task_doc.get("device_results", [])
+    if not isinstance(results, list) or not results:
+        return task_doc
+    approved_by_request_id = {
+        str(item.get("request_id", "")): item
+        for item in task_doc.get("approved_skills", [])
+        if isinstance(item, dict)
+    }
+    memory_context = conversation_context.get("memory_context", {}) if isinstance(conversation_context, dict) else {}
+    ranker = _campus_activity_llm_ranker(agent=agent, session=session)
+    changed = False
+    updated_results: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            updated_results.append(result)
+            continue
+        data = result.get("data", {})
+        if (
+            str(result.get("skill_name", "")) == "get_campus_activities"
+            and isinstance(data, dict)
+            and str(data.get("filter_source", "")).startswith("campus_activity_filter")
+        ):
+            updated_results.append(result)
+            continue
+        request_id = str(result.get("request_id", ""))
+        skill = approved_by_request_id.get(request_id, {})
+        args = skill.get("args", {}) if isinstance(skill, dict) else {}
+        if not isinstance(args, dict):
+            args = {}
+        filtered, did_filter = activity_filter.filter_result(
+            result,
+            args=args,
+            user_input=user_input,
+            memory_context=memory_context,
+            llm_ranker=ranker,
+        )
+        updated_results.append(filtered)
+        changed = changed or did_filter
+    if not changed:
+        return task_doc
+    logger.info("[campus-filter] postprocessed campus activity results task_id=%s", task_doc.get("task_id", ""))
+    return store.replace_device_results(task_id=str(task_doc.get("task_id", "")), device_results=updated_results)
+
+
+def _campus_activity_llm_ranker(
+    *,
+    agent: OpenTHULangGraphAgent,
+    session: dict[str, Any],
+):
+    try:
+        api_key, model, base_url = agent._llm_config_from_session(session if isinstance(session, dict) else {})  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    if not api_key:
+        return None
+
+    def rank(payload: dict[str, Any]) -> dict[str, Any]:
+        from openai import OpenAI
+
+        client = agent._create_openai_client(OpenAI, api_key, base_url=base_url)  # type: ignore[attr-defined]
+        system_prompt = (
+            "你是 get_campus_activities 的内部筛选子步骤。"
+            "只能从输入 activities 的 activity_id 中选择，不能编造活动。"
+            "用户显式要求和 hard_constraints 优先于 memory_context。"
+            "返回严格 JSON 对象，字段为 activity_ids、summary、preference_signals。"
+        )
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)[:12000]},
+            ],
+            max_tokens=600,
+            temperature=0.2,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        return _parse_json_object_from_text(text)
+
+    return rank
+
+
+def _parse_json_object_from_text(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
 
 def _latest_current_time_data(task_doc: dict[str, Any]) -> dict[str, Any]:
@@ -1313,10 +1444,13 @@ def _summarize_data_result(skill_name: str, data: dict[str, Any], message: str =
         answer = str(data.get("answer") or data.get("summary") or "").strip()
         if answer:
             lines.append(answer[:1000])
+        filter_summary = str(data.get("filter_summary", "")).strip()
+        if filter_summary and filter_summary not in answer:
+            lines.append(filter_summary[:500])
         activities = data.get("activities", [])
         if isinstance(activities, list) and activities:
             lines.append("活动：")
-            for item in activities[:6]:
+            for item in activities[:10]:
                 if not isinstance(item, dict):
                     continue
                 title = str(item.get("title", "未命名活动")).strip()
@@ -1540,6 +1674,7 @@ def _plan_preview_text(task_doc: dict[str, Any]) -> str:
 
 def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
     app = FastAPI(title="OpenTHU Agent Core Server", version="0.1.0")
+    activity_filter = CampusActivityFilterAgent()
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
@@ -1834,6 +1969,21 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         )
                     )
 
+                summary_session = (
+                    plan_response.get("data", {}).get("session", {})
+                    if isinstance(plan_response.get("data"), dict)
+                    else {}
+                )
+                if not isinstance(summary_session, dict):
+                    summary_session = payload.session
+                summary_conversation_context = (
+                    plan_response.get("data", {}).get("conversation_context", {})
+                    if isinstance(plan_response.get("data"), dict)
+                    else {}
+                )
+                if not isinstance(summary_conversation_context, dict):
+                    summary_conversation_context = {}
+
                 pending_ids = pending_runtime_request_ids(task_doc)
                 if pending_ids:
                     yield encode_ndjson(
@@ -1865,15 +2015,23 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                                 )
                             )
 
-                    task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
-
                     timed_out_ids = pending_runtime_request_ids(task_doc)
                     if timed_out_ids:
                         task_doc = store.mark_device_results_timeout(
                             task_id=task_id,
                             request_ids=timed_out_ids,
                         )
-                        task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
+                    task_doc = postprocess_campus_activity_results(
+                        agent=agent,
+                        activity_filter=activity_filter,
+                        store=store,
+                        task_doc=task_doc,
+                        user_input=payload.message,
+                        session=summary_session,
+                        conversation_context=summary_conversation_context,
+                    )
+                    task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
 
                     device_results = task_doc.get("device_results", [])
                     for result in device_results if isinstance(device_results, list) else []:
@@ -1897,6 +2055,17 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                             )
                         )
 
+                task_doc = postprocess_campus_activity_results(
+                    agent=agent,
+                    activity_filter=activity_filter,
+                    store=store,
+                    task_doc=task_doc,
+                    user_input=payload.message,
+                    session=summary_session,
+                    conversation_context=summary_conversation_context,
+                )
+                task_doc = hydrate_show_summary_skills(store=store, task_doc=task_doc)
+
                 final_content = _final_content_from_task(task_doc)
                 still_pending = pending_runtime_request_ids(task_doc)
                 if still_pending:
@@ -1907,21 +2076,12 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                 elif blocked_skills:
                     final_content = _final_content_from_task(task_doc)
                 else:
-                    summary_session = (
-                        plan_response.get("data", {}).get("session", {})
-                        if isinstance(plan_response.get("data"), dict)
-                        else {}
-                    )
-                    if not isinstance(summary_session, dict):
-                        summary_session = payload.session
                     final_content = agent.synthesize_summary_from_results(
                         user_input=payload.message,
                         session=summary_session,
                         task_doc=task_doc,
                         fallback_summary=final_content,
-                        conversation_context=plan_response.get("data", {}).get("conversation_context", {})
-                        if isinstance(plan_response.get("data"), dict)
-                        else {},
+                        conversation_context=summary_conversation_context,
                     )
                     task_doc = store.set_final_summary(task_id=task_id, summary=final_content)
                 yield encode_ndjson(

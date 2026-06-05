@@ -2130,6 +2130,12 @@ class OpenTHULangGraphAgent:
                 "summary",
                 "query",
                 "count",
+                "candidate_count",
+                "selected_count",
+                "discarded_count",
+                "filter_status",
+                "filter_source",
+                "filter_summary",
                 "notification_count",
                 "semantic",
             ):
@@ -2139,7 +2145,12 @@ class OpenTHULangGraphAgent:
             for key in ("results", "citations", "activities", "notifications", "warnings"):
                 value = data.get(key)
                 if isinstance(value, list) and value:
-                    compact[key] = value[:6]
+                    item_limit = 10 if compact.get("skill_name") == "get_campus_activities" and key == "activities" else 6
+                    compact[key] = value[:item_limit]
+            for key in ("hard_constraints", "preference_signals"):
+                value = data.get(key)
+                if value not in (None, "", [], {}):
+                    compact[key] = value
         return compact
 
     def _plan_skills_via_llm(

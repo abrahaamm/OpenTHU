@@ -58,6 +58,10 @@
     <string name="memory_clear_all">清除全部记忆</string>
     <string name="memory_clear_all_done">已清除全部记忆。</string>
     <string name="memory_clear_all_empty">当前没有可清除的记忆。</string>
+    <string name="memory_clear_confirm_title">清除全部记忆？</string>
+    <string name="memory_clear_confirm_message">这会删除长期偏好、自动记忆和反馈记录，但不会清除连接、模型或 Cookie 设置。</string>
+    <string name="memory_clear_confirm_action">清除</string>
+    <string name="memory_clear_cancel">取消</string>
 
     <string name="planning_snapshot_title">学习与执行快照</string>
     <string name="planning_cards_title">下一步计划</string>

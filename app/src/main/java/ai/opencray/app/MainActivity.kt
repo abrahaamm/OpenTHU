@@ -25,6 +25,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -643,20 +644,7 @@ class MainActivity : AppCompatActivity() {
     preferenceDelete1Button.setOnClickListener { deletePreferenceAt(0) }
     preferenceDelete2Button.setOnClickListener { deletePreferenceAt(1) }
     preferenceDelete3Button.setOnClickListener { deletePreferenceAt(2) }
-    memoryClearAllButton.setOnClickListener {
-      val cleared = viewModel.clearAllMemory()
-      if (cleared) {
-        editingPreferenceIndex = null
-        preferenceInput.setText("")
-        preferenceAddButton.text = getString(R.string.preference_add)
-      }
-      Toast.makeText(
-        this,
-        getString(if (cleared) R.string.memory_clear_all_done else R.string.memory_clear_all_empty),
-        Toast.LENGTH_SHORT,
-      ).show()
-      render()
-    }
+    memoryClearAllButton.setOnClickListener { confirmClearAllMemory() }
 
     statusView.setOnClickListener {
       viewModel.reconnectGateway()
@@ -2181,6 +2169,26 @@ class MainActivity : AppCompatActivity() {
       Toast.LENGTH_SHORT,
     ).show()
     render()
+  }
+
+  private fun confirmClearAllMemory() {
+    AlertDialog.Builder(this)
+      .setTitle(R.string.memory_clear_confirm_title)
+      .setMessage(R.string.memory_clear_confirm_message)
+      .setNegativeButton(R.string.memory_clear_cancel, null)
+      .setPositiveButton(R.string.memory_clear_confirm_action) { _, _ ->
+        val cleared = viewModel.clearAllMemory()
+        editingPreferenceIndex = null
+        preferenceInput.setText("")
+        preferenceAddButton.text = getString(R.string.preference_add)
+        Toast.makeText(
+          this,
+          getString(if (cleared) R.string.memory_clear_all_done else R.string.memory_clear_all_empty),
+          Toast.LENGTH_SHORT,
+        ).show()
+        render()
+      }
+      .show()
   }
 
   private fun executeActionOrShowFeedback(action: SystemAction) {
