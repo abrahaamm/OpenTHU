@@ -84,6 +84,15 @@ data class AgentStreamEvent(
 )
 
 class AgentCoreHttpClient {
+  fun healthCheck(config: GatewayConfig): GatewayResult<Unit> {
+    val result = requestJson(config, "GET", "/healthz", null)
+    return if (result.success) {
+      GatewayResult(success = true, code = result.code, message = result.message, data = Unit)
+    } else {
+      GatewayResult(success = false, code = result.code, message = result.message, data = null)
+    }
+  }
+
   fun registerDevice(
     config: GatewayConfig,
     userId: String,

@@ -11,6 +11,7 @@ import ai.opencray.app.data.repository.ChatRepository
 import ai.opencray.app.data.repository.RuntimeRepository
 import ai.opencray.app.domain.model.AgentTask
 import ai.opencray.app.domain.model.AuditEntry
+import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PendingConflictResolution
 import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
@@ -37,10 +38,13 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.time.ZoneId
 import kotlin.concurrent.thread
 import java.util.Collections
 import java.util.UUID
 import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.roundToInt
 import java.util.Locale
 
 /**
@@ -85,6 +89,9 @@ class OpenCrayRuntime(
 
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
+  @Volatile private var gatewayHeartbeatRunning = false
+  @Volatile private var appInForeground = true
+  @Volatile private var lastUserActivityEpochMs = System.currentTimeMillis()
   @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
   private val serverSummaryTaskIds = Collections.synchronizedSet(mutableSetOf<String>())
   /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
@@ -160,6 +167,34 @@ class OpenCrayRuntime(
     return true
   }
 
+  fun updateLongPreference(
+    index: Int,
+    preference: String,
+  ): Boolean {
+    val current = snapshot()
+    val (memoryRecords, updated) = memoryManager.updateLongPreferenceAt(current.memoryRecords, index, preference)
+    if (updated == null) return false
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = memoryRecords,
+        recentEvents = listOf("Preference updated: ${updated.value.take(32)}") + current.recentEvents,
+      ),
+    )
+    return true
+  }
+
+  fun clearAllMemory(): Boolean {
+    val current = snapshot()
+    if (current.memoryRecords.isEmpty()) return false
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = emptyList(),
+        recentEvents = listOf("All runtime memory cleared.") + current.recentEvents,
+      ),
+    )
+    return true
+  }
+
   fun snoozeAction(actionId: String): Boolean =
     markActionFeedback(actionId = actionId, status = "snoozed", feedback = "snooze", result = "已标记为稍后处理。")
 
@@ -186,7 +221,6 @@ class OpenCrayRuntime(
         if (card.actionId == action.id) {
           card.copy(
             status = status,
-            body = listOf(card.body, "反馈：$result").filter { it.isNotBlank() }.joinToString("\n"),
             updatedAtEpochMs = now,
           )
         } else {
@@ -235,6 +269,15 @@ class OpenCrayRuntime(
     }
   }
 
+  fun setAppInForeground(foreground: Boolean) {
+    appInForeground = foreground
+    if (foreground) markUserActivity()
+  }
+
+  fun markUserActivity() {
+    lastUserActivityEpochMs = System.currentTimeMillis()
+  }
+
   fun sendChatMessage(text: String) {
     chatRepository.sendMessage(text)
   }
@@ -247,9 +290,11 @@ class OpenCrayRuntime(
     skillId: String,
     args: Map<String, String> = emptyMap(),
   ) {
+    markUserActivity()
     // Prefer the same plan/execute pipeline as chat so quick skills are genuinely usable.
     val quickGoal =
       when (skillId) {
+        "get_assignments" -> "请获取当前课程作业和 DDL"
         "get_campus_activities" -> "请获取最近校园活动并给出摘要"
         "read_notifications" -> "请读取当前未读通知并总结"
         "create_reminder" -> "请创建提醒事项"
@@ -319,33 +364,133 @@ class OpenCrayRuntime(
     tlsEnabled: Boolean,
   ) {
     runtimeRepository.updateConnectionConfig(host = host, port = port, tlsEnabled = tlsEnabled)
-    runtimeRepository.updateConnectionStatus("Connecting to $host:$port ...")
+    runtimeRepository.updateConnectionStatus("连接到服务器...")
     runtimeRepository.appendEvent("Gateway pairing started: $host:$port")
 
     thread(name = "opencray-gateway-register", isDaemon = true) {
-      val result =
-        gatewayClient.registerDevice(
-          config = currentGatewayConfig(),
-          userId = "android_user",
-          deviceId = deviceId,
-          capabilities = supportedGatewayCapabilities(),
-        )
-      if (result.success) {
-        gatewayRegistered = true
-        runtimeRepository.updateConnectionStatus("Connected to $host:$port")
-        runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
-        chatRepository.appendMessage(ChatRole.System, "Agent-Core 连接成功，后续将走服务端任务分发。")
-      } else {
-        gatewayRegistered = false
-        runtimeRepository.updateConnectionStatus("Gateway connection failed")
-        runtimeRepository.appendEvent("Gateway register failed: ${result.code} ${result.message}")
-        chatRepository.appendMessage(
-          ChatRole.System,
-          "Agent-Core 连接失败（${result.code}），将继续使用本地链路。",
-        )
+      var lastResultCode = "NETWORK_ERROR"
+      var lastMessage = ""
+      for (attempt in 1..3) {
+        runtimeRepository.updateConnectionStatus("连接到服务器... 第 $attempt/3 次")
+        val result =
+          gatewayClient.registerDevice(
+            config = currentGatewayConfig(),
+            userId = "android_user",
+            deviceId = deviceId,
+            capabilities = supportedGatewayCapabilities(),
+          )
+        if (result.success) {
+          gatewayRegistered = true
+          runtimeRepository.updateConnectionStatus("已连接服务器")
+          runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
+          chatRepository.appendMessage(ChatRole.System, "Agent-Core 连接成功，后续将走服务端任务分发。")
+          startGatewayHeartbeatLoop()
+          return@thread
+        }
+        lastResultCode = result.code
+        lastMessage = result.message
+        runtimeRepository.appendEvent("Gateway register attempt $attempt failed: ${result.code} ${result.message}")
+        Thread.sleep(700L * attempt)
+      }
+
+      gatewayRegistered = false
+      runtimeRepository.updateConnectionStatus("服务器未连接")
+      runtimeRepository.appendEvent("Gateway register failed after retries: $lastResultCode $lastMessage")
+      chatRepository.appendMessage(
+        ChatRole.System,
+        "Agent-Core 连接失败（$lastResultCode），将继续使用本地链路。点击顶部连接状态可重试。",
+      )
+    }
+  }
+
+  fun applyGatewayConfig(
+    host: String,
+    port: Int,
+    tlsEnabled: Boolean,
+    reconnectIfRegistered: Boolean = false,
+  ) {
+    val normalizedHost = host.trim().ifBlank { "10.0.2.2" }
+    val normalizedPort = port.takeIf { it in 1..65535 } ?: 18789
+    runtimeRepository.updateConnectionConfig(
+      host = normalizedHost,
+      port = normalizedPort,
+      tlsEnabled = tlsEnabled,
+    )
+    if (reconnectIfRegistered && gatewayRegistered) {
+      reconnectGateway()
+    }
+  }
+
+  private fun startGatewayHeartbeatLoop() {
+    if (gatewayHeartbeatRunning) return
+    gatewayHeartbeatRunning = true
+    thread(name = "opencray-gateway-heartbeat", isDaemon = true) {
+      try {
+        while (gatewayRegistered) {
+          Thread.sleep(gatewayHeartbeatIntervalMs())
+          val result = gatewayClient.healthCheck(currentGatewayConfig())
+          if (result.success) {
+            runtimeRepository.updateConnectionStatus("已连接服务器")
+          } else {
+            gatewayRegistered = false
+            gatewayHeartbeatRunning = false
+            runtimeRepository.updateConnectionStatus("连接到服务器...")
+            runtimeRepository.appendEvent("Gateway heartbeat failed: ${result.code} ${result.message}")
+            connectToGateway(
+              host = snapshot().host,
+              port = snapshot().port,
+              tlsEnabled = snapshot().tlsEnabled,
+            )
+            return@thread
+          }
+        }
+      } finally {
+        gatewayHeartbeatRunning = false
       }
     }
   }
+
+  private fun gatewayHeartbeatIntervalMs(): Long {
+    if (!appInForeground) return GATEWAY_HEARTBEAT_BACKGROUND_MS
+    val activeRecently = System.currentTimeMillis() - lastUserActivityEpochMs <= GATEWAY_ACTIVE_WINDOW_MS
+    return if (activeRecently) GATEWAY_HEARTBEAT_ACTIVE_MS else GATEWAY_HEARTBEAT_IDLE_MS
+  }
+
+  fun reconnectGateway() {
+    markUserActivity()
+    val current = snapshot()
+    connectToGateway(
+      host = current.host.ifBlank { "10.0.2.2" },
+      port = current.port.takeIf { it > 0 } ?: 18789,
+      tlsEnabled = current.tlsEnabled,
+    )
+  }
+
+  fun updateGatewayTls(enabled: Boolean) {
+    val current = snapshot()
+    runtimeRepository.updateConnectionConfig(
+      host = current.host.ifBlank { "10.0.2.2" },
+      port = current.port.takeIf { it > 0 } ?: 18789,
+      tlsEnabled = enabled,
+    )
+    if (gatewayRegistered) {
+      reconnectGateway()
+    }
+  }
+
+  fun updateConfiguredModel(model: String) {
+    val normalized = model.trim().ifBlank { "gpt-4.1-mini" }
+    appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+      .edit()
+      .putString("llm_model", normalized)
+      .apply()
+  }
+
+  fun configuredModel(): String =
+    appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+      .getString("llm_model", "gpt-4.1-mini")
+      .orEmpty()
+      .ifBlank { "gpt-4.1-mini" }
 
   fun setCapabilityEnabled(
     capabilityId: String,
@@ -357,6 +502,7 @@ class OpenCrayRuntime(
   }
 
   fun executeAction(actionId: String) {
+    markUserActivity()
     val current = snapshot()
     val action = current.systemActions.firstOrNull { it.id == actionId }
     if (action == null) {
@@ -435,6 +581,7 @@ class OpenCrayRuntime(
     eventId: String,
     decision: String,
   ) {
+    markUserActivity()
     if (taskId.isBlank() || requestId.isBlank() || eventId.isBlank()) {
       chatRepository.appendMessage(ChatRole.Assistant, "这个确认项缺少执行上下文，我没法继续处理。")
       return
@@ -517,6 +664,7 @@ class OpenCrayRuntime(
   ): Boolean {
     if (plannerGoal.isBlank() || displayGoal.isBlank()) return false
 
+    markUserActivity()
     chatRepository.sendMessage(displayGoal)
 
     if (maybeDeleteManualPlanningCard(displayGoal)) {
@@ -596,7 +744,11 @@ class OpenCrayRuntime(
       PlanningCard(
         id = "manual_${UUID.randomUUID().toString().take(10)}",
         title = title,
-        body = content,
+        body =
+          buildString {
+            append("下一步：").append(content.take(220))
+            append("\n计划依据：对话中手动添加的计划项。")
+          },
         type = inferPlanningCardType(normalized),
         source = "对话生成",
         status = "planned",
@@ -628,19 +780,25 @@ class OpenCrayRuntime(
   private fun generateLocalLlmChatReply(message: String): String? {
     val config = localLlmConfig() ?: return null
     val endpoint = config.chatCompletionsEndpoint()
+    val profile = ContextWindowManager.profileFor(config.model)
+    val memoryText = buildMemoryPromptText(profile)
+    val systemContent =
+      "你是 OpenTHU 移动端里的对话式校园助手。" +
+        "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。" +
+        "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。" +
+        memoryText
     val messages = JSONArray()
       .put(
         JSONObject()
           .put("role", "system")
-          .put(
-            "content",
-            "你是 OpenTHU 移动端里的对话式校园助手。"
-              + "用户现在只是在和你聊天，不要输出结构化执行记录，不要提到内部规则。"
-              + "自然、简短、有上下文地回应；如果用户明确提出任务，再提醒他可以直接说目标。",
-          ),
+          .put("content", systemContent),
       )
 
-    localChatHistoryForLlm().forEach { item ->
+    localChatHistoryForLlm(
+      profile = profile,
+      currentMessage = message,
+      fixedPromptText = systemContent,
+    ).forEach { item ->
       messages.put(
         JSONObject()
           .put("role", item["role"].orEmpty())
@@ -654,7 +812,7 @@ class OpenCrayRuntime(
         .put("model", config.model)
         .put("messages", messages)
         .put("temperature", 0.8)
-        .put("max_tokens", 500)
+        .put("max_tokens", profile.localMaxOutputTokens)
 
     return runCatching {
       val connection =
@@ -725,7 +883,7 @@ class OpenCrayRuntime(
           message = message,
           approveSensitive = false,
           session = buildGatewaySession(),
-          history = buildGatewayChatHistory(),
+          history = buildGatewayChatHistory(currentMessage = message),
         ) { event ->
           when (event.type) {
             "assistant_delta" -> updateAssistantText(event.content)
@@ -798,7 +956,7 @@ class OpenCrayRuntime(
           deviceId = deviceId,
           message = message,
           session = buildGatewaySession(),
-          history = buildGatewayChatHistory(),
+          history = buildGatewayChatHistory(currentMessage = message),
         )
       if (!result.success || result.data == null) {
         runtimeRepository.appendEvent("Gateway chat failed: ${result.code} ${result.message}")
@@ -903,43 +1061,60 @@ class OpenCrayRuntime(
   private fun agentCoreUnavailableMessage(): String =
     "Agent-Core 没有连接好，无法执行任务。请先在设置里连接 Agent-Core；如果只是普通聊天，也需要先配置可用的模型服务。"
 
-  private fun buildGatewayChatHistory(limit: Int = 12): List<Map<String, String>> =
-    chatRepository.getMessages()
-      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
-      .dropLast(1)
-      .takeLast(limit)
+  private fun buildGatewayChatHistory(currentMessage: String): List<Map<String, String>> {
+    val profile = ContextWindowManager.profileFor(selectedLlmModel())
+    val messages =
+      chatRepository.getMessages()
+        .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+        .dropLast(1)
+    return ContextWindowManager
+      .compactChatMessages(
+        messages = messages,
+        profile = profile,
+        currentUserText = currentMessage,
+      )
       .map { message ->
         mapOf(
-          "role" to when (message.role) {
-            ChatRole.User -> "user"
-            ChatRole.Assistant -> "assistant"
-            ChatRole.System -> "system"
-          },
+          "role" to message.role,
           "text" to message.text,
         )
       }
+  }
 
-  private fun localChatHistoryForLlm(limit: Int = 8): List<Map<String, String>> =
-    chatRepository.getMessages()
-      .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
-      .dropLast(1)
-      .takeLast(limit)
+  private fun localChatHistoryForLlm(
+    profile: ContextWindowProfile,
+    currentMessage: String,
+    fixedPromptText: String,
+  ): List<Map<String, String>> {
+    val messages =
+      chatRepository.getMessages()
+        .filter { it.role == ChatRole.User || it.role == ChatRole.Assistant }
+        .dropLast(1)
+    return ContextWindowManager
+      .compactChatMessages(
+        messages = messages,
+        profile = profile,
+        currentUserText = currentMessage,
+        fixedPromptText = fixedPromptText,
+      )
       .map { message ->
         mapOf(
-          "role" to when (message.role) {
-            ChatRole.User -> "user"
-            ChatRole.Assistant -> "assistant"
-            ChatRole.System -> "system"
-          },
-          "text" to message.text.take(1000),
+          "role" to message.role,
+          "text" to message.text,
         )
       }
+  }
+
+  private fun selectedLlmModel(): String {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    return pref.getString("llm_model", "gpt-4.1-mini").orEmpty().trim().ifBlank { "gpt-4.1-mini" }
+  }
 
   private fun localLlmConfig(): LocalLlmConfig? {
     val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
     val apiKey = pref.getString("openai_api_key", "").orEmpty().trim()
     if (apiKey.isBlank()) return null
-    val model = pref.getString("llm_model", "gpt-4.1-mini").orEmpty().trim().ifBlank { "gpt-4.1-mini" }
+    val model = selectedLlmModel()
     val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
     return LocalLlmConfig(apiKey = apiKey, model = model, baseUrl = baseUrl)
   }
@@ -966,6 +1141,7 @@ class OpenCrayRuntime(
   }
 
   fun runActions(actionIds: Set<String>? = null) {
+    markUserActivity()
     if (actionIds == null && gatewayRegistered) {
       runGatewayDispatchLoop()
       return
@@ -985,6 +1161,7 @@ class OpenCrayRuntime(
       "get_semesters",
       "get_courses",
       "get_course_schedule",
+      "get_assignments",
       "get_campus_activities",
       "search",
       "get_homework_cookie",
@@ -1020,7 +1197,8 @@ class OpenCrayRuntime(
     val homeworkCsrf = pref.getString("homework_csrf", "").orEmpty().trim()
     val learnBaseUrl = pref.getString("learn_base_url", "").orEmpty().trim()
     val openAiKey = pref.getString("openai_api_key", "").orEmpty().trim()
-    val model = pref.getString("llm_model", "").orEmpty().trim()
+    val model = selectedLlmModel()
+    val profile = ContextWindowManager.profileFor(model)
     val baseUrl = pref.getString("llm_base_url", "").orEmpty().trim()
     val userId = pref.getString("user_id", "").orEmpty().trim()
     val campusFile = pref.getString("campus_file", "").orEmpty().trim()
@@ -1029,7 +1207,14 @@ class OpenCrayRuntime(
     val searchApiKey = pref.getString("search_api_key", "").orEmpty().trim()
     val searchScene = pref.getString("search_scene", "").orEmpty().trim()
     val searchTtl = pref.getString("search_ttl", "").orEmpty().trim()
-    val timezone = pref.getString("timezone", "").orEmpty().trim()
+    val timezoneFollowSystem = pref.getBoolean("timezone_follow_system", !pref.contains("timezone"))
+    val timezone =
+      if (timezoneFollowSystem) {
+        ZoneId.systemDefault().id
+      } else {
+        pref.getString("timezone", "").orEmpty().trim().ifBlank { ZoneId.systemDefault().id }
+      }
+    val memoryContext = buildGatewayMemoryContext(profile)
 
     val session = linkedMapOf<String, Any?>()
     if (cookie.isNotEmpty()) {
@@ -1052,6 +1237,7 @@ class OpenCrayRuntime(
     if (learnBaseUrl.isNotEmpty()) session["learn_base_url"] = learnBaseUrl
     if (openAiKey.isNotEmpty()) session["openai_api_key"] = openAiKey
     if (model.isNotEmpty()) session["llm_model"] = model
+    session["context_window"] = profile.toSessionMap()
     if (baseUrl.isNotEmpty()) session["llm_base_url"] = baseUrl
     if (userId.isNotEmpty()) session["user_id"] = userId
     if (timezone.isNotEmpty()) session["timezone"] = timezone
@@ -1064,7 +1250,154 @@ class OpenCrayRuntime(
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
     if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
+    if (memoryContext.isNotEmpty()) session["memory_context"] = memoryContext
     return session
+  }
+
+  private data class MemoryPolicy(
+    val longTtlDays: Int,
+    val midTtlDays: Int,
+    val shortTtlDays: Int,
+    val halfLifeDays: Int,
+  )
+
+  private data class RankedMemoryRecord(
+    val record: MemoryRecord,
+    val effectiveWeight: Int,
+    val score: Double,
+    val ageDays: Double,
+  )
+
+  private fun buildGatewayMemoryContext(profile: ContextWindowProfile): Map<String, Any?> {
+    val entries = rankedMemoryEntries(profile.memoryEntryLimit)
+    if (entries.isEmpty()) return emptyMap()
+    val policy = memoryPolicy()
+    val valueLimit = profile.memoryValueCharLimit
+    return mapOf(
+      "summary" to memorySummaryText(entries, valueLimit = (valueLimit / 2).coerceAtLeast(120)).take(profile.memorySummaryCharLimit),
+      "policy" to mapOf(
+        "long_ttl_days" to policy.longTtlDays,
+        "mid_ttl_days" to policy.midTtlDays,
+        "short_ttl_days" to policy.shortTtlDays,
+        "half_life_days" to policy.halfLifeDays,
+      ),
+      "entries" to entries.map { record ->
+        mapOf(
+          "scope" to record.record.scope,
+          "key" to record.record.key,
+          "value" to record.record.value.take(valueLimit),
+          "weight" to record.record.weight,
+          "effective_weight" to record.effectiveWeight,
+          "age_days" to ((record.ageDays * 100.0).roundToInt() / 100.0),
+          "updated_at_epoch_ms" to record.record.updatedAtEpochMs,
+        )
+      },
+    )
+  }
+
+  private fun buildMemoryPromptText(profile: ContextWindowProfile): String {
+    val entries = rankedMemoryEntries(profile.memoryEntryLimit.coerceAtMost(8))
+    if (entries.isEmpty()) return ""
+    val summary =
+      memorySummaryText(
+        records = entries,
+        valueLimit = (profile.memoryValueCharLimit / 2).coerceAtLeast(100),
+      ).take(profile.memorySummaryCharLimit)
+    return "\n可参考用户记忆和反馈，但不要逐字暴露这些内部记录：\n$summary"
+  }
+
+  private fun rankedMemoryEntries(limit: Int): List<RankedMemoryRecord> {
+    val now = System.currentTimeMillis()
+    val policy = memoryPolicy()
+    return snapshot().memoryRecords
+      .mapNotNull { record -> rankMemoryRecord(record, policy, now) }
+      .sortedWith(
+        compareByDescending<RankedMemoryRecord> { it.score }
+          .thenByDescending { it.effectiveWeight }
+          .thenByDescending { it.record.updatedAtEpochMs },
+      )
+      .take(limit)
+  }
+
+  private fun rankMemoryRecord(
+    record: MemoryRecord,
+    policy: MemoryPolicy,
+    nowEpochMs: Long,
+  ): RankedMemoryRecord? {
+    if (record.value.isBlank()) return null
+    val ageDays =
+      ((nowEpochMs - record.updatedAtEpochMs).coerceAtLeast(0L)).toDouble() / MILLIS_PER_DAY
+    val ttlDays = memoryTtlDays(record.scope, policy)
+    if (ttlDays > 0 && ageDays > ttlDays) return null
+    val decayedWeight =
+      if (policy.halfLifeDays > 0) {
+        record.weight.toDouble() * 0.5.pow(ageDays / policy.halfLifeDays.toDouble())
+      } else {
+        record.weight.toDouble()
+      }
+    val score = decayedWeight + memoryScopeRank(record.scope) * 20.0
+    return RankedMemoryRecord(
+      record = record,
+      effectiveWeight = decayedWeight.roundToInt().coerceAtLeast(1),
+      score = score,
+      ageDays = ageDays,
+    )
+  }
+
+  private fun memoryPolicy(): MemoryPolicy {
+    val pref = appContext.getSharedPreferences("openthu_settings", Context.MODE_PRIVATE)
+    return MemoryPolicy(
+      longTtlDays = readMemoryDays(pref.getString("memory_long_ttl", "365"), default = 365),
+      midTtlDays = readMemoryDays(pref.getString("memory_mid_ttl", "30"), default = 30),
+      shortTtlDays = readMemoryDays(pref.getString("memory_short_ttl", "7"), default = 7),
+      halfLifeDays = readMemoryDays(pref.getString("memory_half_life", "30"), default = 30),
+    )
+  }
+
+  private fun readMemoryDays(
+    value: String?,
+    default: Int,
+  ): Int =
+    value
+      ?.trim()
+      ?.toIntOrNull()
+      ?.takeIf { it >= 0 }
+      ?: default
+
+  private fun memoryTtlDays(
+    scope: String,
+    policy: MemoryPolicy,
+  ): Int =
+    when (scope.lowercase(Locale.getDefault())) {
+      "long" -> policy.longTtlDays
+      "mid" -> policy.midTtlDays
+      "short" -> policy.shortTtlDays
+      else -> policy.shortTtlDays
+    }
+
+  private fun memoryScopeRank(scope: String): Int =
+    when (scope.lowercase(Locale.getDefault())) {
+      "long" -> 3
+      "mid" -> 2
+      "short" -> 1
+      else -> 0
+    }
+
+  private fun memorySummaryText(
+    records: List<RankedMemoryRecord>,
+    valueLimit: Int,
+  ): String =
+    records.joinToString("\n") { ranked ->
+      val record = ranked.record
+      "- [${record.scope}/${record.key}/w${ranked.effectiveWeight}] ${record.value.take(valueLimit)}"
+    }
+
+  private companion object {
+    private const val MILLIS_PER_DAY = 86_400_000.0
+    private const val GATEWAY_ACTIVE_WINDOW_MS = 2L * 60L * 1000L
+    private const val GATEWAY_HEARTBEAT_ACTIVE_MS = 15L * 1000L
+    private const val GATEWAY_HEARTBEAT_IDLE_MS = 30L * 1000L
+    private const val GATEWAY_HEARTBEAT_BACKGROUND_MS = 120L * 1000L
   }
 
   private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
@@ -1084,7 +1417,7 @@ class OpenCrayRuntime(
           goal = goal,
           approveSensitive = true,
           session = buildGatewaySession(),
-          history = buildGatewayChatHistory(),
+          history = buildGatewayChatHistory(currentMessage = goal),
         )
       if (!result.success || result.data == null) {
         gatewayRegistered = false
@@ -1661,12 +1994,9 @@ class OpenCrayRuntime(
     val reason = report.metadata["reason"] as? String
     if (reason == "conflict_strategy_required") return "APPROVAL_REQUIRED"
     if (reason == "allow_conflict_delete_not_set") return "APPROVAL_REQUIRED"
-    if (reason == "confirm_submit_required") return "APPROVAL_REQUIRED"
     if (reason == "login_required" || report.semantic == "homework_cookie_login_required") return "NOT_CONFIGURED"
 
-    if (message.contains("confirm_delete=true", ignoreCase = true) ||
-      message.contains("confirm_submit=true", ignoreCase = true)
-    ) {
+    if (message.contains("confirm_delete=true", ignoreCase = true)) {
       return "APPROVAL_REQUIRED"
     }
     if (actionId == "create_calendar_event" &&
@@ -1744,6 +2074,143 @@ class OpenCrayRuntime(
     }
   }
 
+  private fun actionPlanningBody(
+    task: AgentTask,
+    action: SystemAction,
+    skillName: String,
+    result: String?,
+  ): String =
+    buildString {
+      append("目标：").append(task.goal.take(160))
+      append("\n下一步：").append(actionNextStep(skillName, action))
+
+      val details = actionPlanDetails(action)
+      if (details.isNotBlank()) {
+        append("\n计划要点：").append(details)
+      }
+
+      val reference = actionReference(action)
+      if (reference.isNotBlank()) {
+        append("\n计划依据：").append(reference.take(240))
+      }
+
+      if (!result.isNullOrBlank()) {
+        append("\n进展备注：").append(result.take(180))
+      }
+    }
+
+  private fun actionNextStep(
+    skillName: String,
+    action: SystemAction,
+  ): String {
+    val target = actionValue(action, "title", "label", "name", "query", "keyword").ifBlank { action.title }
+    val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
+    return when (skillName) {
+      "set_alarm" ->
+        if (time.isNotBlank()) {
+          "确认 $time 的提醒内容「${target.take(36)}」，然后设置闹钟。"
+        } else {
+          "补齐提醒时间与提醒内容，再设置闹钟。"
+        }
+      "create_reminder" ->
+        if (time.isNotBlank()) {
+          "把「${target.take(36)}」整理成待办，并按 $time 跟进。"
+        } else {
+          "明确截止时间、提醒频率和待办标题，再创建提醒。"
+        }
+      "create_calendar_event" ->
+        if (time.isNotBlank()) {
+          "核对标题、时间、地点与冲突情况，确认后加入日历。"
+        } else {
+          "补齐时间和地点，确认没有冲突后加入日历。"
+        }
+      "get_course_schedule" -> "拉取课表后，挑出需要提醒、复习或加入日历的课程节点。"
+      "get_courses" -> "整理课程列表，筛出本次目标真正相关的课程。"
+      "get_semesters" -> "确认学期范围，再继续查询课表、课程或作业。"
+      "get_academic_calendar" -> "读取校历节点，把考试、假期和关键截止时间拆成后续计划。"
+      "get_assignments" -> "拉取课程 DDL 与作业列表，优先处理未提交或临近截止项。"
+      "crawl_course_homeworks",
+      "crawl_unsubmitted_homeworks" -> "核对作业标题、课程和截止时间，优先处理未提交或临近截止项。"
+      "read_notifications" -> "读取通知后，只保留需要行动、提醒或加入日历的信息。"
+      "get_campus_activities" -> "查看活动时间、地点和报名要求，决定是否加入日历或稍后提醒。"
+      "search" -> "先确认搜索范围和关键词，再把有用结果整理成待办或日程。"
+      "show_summary" -> "阅读总结，决定是否继续拆成提醒、日历或待办。"
+      else -> "确认「${target.take(36)}」的目标、时间和范围，必要时补充参数后再执行。"
+    }
+  }
+
+  private fun actionPlanDetails(action: SystemAction): String {
+    val target = actionValue(action, "title", "label", "name", "query", "keyword")
+    val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
+    val location = actionValue(action, "location", "place", "venue")
+    val course = actionValue(action, "course", "course_name", "course_id")
+    val confirmation = if (action.requiresApproval) "执行前需要你确认" else "可自动执行，仍可先检查参数"
+    return listOf(
+      target.takeIf { it.isNotBlank() }?.let { "对象：${it.take(48)}" },
+      course.takeIf { it.isNotBlank() }?.let { "课程：${it.take(48)}" },
+      time.takeIf { it.isNotBlank() }?.let { "时间：${it.take(48)}" },
+      location.takeIf { it.isNotBlank() }?.let { "地点：${it.take(48)}" },
+      "确认：$confirmation",
+    ).filterNotNull().joinToString("；")
+  }
+
+  private fun actionReference(action: SystemAction): String {
+    val summary = action.summary.trim()
+    val explain = action.explain.trim()
+    val genericPrefixes = listOf("Gateway planned skill:", "Gateway dispatched skill:", "Direct invocation from UI")
+    return listOf(summary, explain)
+      .filter { value ->
+        value.isNotBlank() &&
+          value != action.title &&
+          genericPrefixes.none { prefix -> value.startsWith(prefix) }
+      }
+      .distinct()
+      .joinToString(" ")
+  }
+
+  private fun actionValue(
+    action: SystemAction,
+    vararg keys: String,
+  ): String {
+    for (key in keys) {
+      val fromParams = action.params[key]?.trim().orEmpty()
+      if (fromParams.isNotBlank()) return fromParams
+      val fromPayload = action.payload?.get(key)?.toString()?.trim().orEmpty()
+      if (fromPayload.isNotBlank() && fromPayload != "null") return fromPayload
+    }
+    return ""
+  }
+
+  private fun actionPlanningMetadata(
+    task: AgentTask,
+    action: SystemAction,
+    skillName: String,
+  ): Map<String, String> {
+    val metadata = mutableMapOf(
+      "skill" to skillName,
+      "goal" to task.goal.take(160),
+      "confirmation" to if (action.requiresApproval) "需要确认" else "可自动执行",
+      "confidence" to "${action.confidence}%",
+      "risk" to action.riskLevel,
+      "recommendation" to recommendationTier(action),
+    )
+    val target = actionValue(action, "title", "label", "name", "query", "keyword")
+    val time = actionValue(action, "time", "due_time", "start_time", "start", "date", "deadline")
+    if (target.isNotBlank()) metadata["target"] = target.take(80)
+    if (time.isNotBlank()) metadata["time"] = time.take(80)
+    return metadata
+  }
+
+  private fun recommendationTier(action: SystemAction): String =
+    when {
+      action.status == "ignored" -> "已忽略"
+      action.status == "snoozed" -> "稍后处理"
+      action.requiresApproval || action.riskLevel.equals("high", ignoreCase = true) -> "强提醒"
+      action.confidence >= 80 -> "强推荐"
+      action.confidence >= 60 -> "中推荐"
+      else -> "弱推荐"
+    }
+
   private fun actionPlanningCard(
     task: AgentTask,
     action: SystemAction,
@@ -1753,18 +2220,10 @@ class OpenCrayRuntime(
     val now = System.currentTimeMillis()
     val skillName = action.id.substringBefore("#")
     val title = planningCardTitle(skillName, action.title)
-    val body =
-      buildString {
-        append(action.summary.ifBlank { action.explain.ifBlank { action.title } })
-        if (!result.isNullOrBlank()) {
-          append("\n结果：")
-          append(result.take(220))
-        }
-      }
     return PlanningCard(
       id = planningCardId(task.id, action.requestId, skillName),
       title = title,
-      body = body,
+      body = actionPlanningBody(task, action, skillName, result),
       type = inferPlanningCardType(skillName + " " + action.title + " " + action.summary),
       source = "Skill 调用",
       status = status,
@@ -1772,7 +2231,7 @@ class OpenCrayRuntime(
       updatedAtEpochMs = now,
       actionId = action.id,
       taskId = task.id,
-      metadata = mapOf("skill" to skillName),
+      metadata = actionPlanningMetadata(task, action, skillName),
     )
   }
 
@@ -1780,10 +2239,24 @@ class OpenCrayRuntime(
     val skillName = event.skillName.ifBlank { return null }
     val now = System.currentTimeMillis()
     val title = planningCardTitle(skillName, event.title)
+    val nextStep =
+      if (event.type == "tool_result") {
+        "查看返回内容，决定是否继续拆成提醒、日历或待办。"
+      } else {
+        "等待 ${planningCardTitle(skillName, event.title)} 返回结果，再确认后续安排。"
+      }
+    val body =
+      buildString {
+        append("下一步：").append(nextStep)
+        val content = event.content.trim()
+        if (content.isNotBlank()) {
+          append("\n计划依据：").append(content.take(240))
+        }
+      }
     return PlanningCard(
       id = planningCardId(event.taskId, event.requestId, skillName),
       title = title,
-      body = event.content.ifBlank { "正在调用 $skillName。" }.take(360),
+      body = body,
       type = inferPlanningCardType(skillName + " " + event.title + " " + event.content),
       source = "Agent-Core",
       status = if (event.type == "tool_result") event.status.ifBlank { "completed" } else event.status.ifBlank { "running" },
@@ -1817,6 +2290,7 @@ class OpenCrayRuntime(
         "get_courses" -> "课程列表"
         "get_semesters" -> "学期信息"
         "get_academic_calendar" -> "校历信息"
+        "get_assignments" -> "课程 DDL"
         "crawl_course_homeworks" -> "作业列表"
         "crawl_unsubmitted_homeworks" -> "未交作业"
         "create_calendar_event" -> "日历事项"

@@ -9,7 +9,7 @@
 3. `crawl_unsubmitted_homeworks`：抓取未提交作业。
 4. `preview_homework_attachments`：打开作业页并解析附件列表。
 5. `upload_homework_attachment`：上传一个附件。
-6. `submit_homework`：提交作业内容或附件，必须显式传 `confirm_submit=true`。
+6. `submit_homework`：提交作业内容或附件，必须通过高风险审批后执行。
 
 ## 配置
 

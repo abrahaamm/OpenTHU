@@ -132,6 +132,49 @@ class SkillRegistry:
 
 def build_default_registry() -> SkillRegistry:
     registry = SkillRegistry()
+    calendar_time_text_schema = {
+        "type": "string",
+        "description": (
+            "Calendar time text. May be a concrete ISO-8601 datetime with explicit UTC offset "
+            "or natural-language/relative/year-underspecified time text copied from the user. A user "
+            "time is complete only if it explicitly includes year, date, and time; 6月21日下午4点 "
+            "is incomplete because it lacks a year. If relative or missing a year, plan get_current_time "
+            "before this calendar skill and copy the original phrase instead of filling a year."
+        ),
+    }
+    timezone_schema = {
+        "type": "string",
+        "description": (
+            "Optional IANA timezone id used for calendar display/context, preferably copied "
+            "from session.timezone or settings, e.g. Asia/Shanghai. Time values must still "
+            "include an explicit offset."
+        ),
+    }
+    calendar_time_source_schema = {
+        "type": "string",
+        "enum": ["user_text", "planner_inferred", "upstream_skill", "explicit_absolute"],
+        "description": (
+            "Where the calendar time came from. Use user_text for relative/year-underspecified "
+            "time copied from the user, planner_inferred only if the planner filled missing parts, "
+            "upstream_skill for authoritative times from earlier skill results such as DDLs, and "
+            "explicit_absolute only when the user gave a complete date with explicit year and time."
+        ),
+    }
+    calendar_time_metadata_schema = {
+        "time_source": calendar_time_source_schema,
+        "time_text": {
+            "type": "string",
+            "description": "Original user time phrase, e.g. 6月21日下午4点. Required when time_source=user_text.",
+        },
+        "source_skill": {
+            "type": "string",
+            "description": "Upstream skill name when time_source=upstream_skill, e.g. get_assignments.",
+        },
+        "source_field": {
+            "type": "string",
+            "description": "Upstream result field when time_source=upstream_skill, e.g. deadline.",
+        },
+    }
 
     for spec in [
         SkillSpec("login", "Authenticate with Tsinghua identity system", "auth", "low", False),
@@ -154,7 +197,7 @@ def build_default_registry() -> SkillRegistry:
                     "lang": {"type": "string"},
                     "include_schedule_detail": {"type": "boolean"},
                 },
-                "required": [],
+                "required": ["homework_id"],
                 "additionalProperties": False,
             },
         ),
@@ -213,6 +256,23 @@ def build_default_registry() -> SkillRegistry:
             False,
             session_required=True,
             args_schema={"course_ids": "list[string]"},
+            args_json_schema={
+                "type": "object",
+                "properties": {
+                    "course_ids": {"type": "array", "items": {"type": "string"}},
+                    "semester_id": {"type": "string"},
+                    "include_submitted": {"type": "boolean"},
+                    "learn_base_url": {"type": "string"},
+                    "session_cookie": {"type": "string"},
+                    "cookies": {"type": "string"},
+                    "homework_cookie": {"type": "string"},
+                    "learn_cookie": {"type": "string"},
+                    "csrf_token": {"type": "string"},
+                    "locale": {"type": "string"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
             when_to_use="Use for assignment and deadline lists exposed by the normal course-info API, not the Android Tsinghua Learn homework crawler.",
             example_utterances=[
                 "帮我获取当前作业和DDL",
@@ -250,7 +310,7 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "crawl_course_homeworks",
-            "Crawl homework records from Tsinghua Learn on the Agent-Core server",
+            "Crawl homework records from Tsinghua Learn on the Android device",
             "data",
             "low",
             False,
@@ -283,7 +343,7 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "crawl_unsubmitted_homeworks",
-            "Crawl unsubmitted homework records from Tsinghua Learn on the Agent-Core server",
+            "Crawl unsubmitted homework records from Tsinghua Learn on the Android device",
             "data",
             "low",
             False,
@@ -330,6 +390,8 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "homework_id": {"type": "string"},
+                    "homework_title": {"type": "string"},
+                    "lookup_hint": {"type": "string"},
                     "homework_detail_url": {"type": "string"},
                     "learn_base_url": {"type": "string"},
                     "session_cookie": {"type": "string"},
@@ -339,7 +401,7 @@ def build_default_registry() -> SkillRegistry:
                     "csrf_token": {"type": "string"},
                     "include_feedback_attachments": {"type": "boolean"},
                 },
-                "required": ["homework_id"],
+                "required": [],
                 "additionalProperties": False,
             },
         ),
@@ -360,8 +422,12 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "homework_id": {"type": "string"},
+                    "homework_title": {"type": "string"},
+                    "lookup_hint": {"type": "string"},
                     "xszyid": {"type": "string"},
                     "student_homework_id": {"type": "string"},
+                    "course_id": {"type": "string"},
+                    "wlkcid": {"type": "string"},
                     "file_path": {"type": "string"},
                     "file_uri": {"type": "string"},
                     "file_name": {"type": "string"},
@@ -374,7 +440,7 @@ def build_default_registry() -> SkillRegistry:
                     "learn_cookie": {"type": "string"},
                     "csrf_token": {"type": "string"},
                 },
-                "required": ["homework_id"],
+                "required": [],
                 "additionalProperties": False,
             },
         ),
@@ -395,6 +461,9 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "homework_id": {"type": "string"},
+                    "submission_session_id": {"type": "string"},
+                    "homework_title": {"type": "string"},
+                    "lookup_hint": {"type": "string"},
                     "zyid": {"type": "string"},
                     "homework_zyid": {"type": "string"},
                     "xszyid": {"type": "string"},
@@ -408,7 +477,6 @@ def build_default_registry() -> SkillRegistry:
                     "file_uri": {"type": "string"},
                     "file_name": {"type": "string"},
                     "homework_detail_url": {"type": "string"},
-                    "confirm_submit": {"type": "boolean"},
                     "learn_base_url": {"type": "string"},
                     "session_cookie": {"type": "string"},
                     "cookies": {"type": "string"},
@@ -416,7 +484,7 @@ def build_default_registry() -> SkillRegistry:
                     "learn_cookie": {"type": "string"},
                     "csrf_token": {"type": "string"},
                 },
-                "required": ["homework_id", "confirm_submit"],
+                "required": [],
                 "additionalProperties": False,
             },
         ),
@@ -431,11 +499,11 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "get_campus_activities",
-            "Fetch campus activity information",
+            "Fetch campus activity information on the Android device",
             "data",
             "low",
             False,
-            session_required=True,
+            session_required=False,
             when_to_use="Use when the user asks about campus events, lectures, activities, notices, registration opportunities, or 校园活动/讲座/资讯.",
             avoid_when="Do not prepend get_semesters unless the user explicitly asks about semesters or course terms.",
             example_utterances=[
@@ -484,7 +552,11 @@ def build_default_registry() -> SkillRegistry:
             "low",
             False,
             session_required=False,
-            when_to_use="Use before alarm/reminder/calendar planning when the user uses relative time such as 明天, 后天, 今晚, tomorrow, next Monday.",
+            when_to_use=(
+                "Must be used before alarm/reminder/calendar planning when the user uses relative "
+                "time such as 明天, 后天, 今晚, 下周, tomorrow, next Monday, or a calendar date "
+                "without a year such as 6月21日下午4点."
+            ),
             example_utterances=[
                 "明早八点叫我",
                 "remind me tomorrow",
@@ -510,7 +582,7 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "create_calendar_event",
-            "Create a system calendar event",
+            "Create a calendar event on device for schedules, classes, deadlines, and task reminders",
             "action",
             "medium",
             True,
@@ -524,8 +596,20 @@ def build_default_registry() -> SkillRegistry:
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "start_time": {"type": "string"},
-                    "end_time": {"type": "string"},
+                    "start_time": calendar_time_text_schema,
+                    "end_time": {
+                        **calendar_time_text_schema,
+                        "description": (
+                            calendar_time_text_schema["description"]
+                            + " Optional; defaults to one hour after start_time when omitted."
+                        ),
+                    },
+                    "current_time": {
+                        "type": "string",
+                        "description": "Optional current-time context injected by the server/runtime; planners should not invent it.",
+                    },
+                    **calendar_time_metadata_schema,
+                    "timezone": timezone_schema,
                     "location": {"type": "string"},
                     "description": {"type": "string"},
                     "conflict_decision": {
@@ -534,7 +618,7 @@ def build_default_registry() -> SkillRegistry:
                     },
                     "allow_conflict_delete": {"type": "boolean"},
                 },
-                "required": ["title", "start_time", "end_time"],
+                "required": ["title", "start_time"],
                 "additionalProperties": False,
             },
         ),
@@ -547,10 +631,22 @@ def build_default_registry() -> SkillRegistry:
             args_json_schema={
                 "type": "object",
                 "properties": {
-                    "start_time": {"type": "string"},
-                    "end_time": {"type": "string"},
+                    "start_time": calendar_time_text_schema,
+                    "end_time": {
+                        **calendar_time_text_schema,
+                        "description": (
+                            calendar_time_text_schema["description"]
+                            + " Optional; defaults to one hour after start_time when omitted."
+                        ),
+                    },
+                    "current_time": {
+                        "type": "string",
+                        "description": "Optional current-time context injected by the server/runtime; planners should not invent it.",
+                    },
+                    **calendar_time_metadata_schema,
+                    "timezone": timezone_schema,
                 },
-                "required": ["start_time", "end_time"],
+                "required": ["start_time"],
                 "additionalProperties": False,
             },
         ),
@@ -576,7 +672,7 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "set_alarm",
-            "Set a system alarm",
+            "Set a one-off system alarm for a precise clock time; use for wake-up/timekeeping",
             "action",
             "low",
             False,
@@ -617,7 +713,10 @@ def build_default_registry() -> SkillRegistry:
         ),
         SkillSpec(
             "read_notifications",
-            "Read unread system notifications",
+            (
+                "Read active/unread status bar notifications from the Android device. "
+                "Use this to check incoming messages (WeChat, SMS, QQ, email) "
+            ),
             "action",
             "low",
             False,

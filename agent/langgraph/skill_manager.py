@@ -216,6 +216,7 @@ class SkillManager:
         additional_allowed = bool(schema.get("additionalProperties", True))
 
         normalized: dict[str, Any] = {}
+        seen_fields: set[str] = set()
 
         for key, value in args.items():
             key_str = str(key)
@@ -227,6 +228,7 @@ class SkillManager:
                 else:
                     errors.append(f"unknown field `{key_str}`")
                 continue
+            seen_fields.add(key_str)
             coerced, err = self._coerce_value_by_schema(key_str, value, field_schema)
             if err:
                 errors.append(err)
@@ -234,8 +236,10 @@ class SkillManager:
             normalized[key_str] = coerced
 
         for field in required:
-            if field not in normalized:
+            if field not in seen_fields:
                 errors.append(f"missing required field `{field}`")
+                continue
+            if field not in normalized:
                 continue
             if self._is_empty_value(normalized[field]):
                 errors.append(f"required field `{field}` cannot be empty")
@@ -297,6 +301,11 @@ class SkillManager:
         if isinstance(enum_values, list) and enum_values:
             if coerced not in enum_values:
                 return None, f"field `{field_name}` must be one of {enum_values}"
+
+        pattern = schema.get("pattern")
+        if expected_type == "string" and isinstance(pattern, str) and pattern:
+            if re.fullmatch(pattern, str(coerced)) is None:
+                return None, f"field `{field_name}` does not match required pattern {pattern!r}"
 
         return coerced, None
 

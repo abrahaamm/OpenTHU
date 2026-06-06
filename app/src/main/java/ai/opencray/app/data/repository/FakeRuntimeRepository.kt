@@ -8,7 +8,9 @@ import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import java.util.UUID
 
-class FakeRuntimeRepository : RuntimeRepository {
+class FakeRuntimeRepository(
+  private val memoryStore: RuntimeMemoryStore? = null,
+) : RuntimeRepository {
   private var snapshot =
     RuntimeSnapshot(
       appTitle = "OpenTHU",
@@ -98,17 +100,7 @@ class FakeRuntimeRepository : RuntimeRepository {
           ),
         ),
       tasks = emptyList(),
-      memoryRecords =
-        listOf(
-          MemoryRecord(
-            id = UUID.randomUUID().toString(),
-            scope = "long",
-            key = "default_preference",
-            value = "prefer_calendar_and_alarm",
-            weight = 60,
-            updatedAtEpochMs = System.currentTimeMillis(),
-          ),
-        ),
+      memoryRecords = initialMemoryRecords(),
       auditTrail = emptyList(),
       recentEvents =
         listOf(
@@ -121,7 +113,7 @@ class FakeRuntimeRepository : RuntimeRepository {
   override fun getSnapshot(): RuntimeSnapshot = snapshot
 
   override fun replaceSnapshot(snapshot: RuntimeSnapshot) {
-    this.snapshot = snapshot
+    updateSnapshot(snapshot)
   }
 
   override fun markRuntimeBooted() {
@@ -211,4 +203,26 @@ class FakeRuntimeRepository : RuntimeRepository {
   override fun appendEvent(event: String) {
     snapshot = snapshot.copy(recentEvents = listOf(event) + snapshot.recentEvents)
   }
+
+  private fun updateSnapshot(next: RuntimeSnapshot) {
+    val memoryChanged = snapshot.memoryRecords != next.memoryRecords
+    snapshot = next
+    if (memoryChanged) {
+      memoryStore?.save(next.memoryRecords)
+    }
+  }
+
+  private fun initialMemoryRecords(): List<MemoryRecord> =
+    memoryStore
+      ?.load()
+      ?: listOf(
+        MemoryRecord(
+          id = UUID.randomUUID().toString(),
+          scope = "long",
+          key = "default_preference",
+          value = "prefer_calendar_and_alarm",
+          weight = 60,
+          updatedAtEpochMs = System.currentTimeMillis(),
+        ),
+      )
 }

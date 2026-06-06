@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -27,6 +27,28 @@ class HomeworkSkillBridge(Protocol):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+CN_TZ = timezone(timedelta(hours=8))
+
+
+def _homework_deadline_epoch_ms(raw: Any) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        return None
+    return value if value > 10_000_000_000 else value * 1000
+
+
+def _format_homework_deadline(raw: Any) -> str:
+    text = str(raw or "").strip()
+    epoch_ms = _homework_deadline_epoch_ms(text)
+    if epoch_ms is None:
+        return text
+    return datetime.fromtimestamp(epoch_ms / 1000, tz=CN_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -488,34 +510,37 @@ def _extract_homework_records(
         title = _normalize_text(_first_nonblank(row.get("bt"), row.get("zybt"), row.get("title"), row.get("zymc")))
         if not any([homework_id, student_homework_id, title]):
             continue
-        deadline = _normalize_text(
+        deadline_raw = _normalize_text(
             _first_nonblank(row.get("jzsj"), row.get("deadline"), row.get("jssj"), row.get("endTime"))
         )
+        deadline_epoch_ms = _homework_deadline_epoch_ms(deadline_raw)
         detail_url = f"{base_url}/f/wlxt/kczy/zy/student/viewZy?zyid={homework_id}" if homework_id else ""
-        records.append(
-            {
-                "homework_id": homework_id,
-                "zyid": homework_id,
-                "student_homework_id": student_homework_id,
-                "xszyid": student_homework_id,
-                "title": title or "未命名作业",
-                "homework_title": title or "未命名作业",
-                "deadline": deadline,
-                "submitted": endpoint_type != "unsubmitted",
-                "status_group": endpoint_type,
-                "course_id": course.get("course_id", ""),
-                "course_wlkcid": course.get("wlkcid", ""),
-                "course_name": course.get("course_name", ""),
-                "course_no": course.get("course_no", ""),
-                "class_no": course.get("class_no", ""),
-                "teacher_name": course.get("teacher_name", ""),
-                "detail_url": detail_url,
-                "submit_url": f"{base_url}/f/wlxt/kczy/zy/student/tijiao?wlkcid={course.get('wlkcid', '')}&xszyid={student_homework_id}"
-                if student_homework_id
-                else "",
-                "source_endpoint": endpoint,
-            }
-        )
+        record = {
+            "homework_id": homework_id,
+            "zyid": homework_id,
+            "student_homework_id": student_homework_id,
+            "xszyid": student_homework_id,
+            "title": title or "未命名作业",
+            "homework_title": title or "未命名作业",
+            "deadline": _format_homework_deadline(deadline_raw),
+            "deadline_raw": deadline_raw,
+            "submitted": endpoint_type != "unsubmitted",
+            "status_group": endpoint_type,
+            "course_id": course.get("course_id", ""),
+            "course_wlkcid": course.get("wlkcid", ""),
+            "course_name": course.get("course_name", ""),
+            "course_no": course.get("course_no", ""),
+            "class_no": course.get("class_no", ""),
+            "teacher_name": course.get("teacher_name", ""),
+            "detail_url": detail_url,
+            "submit_url": f"{base_url}/f/wlxt/kczy/zy/student/tijiao?wlkcid={course.get('wlkcid', '')}&xszyid={student_homework_id}"
+            if student_homework_id
+            else "",
+            "source_endpoint": endpoint,
+        }
+        if deadline_epoch_ms is not None:
+            record["deadline_epoch_ms"] = deadline_epoch_ms
+        records.append(record)
     return records
 
 
@@ -680,14 +705,15 @@ class PreviewHomeworkAttachmentsHandler(_BaseHomeworkHandler):
 class UploadHomeworkAttachmentHandler(_BaseHomeworkHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         homework_id = str(invocation.args.get("homework_id", "")).strip()
+        lookup_hint = str(invocation.args.get("lookup_hint") or invocation.args.get("homework_title") or "").strip()
         file_path = str(invocation.args.get("file_path", "")).strip()
         file_uri = str(invocation.args.get("file_uri", "")).strip()
-        if not homework_id:
+        if not homework_id and not lookup_hint:
             return self._result(
                 skill_name=invocation.skill_name,
                 request_id=invocation.request_id,
                 code="INVALID_PARAM",
-                data={"status": "invalid_param", "message": "homework_id is required"},
+                data={"status": "invalid_param", "message": "homework_id or lookup_hint is required"},
             )
         if not file_path and not file_uri:
             return self._result(
@@ -696,7 +722,8 @@ class UploadHomeworkAttachmentHandler(_BaseHomeworkHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": "file_path or file_uri is required"},
             )
-        invocation.args["homework_id"] = homework_id
+        if homework_id:
+            invocation.args["homework_id"] = homework_id
         return self._dispatch_to_bridge(invocation, state)
 
 
@@ -704,29 +731,22 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
     def invoke(self, invocation: Any, session: dict[str, Any], state: dict[str, Any]) -> Any:
         args = invocation.args
         homework_id = str(args.get("homework_id", "")).strip()
-        confirmed = _coerce_bool(args.get("confirm_submit"), default=False)
-        if not confirmed:
-            return self._result(
-                skill_name=invocation.skill_name,
-                request_id=invocation.request_id,
-                code="APPROVAL_REQUIRED",
-                data={
-                    "status": "awaiting_confirmation",
-                    "high_risk": True,
-                    "message": "confirm_submit=true is required for submit_homework",
-                },
-            )
-        if not homework_id:
+        submission_session_id = str(args.get("submission_session_id", "")).strip()
+        lookup_hint = str(args.get("lookup_hint") or args.get("homework_title") or "").strip()
+        if not homework_id and not lookup_hint and not submission_session_id:
             return self._result(
                 skill_name=invocation.skill_name,
                 request_id=invocation.request_id,
                 code="INVALID_PARAM",
-                data={"status": "invalid_param", "message": "homework_id is required"},
+                data={"status": "invalid_param", "message": "submission_session_id, homework_id, or lookup_hint is required"},
             )
         attachment_tokens = _coerce_string_list(args.get("attachment_tokens"))
         local_file_paths = _coerce_string_list(args.get("local_file_paths"))
         has_content = any(
             [
+                submission_session_id,
+                homework_id,
+                lookup_hint,
                 str(args.get("submission_text", "")).strip(),
                 str(args.get("file_path", "")).strip(),
                 str(args.get("file_uri", "")).strip(),
@@ -741,8 +761,10 @@ class SubmitHomeworkHandler(_BaseHomeworkHandler):
                 code="INVALID_PARAM",
                 data={"status": "invalid_param", "message": "submission_text, file, or attachment_tokens are required"},
             )
-        args["homework_id"] = homework_id
-        args["confirm_submit"] = True
+        if homework_id:
+            args["homework_id"] = homework_id
+        if submission_session_id:
+            args["submission_session_id"] = submission_session_id
         args["attachment_tokens"] = attachment_tokens
         args["local_file_paths"] = local_file_paths
         return self._dispatch_to_bridge(invocation, state)

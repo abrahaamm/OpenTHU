@@ -77,6 +77,28 @@ class MemoryManager {
     return existing.filterNot { it.id == target.id } to target
   }
 
+  fun updateLongPreferenceAt(
+    existing: List<MemoryRecord>,
+    index: Int,
+    preference: String,
+  ): Pair<List<MemoryRecord>, MemoryRecord?> {
+    val normalized = preference.trim()
+    if (normalized.isEmpty()) return existing to null
+    val target =
+      existing
+        .filter { it.scope == "long" }
+        .sortedByDescending { it.updatedAtEpochMs }
+        .getOrNull(index)
+        ?: return existing to null
+    val updated =
+      target.copy(
+        value = normalized,
+        weight = maxOf(target.weight, 90),
+        updatedAtEpochMs = System.currentTimeMillis(),
+      )
+    return existing.map { if (it.id == target.id) updated else it } to updated
+  }
+
   fun recordActionFeedback(
     existing: List<MemoryRecord>,
     action: SystemAction,

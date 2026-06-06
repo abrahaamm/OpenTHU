@@ -41,10 +41,14 @@ class MainActivity : AppCompatActivity() {
 
   private val learnCookieLoginLauncher =
     registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-      if (result.resultCode == Activity.RESULT_OK) {
-        // The Compose settings overview currently does not expose the legacy form fields.
-        // Keep the launcher registered so the login activity bridge remains available for later settings pages.
-      }
+      if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+      val data = result.data ?: return@registerForActivityResult
+      viewModel.mergeLearnLoginResult(
+        learnBaseUrl = data.getStringExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL).orEmpty(),
+        homeworkCookie = data.getStringExtra(LearnCookieLoginActivity.EXTRA_COOKIE).orEmpty(),
+        homeworkCsrf = data.getStringExtra(LearnCookieLoginActivity.EXTRA_CSRF).orEmpty(),
+        webvpnCookie = data.getStringExtra(LearnCookieLoginActivity.EXTRA_WEBVPN_COOKIE).orEmpty(),
+      )
     }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -72,8 +76,29 @@ class MainActivity : AppCompatActivity() {
           )
           clearChatAttachment()
         },
+        onLaunchLearnCookieLogin = { learnBaseUrl ->
+          learnCookieLoginLauncher.launch(
+            Intent(this, LearnCookieLoginActivity::class.java)
+              .putExtra(LearnCookieLoginActivity.EXTRA_LEARN_BASE_URL, learnBaseUrl),
+          )
+        },
       )
     }
+  }
+
+  override fun onStart() {
+    super.onStart()
+    viewModel.setAppInForeground(true)
+  }
+
+  override fun onPause() {
+    viewModel.persistCurrentSettings()
+    super.onPause()
+  }
+
+  override fun onStop() {
+    viewModel.setAppInForeground(false)
+    super.onStop()
   }
 
   override fun onRequestPermissionsResult(

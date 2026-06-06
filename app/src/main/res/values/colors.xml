@@ -35,4 +35,6 @@
     <color name="opencray_success">#FF0F6F55</color>
     <color name="opencray_warning">#FF925E0E</color>
     <color name="opencray_danger">#FFB42318</color>
+    <color name="opencray_danger_soft">#FFFFE7E3</color>
+    <color name="opencray_neutral_soft">#FFE9EDF3</color>
 </resources>

@@ -53,12 +53,21 @@
     <string name="preference_empty">请输入一条偏好。</string>
     <string name="preference_deleted">偏好已删除。</string>
     <string name="preference_delete_empty">这里还没有可删除的偏好。</string>
+    <string name="preference_updated">偏好已更新。</string>
+    <string name="preference_update">保存修改</string>
+    <string name="memory_clear_all">清除全部记忆</string>
+    <string name="memory_clear_all_done">已清除全部记忆。</string>
+    <string name="memory_clear_all_empty">当前没有可清除的记忆。</string>
+    <string name="memory_clear_confirm_title">清除全部记忆？</string>
+    <string name="memory_clear_confirm_message">这会删除长期偏好、自动记忆和反馈记录，但不会清除连接、模型或 Cookie 设置。</string>
+    <string name="memory_clear_confirm_action">清除</string>
+    <string name="memory_clear_cancel">取消</string>
 
     <string name="planning_snapshot_title">学习与执行快照</string>
-    <string name="planning_cards_title">规划卡片</string>
-    <string name="planning_cards_empty">还没有规划卡片。调用闹钟、待办、课表等能力，或在对话中说“创建一个卡片：……”即可生成。</string>
-    <string name="planning_card_move_up">上移</string>
-    <string name="planning_card_move_down">下移</string>
+    <string name="planning_cards_title">下一步计划</string>
+    <string name="planning_cards_empty">还没有可参考的计划项。你可以在对话页描述目标，或说“创建一个卡片：……”来补充待办、提醒、课程安排。</string>
+    <string name="planning_card_move_up">提前</string>
+    <string name="planning_card_move_down">后排</string>
     <string name="planning_card_delete">删除</string>
     <string name="planning_schedule_title">课程与日程</string>
     <string name="planning_alarm_title">提醒与闹钟</string>
@@ -117,6 +126,7 @@
     <string name="setting_adb_bin_label">ADB 路径</string>
     <string name="setting_adb_serial_label">ADB 设备序列号</string>
     <string name="setting_timezone_label">日历时区</string>
+    <string name="setting_timezone_follow_system">跟随系统时区</string>
 
     <string name="host_description">校园数据源服务地址，用于连接 Agent-Core 或本地网关。</string>
     <string name="port_description">校园数据源服务端口，通常与服务地址配套填写。</string>
@@ -130,17 +140,18 @@
     <string name="setting_homework_cookie_description">用于网络学堂作业抓取、上传和提交的 Learn Cookie；可通过清华统一登录自动获取。</string>
     <string name="setting_homework_csrf_description">网络学堂接口需要时使用的 XSRF/CSRF Token，可以从 Cookie 中自动提取时留空。</string>
     <string name="setting_campus_file_description">校园活动本地数据文件路径，供活动读取能力做兜底使用。</string>
-    <string name="setting_search_provider_description">搜索提供方名称，当前建议填写 duckduckgo 或 brave。</string>
+    <string name="setting_search_provider_description">搜索提供方名称，当前建议填写 duckduckgo、searxng 或 brave；general 是搜索范围，不是提供方。</string>
     <string name="setting_search_endpoint_description">搜索请求地址；只有更换 provider 或代理时才需要调整。</string>
     <string name="setting_search_api_key_description">搜索服务的 API Key，仅部分 provider 需要填写。</string>
     <string name="setting_search_scene_description">控制搜索来源：campus 只搜校内域名，general 只搜校外/通用网页，hybrid 优先校内并补充通用结果。</string>
     <string name="setting_search_ttl_description">搜索结果缓存时长，单位为秒，数值越大越少重复请求。</string>
-    <string name="setting_memory_file_description">本地记忆存储文件路径，当前主要作为记忆持久化配置预留。</string>
-    <string name="setting_memory_long_ttl_description">长期记忆保留天数，当前主要作为记忆策略预留参数。</string>
-    <string name="setting_memory_mid_ttl_description">中期记忆保留天数，当前主要作为记忆策略预留参数。</string>
-    <string name="setting_memory_short_ttl_description">短期记忆保留天数，当前主要作为记忆策略预留参数。</string>
-    <string name="setting_memory_half_life_description">记忆衰减半衰期，单位为天，当前主要作为记忆策略预留参数。</string>
-    <string name="preference_description">补充一条用户偏好描述，当前为偏好记忆入口预留。</string>
+    <string name="setting_memory_file_description">Agent-Core 任务记忆文件路径，用于服务端历史上下文。</string>
+    <string name="setting_memory_long_ttl_description">长期记忆保留天数，过期后不会进入模型上下文。</string>
+    <string name="setting_memory_mid_ttl_description">中期记忆保留天数，过期后不会进入模型上下文。</string>
+    <string name="setting_memory_short_ttl_description">短期记忆保留天数，过期后不会进入模型上下文。</string>
+    <string name="setting_memory_half_life_description">记忆衰减半衰期，单位为天，会影响记忆有效权重排序。</string>
+    <string name="setting_memory_clear_description">清除长期偏好、中期反馈和短期任务记忆；清除后不会在重启时恢复默认记忆。</string>
+    <string name="preference_description">补充一条用户偏好描述，保存后会作为长期记忆参与后续规划。</string>
     <string name="setting_adb_bin_description">ADB 可执行文件路径，后续设备联动能力会读取这里。</string>
     <string name="setting_adb_serial_description">目标 Android 设备序列号，多设备调试时用于指定设备。</string>
     <string name="setting_timezone_description">日历与时间解析使用的时区标识，例如 Asia/Shanghai。</string>
@@ -155,7 +166,7 @@
     <string name="setting_homework_cookie_hint">LEARN_COOKIE / JSESSIONID=...</string>
     <string name="setting_homework_csrf_hint">XSRF-TOKEN（可选）</string>
     <string name="setting_campus_file_hint">OPENTHU_CAMPUS_ACTIVITIES_FILE</string>
-    <string name="setting_search_provider_hint">OPENTHU_SEARCH_PROVIDER（duckduckgo 或 brave）</string>
+    <string name="setting_search_provider_hint">OPENTHU_SEARCH_PROVIDER（duckduckgo / searxng / brave）</string>
     <string name="setting_search_endpoint_hint">OPENTHU_SEARCH_ENDPOINT</string>
     <string name="setting_search_api_key_hint">OPENTHU_SEARCH_API_KEY（可选）</string>
     <string name="setting_search_scene_hint">campus / general / hybrid</string>
@@ -168,4 +179,5 @@
     <string name="setting_adb_bin_hint">OPENTHU_ADB_BIN</string>
     <string name="setting_adb_serial_hint">OPENTHU_ADB_SERIAL</string>
     <string name="setting_timezone_hint">OPENTHU_CALENDAR_TIMEZONE</string>
+
 </resources>

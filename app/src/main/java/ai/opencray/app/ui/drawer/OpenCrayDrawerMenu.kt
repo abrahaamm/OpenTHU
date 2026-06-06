@@ -315,7 +315,7 @@ private fun QuickSkillsSection(
 ) {
   val skills =
     listOf(
-      SkillItem("placeholder_study_assistant", "\u8bfe\u7a0b DDL", "\u67e5\u770b\u5373\u5c06\u5230\u671f\u7684\u4f5c\u4e1a", R.drawable.ic_clock_24),
+      SkillItem("get_assignments", "\u8bfe\u7a0b DDL", "\u67e5\u770b\u5373\u5c06\u5230\u671f\u7684\u4f5c\u4e1a", R.drawable.ic_clock_24),
       SkillItem("get_campus_activities", "\u6d3b\u52a8\u63a8\u8350", "\u63a2\u7d22\u6821\u56ed\u6700\u65b0\u6d3b\u52a8", R.drawable.ic_compass_24),
       SkillItem("create_calendar_event", "\u52a0\u5165\u65e5\u5386", "\u5feb\u901f\u5b89\u6392\u65e5\u7a0b", R.drawable.ic_calendar_24),
       SkillItem("read_notifications", "\u6574\u7406\u901a\u77e5", "\u96c6\u4e2d\u7ba1\u7406\u91cd\u8981\u4fe1\u606f", R.drawable.ic_inbox_24),

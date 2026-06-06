@@ -464,7 +464,7 @@ class SkillResult:
 
 环境变量：
 
-- `OPENTHU_SEARCH_PROVIDER=duckduckgo|mock|searxng|brave`（默认 `duckduckgo`，无需 API key）
+- `OPENTHU_SEARCH_PROVIDER=duckduckgo|searxng|brave`（默认 `duckduckgo`，无需 API key）
 - `OPENTHU_SEARCH_ENDPOINT`：SearXNG endpoint 或 Brave API endpoint 覆盖值
 - `OPENTHU_SEARCH_API_KEY`：Brave Search API key
 - `OPENTHU_SEARCH_CACHE_DIR`：搜索结果和网页正文缓存目录，默认 `/tmp/openthu_search_cache`
@@ -541,13 +541,20 @@ class SkillResult:
 {
     "request_id": "req_xxx",
     "title": "期中考试：人工智能导论",
-    "start_time": "2026-05-02T09:00:00Z",
-    "end_time": "2026-05-02T11:00:00Z",
+    "start_time": "2026-05-02T09:00:00+08:00",
+    "end_time": "2026-05-02T11:00:00+08:00",
+    "timezone": "Asia/Shanghai",  # 可选，建议使用设置页时区
     "location": "六教6A001",    # 可选
     "description": "闭卷考试",   # 可选
     "conflict_decision": "prompt_user"  # 可选: prompt_user|skip_write|coexist|delete_conflicts
 }
 ```
+
+时间参数约定：
+- `start_time` / `end_time` 必须是带显式 UTC offset 的 ISO-8601 绝对时间，例如 `2026-05-02T09:00:00+08:00` 或 `2026-05-02T01:00:00Z`
+- 不允许传入 `明天`、`今晚`、`下周`、`tomorrow` 等相对时间或自然语言时间
+- 用户表达相对时间时，planner 必须先调用 `get_current_time` 获取当前时间与时区上下文，再解析成绝对时间
+- 如果无法解析出预期时间，执行层必须返回 `INVALID_PARAM` / `SKILL_EXECUTION_FAILED`，不能写入错误时间并返回成功
 
 **返回**：`{ "event_id": "...", "status": "created|skipped_conflict|conflict_detected" }`  
 **实现**：Python 侧仅输出 `SkillInvocation`，由 Kotlin `ActionExecutor` 通过 Android `CalendarContract` + `ContentResolver` 执行写入（桥接执行模式）
@@ -571,8 +578,9 @@ class SkillResult:
 ```python
 {
     "request_id": "req_xxx",
-    "start_time": "2026-05-02T09:00:00Z",
-    "end_time": "2026-05-02T11:00:00Z"
+    "start_time": "2026-05-02T09:00:00+08:00",
+    "end_time": "2026-05-02T11:00:00+08:00",
+    "timezone": "Asia/Shanghai"
 }
 ```
 

@@ -263,14 +263,6 @@ def _test_upload_missing_path(harness: HomeworkSkillHarness) -> None:
     _expect(result["code"] == "INVALID_PARAM", f"upload should reject missing path/uri: {result}")
 
 
-def _test_submit_requires_confirm(harness: HomeworkSkillHarness) -> None:
-    result = harness.invoke(
-        "submit_homework",
-        {"homework_id": "hw_math_1", "submission_text": "answer", "confirm_submit": False},
-    )
-    _expect(result["code"] == "APPROVAL_REQUIRED", f"submit should require confirm_submit=true: {result}")
-
-
 def _test_upload_then_submit(harness: HomeworkSkillHarness) -> None:
     uploaded = harness.invoke(
         "upload_homework_attachment",
@@ -283,7 +275,6 @@ def _test_upload_then_submit(harness: HomeworkSkillHarness) -> None:
             "homework_id": "hw_math_1",
             "submission_text": "my answer",
             "attachment_tokens": [uploaded["data"]["attachment_token"]],
-            "confirm_submit": True,
         },
     )
     _expect(submitted["code"] == "OK", f"submit failed: {submitted}")
@@ -298,7 +289,6 @@ def run_mock_suite() -> list[TestResult]:
         ("generic_session_cookie_fallback", _test_generic_session_cookie_fallback),
         ("crawl_unsubmitted", lambda: _test_crawl_unsubmitted(harness)),
         ("upload_missing_path", lambda: _test_upload_missing_path(harness)),
-        ("submit_requires_confirm", lambda: _test_submit_requires_confirm(harness)),
         ("upload_then_submit", lambda: _test_upload_then_submit(harness)),
     ]
     results: list[TestResult] = []

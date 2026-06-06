@@ -4,6 +4,8 @@ import argparse
 import json
 import logging
 import os
+import re
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict
@@ -48,6 +50,7 @@ class AgentState(TypedDict, total=False):
     trace_log: list[dict[str, Any]]
     normalizer_source: str
     planner_source: str
+    final_summary_text: str
 
 
 class StructuredPrompt(TypedDict):
@@ -56,6 +59,83 @@ class StructuredPrompt(TypedDict):
     constraints: list[str]
     success_criteria: list[str]
     sensitivity: str
+
+
+@dataclass(frozen=True)
+class ModelContextProfile:
+    name: str
+    context_tokens: int
+    output_reserve_tokens: int
+    system_reserve_tokens: int
+    memory_reserve_tokens: int
+    max_history_tokens: int
+    min_history_tokens: int
+    max_history_messages: int
+    per_message_token_limit: int
+    anchor_message_token_limit: int
+    memory_entry_limit: int
+    memory_value_char_limit: int
+    memory_summary_char_limit: int
+
+
+def model_context_profile(model: str) -> ModelContextProfile:
+    normalized = str(model or "").strip().lower()
+    if "gpt-4.1" in normalized:
+        return ModelContextProfile("openai_1m", 1_000_000, 8_192, 2_048, 8_192, 180_000, 8_000, 160, 8_000, 1_200, 16, 480, 2_400)
+    if "gpt-4o-mini" in normalized or "gpt-4o" in normalized:
+        return ModelContextProfile("openai_128k", 128_000, 4_096, 2_048, 4_096, 80_000, 6_000, 96, 4_000, 900, 12, 360, 1_800)
+    if "moonshot-v1-128k" in normalized or "moonshot-1-128k" in normalized:
+        return ModelContextProfile("moonshot_128k", 131_072, 4_096, 2_048, 4_096, 82_000, 6_000, 96, 4_000, 900, 12, 360, 1_800)
+    if "moonshot-v1-32k" in normalized or "moonshot-1-32k" in normalized:
+        return ModelContextProfile("moonshot_32k", 32_768, 2_048, 1_200, 1_800, 22_000, 3_000, 48, 2_000, 700, 8, 260, 1_200)
+    if "moonshot-v1-8k" in normalized or "moonshot-1-8k" in normalized:
+        return ModelContextProfile("moonshot_8k", 8_192, 1_024, 800, 900, 4_200, 900, 18, 900, 360, 4, 180, 700)
+    if "deepseek" in normalized:
+        return ModelContextProfile("deepseek_64k", 64_000, 4_096, 1_800, 3_000, 42_000, 4_000, 72, 3_000, 800, 10, 320, 1_500)
+    return ModelContextProfile("default_32k", 32_768, 2_048, 1_200, 1_800, 20_000, 3_000, 48, 2_000, 700, 8, 260, 1_200)
+
+
+def estimate_context_tokens(text: str) -> int:
+    if not text or not str(text).strip():
+        return 0
+    tokens = 0
+    latin_run = 0
+
+    def flush_latin() -> None:
+        nonlocal tokens, latin_run
+        if latin_run:
+            tokens += max(1, (latin_run + 3) // 4)
+            latin_run = 0
+
+    for char in str(text):
+        if char.isspace():
+            flush_latin()
+        elif "\u4e00" <= char <= "\u9fff" or "\u3400" <= char <= "\u4dbf" or "\u3040" <= char <= "\u30ff" or "\uac00" <= char <= "\ud7af":
+            flush_latin()
+            tokens += 1
+        elif char.isalnum():
+            latin_run += 1
+        else:
+            flush_latin()
+            tokens += 1
+    flush_latin()
+    return tokens
+
+
+def trim_text_to_token_budget(text: str, token_budget: int) -> str:
+    value = str(text or "").strip()
+    if token_budget <= 0 or not value:
+        return ""
+    if estimate_context_tokens(value) <= token_budget:
+        return value
+    low, high = 0, len(value)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if estimate_context_tokens(value[:mid]) <= token_budget - 1:
+            low = mid
+        else:
+            high = mid - 1
+    return value[:low].rstrip() + "…"
 
 
 def utc_now() -> str:
@@ -69,6 +149,13 @@ def risk_rank(risk_level: str) -> int:
 def normalize_risk(risk_level: str) -> str:
     risk = str(risk_level).strip().lower()
     return risk if risk in {"low", "medium", "high"} else "medium"
+
+
+def _preview_text_for_log(text: str, limit: int = 1200) -> str:
+    preview = str(text).strip()
+    if len(preview) <= limit:
+        return preview
+    return preview[:limit] + "...<truncated>"
 
 
 class RequirementLLM:
@@ -106,6 +193,8 @@ class RequirementLLM:
                 "Convert the user requirement into strict JSON with keys: "
                 "objective, entities, constraints, success_criteria, sensitivity. "
                 "Use concise, execution-oriented values. "
+                "If the input is JSON with conversation_context, use recent_messages and memory_context "
+                "to resolve follow-up references and user preferences. "
                 "If the input contains an [attached_file] block, preserve its file_uri and file_name "
                 "verbatim in constraints so downstream homework upload skills can use them. "
                 "Return JSON only."
@@ -186,6 +275,7 @@ class OpenTHULangGraphAgent:
         workflow.add_node("replan_failed", self._replan_failed)
         workflow.add_node("audit_record", self._audit_record)
         workflow.add_node("memory_update", self._memory_update)
+        workflow.add_node("synthesize_summary", self._synthesize_summary)
         workflow.add_node("finalize", self._finalize)
 
         workflow.add_edge(START, "normalize_requirement")
@@ -202,7 +292,8 @@ class OpenTHULangGraphAgent:
         )
         workflow.add_edge("replan_failed", "audit_record")
         workflow.add_edge("audit_record", "memory_update")
-        workflow.add_edge("memory_update", "finalize")
+        workflow.add_edge("memory_update", "synthesize_summary")
+        workflow.add_edge("synthesize_summary", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
@@ -461,7 +552,7 @@ class OpenTHULangGraphAgent:
                     "data": {
                         "mode": "task",
                         "should_plan": True,
-                        "reply": "我来检查网络学堂里还没有完成的作业。",
+                        "reply": self._deterministic_reply_for_plan(state.get("skill_plan", [])),
                         "confidence": 0.9,
                         "source": "deterministic",
                         "user_id": user_id,
@@ -490,6 +581,31 @@ class OpenTHULangGraphAgent:
         if not isinstance(skill_plan, list):
             skill_plan = []
         if not skill_plan:
+            deterministic_update = self._deterministic_plan_update(state)
+            if deterministic_update:
+                state.update(deterministic_update)
+                for node_fn in (
+                    self._safety_check,
+                    self._audit_record,
+                    self._memory_update,
+                ):
+                    state.update(node_fn(state))
+                code, message = self._set_plan_only_status(state)
+                plan_response = self._plan_only_response_from_state(state, code=code, message=message)
+                return {
+                    "request_id": f"chat_{uuid4().hex[:12]}",
+                    "code": "OK",
+                    "message": "turn decision generated by deterministic fallback",
+                    "data": {
+                        "mode": "task",
+                        "should_plan": True,
+                        "reply": self._deterministic_reply_for_plan(state.get("skill_plan", [])),
+                        "confidence": 0.88,
+                        "source": "deterministic_after_llm_empty",
+                        "user_id": user_id,
+                        "plan_response": plan_response,
+                    },
+                }
             return {
                 "request_id": f"chat_{uuid4().hex[:12]}",
                 "code": "OK",
@@ -624,26 +740,80 @@ class OpenTHULangGraphAgent:
         self,
         history: list[dict[str, Any]],
         *,
-        limit: int = 8,
+        limit: int | None = None,
+        profile: ModelContextProfile | None = None,
+        current_user_input: str = "",
+        fixed_prompt_text: str = "",
     ) -> list[dict[str, str]]:
-        compact_history: list[dict[str, str]] = []
-        for item in history[-limit:]:
+        resolved_profile = profile or model_context_profile("")
+        eligible: list[tuple[int, str, str]] = []
+        for index, item in enumerate(history):
             if not isinstance(item, dict):
                 continue
             role = str(item.get("role", "")).strip().lower()
             text = str(item.get("text", item.get("content", ""))).strip()
             if role not in {"user", "assistant"} or not text:
                 continue
-            compact_history.append({"role": role, "content": text[:1000]})
-        return compact_history
+            eligible.append((index, role, text))
+        if not eligible:
+            return []
+
+        fixed_tokens = estimate_context_tokens(current_user_input) + estimate_context_tokens(fixed_prompt_text)
+        raw_history_budget = (
+            resolved_profile.context_tokens
+            - resolved_profile.output_reserve_tokens
+            - resolved_profile.system_reserve_tokens
+            - resolved_profile.memory_reserve_tokens
+            - fixed_tokens
+        )
+        if raw_history_budget <= 0:
+            history_budget = 0
+        else:
+            history_budget = min(max(resolved_profile.min_history_tokens, raw_history_budget), resolved_profile.max_history_tokens)
+        max_messages = min(limit, resolved_profile.max_history_messages) if limit is not None else resolved_profile.max_history_messages
+        selected: list[tuple[int, dict[str, str]]] = []
+        used_indexes: set[int] = set()
+        remaining = history_budget
+
+        for index, role, text in reversed(eligible):
+            if len(selected) >= max_messages:
+                break
+            text_budget = min(resolved_profile.per_message_token_limit, remaining - 6)
+            if text_budget < 48:
+                break
+            compact_text = trim_text_to_token_budget(text, text_budget)
+            if not compact_text:
+                continue
+            selected.append((index, {"role": role, "content": compact_text}))
+            used_indexes.add(index)
+            remaining -= estimate_context_tokens(compact_text) + 6
+
+        if remaining > 128:
+            anchors = [item for item in eligible[:2] if item[0] not in used_indexes]
+            anchor_budget = min(resolved_profile.anchor_message_token_limit, remaining // max(len(anchors), 1)) if anchors else 0
+            for index, role, text in anchors:
+                compact_text = trim_text_to_token_budget(text, anchor_budget - 6)
+                if compact_text:
+                    selected.append((index, {"role": role, "content": compact_text}))
+
+        return [item for _, item in sorted(selected, key=lambda pair: pair[0])]
 
     def _build_conversation_context(
         self,
         history: list[dict[str, Any]],
         *,
         user_input: str,
+        session: dict[str, Any] | None = None,
+        user_id: str = "",
     ) -> dict[str, Any]:
-        recent_messages = self._compact_chat_history(history, limit=10)
+        _, model, _ = self._llm_config_from_session(session or {})
+        profile = model_context_profile(model)
+        recent_messages = self._compact_chat_history(
+            history,
+            profile=profile,
+            current_user_input=user_input,
+            fixed_prompt_text=str((session or {}).get("memory_context", "")),
+        )
         current = user_input.strip()
         if (
             recent_messages
@@ -674,11 +844,230 @@ class OpenTHULangGraphAgent:
                         }
                     )
 
+        session_memory = self._compact_session_memory_context(session or {}, profile=profile)
+        stored_memory = self._compact_stored_memory_context(
+            user_id=user_id,
+            user_input=current,
+            limit=profile.memory_entry_limit,
+            value_limit=profile.memory_value_char_limit,
+            summary_limit=profile.memory_summary_char_limit,
+        )
+        memory_context = self._merge_memory_context(
+            session_memory,
+            stored_memory,
+            limit=profile.memory_entry_limit,
+            summary_limit=profile.memory_summary_char_limit,
+        )
+
         return {
             "latest_user_input": current,
             "recent_messages": recent_messages,
             "reference_candidates": reference_candidates[-12:],
+            "memory_context": memory_context,
+            "context_window": asdict(profile),
         }
+
+    def _compact_session_memory_context(
+        self,
+        session: dict[str, Any],
+        *,
+        profile: ModelContextProfile | None = None,
+    ) -> dict[str, Any]:
+        resolved_profile = profile or model_context_profile("")
+        raw_memory = session.get("memory_context") or session.get("memory_records") or session.get("memories")
+        if not raw_memory:
+            return {}
+        if isinstance(raw_memory, str):
+            try:
+                raw_memory = json.loads(raw_memory)
+            except Exception:
+                summary = raw_memory.strip()[: resolved_profile.memory_summary_char_limit]
+                return {"summary": summary} if summary else {}
+
+        if isinstance(raw_memory, list):
+            raw_memory = {"entries": raw_memory}
+        if not isinstance(raw_memory, dict):
+            return {}
+
+        entries_raw = raw_memory.get("entries", [])
+        if not isinstance(entries_raw, list):
+            entries_raw = []
+
+        entries: list[dict[str, Any]] = []
+        for item in entries_raw:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value", "")).strip()
+            if not value:
+                continue
+            entries.append(
+                {
+                    "scope": str(item.get("scope", "")).strip()[:20],
+                    "key": str(item.get("key", "")).strip()[:80],
+                    "value": value[: resolved_profile.memory_value_char_limit],
+                    "weight": self._safe_int(item.get("weight"), default=0),
+                    "updated_at_epoch_ms": self._safe_int(
+                        item.get("updated_at_epoch_ms", item.get("updatedAtEpochMs")),
+                        default=0,
+                    ),
+                }
+            )
+
+        entries.sort(
+            key=lambda item: (
+                {"long": 3, "mid": 2, "short": 1}.get(str(item.get("scope", "")).lower(), 0),
+                int(item.get("weight", 0)),
+                int(item.get("updated_at_epoch_ms", 0)),
+            ),
+            reverse=True,
+        )
+        entries = entries[: resolved_profile.memory_entry_limit]
+        summary = str(raw_memory.get("summary", "")).strip()
+        if not summary and entries:
+            summary = "\n".join(
+                f"- [{item['scope']}/{item['key']}/w{item['weight']}] {item['value'][:160]}"
+                for item in entries[:8]
+            )
+        return {
+            "summary": summary[: resolved_profile.memory_summary_char_limit],
+            "entries": entries,
+        } if summary or entries else {}
+
+    def _compact_stored_memory_context(
+        self,
+        *,
+        user_id: str,
+        user_input: str,
+        limit: int = 8,
+        value_limit: int = 500,
+        summary_limit: int = 1500,
+    ) -> dict[str, Any]:
+        memory = self._load_memory()
+        entries_raw = memory.get("entries", [])
+        if not isinstance(entries_raw, list):
+            return {}
+
+        tokens = self._memory_tokens(user_input)
+        candidates: list[dict[str, Any]] = []
+        for item in entries_raw:
+            if not isinstance(item, dict):
+                continue
+            item_user_id = str(item.get("user_id", "")).strip()
+            if user_id and item_user_id and item_user_id != user_id:
+                continue
+            objective = str(item.get("objective", "")).strip()
+            if not objective:
+                continue
+            objective_lc = objective.lower()
+            overlap = sum(1 for token in tokens if token in objective_lc)
+            success_count = self._safe_int(item.get("success_count"), default=0)
+            failure_count = self._safe_int(item.get("failure_count"), default=0)
+            blocked_count = self._safe_int(item.get("blocked_count"), default=0)
+            ts = self._safe_epoch_ms(item.get("ts"))
+            weight = max(10, min(80, 35 + overlap * 10 + min(success_count, 3) * 5 - blocked_count * 5))
+            value = (
+                f"{objective}；技能数 {self._safe_int(item.get('planned_skill_count'), default=0)}，"
+                f"成功 {success_count}，失败 {failure_count}，阻塞 {blocked_count}"
+            )
+            candidates.append(
+                {
+                    "scope": "mid",
+                    "key": "agent_task_history",
+                    "value": value[:value_limit],
+                    "weight": weight,
+                    "updated_at_epoch_ms": ts,
+                    "_overlap": overlap,
+                }
+            )
+
+        if not candidates:
+            return {}
+        candidates.sort(
+            key=lambda item: (
+                int(item.get("_overlap", 0)),
+                int(item.get("weight", 0)),
+                int(item.get("updated_at_epoch_ms", 0)),
+            ),
+            reverse=True,
+        )
+        entries = [{key: value for key, value in item.items() if key != "_overlap"} for item in candidates[:limit]]
+        summary = "\n".join(
+            f"- [{item['scope']}/{item['key']}/w{item['weight']}] {item['value'][:160]}"
+            for item in entries[:6]
+        )
+        return {"summary": summary[:summary_limit], "entries": entries}
+
+    def _merge_memory_context(
+        self,
+        primary: dict[str, Any],
+        secondary: dict[str, Any],
+        limit: int = 12,
+        summary_limit: int = 1500,
+    ) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        summaries: list[str] = []
+        for context in (primary, secondary):
+            if not isinstance(context, dict):
+                continue
+            summary = str(context.get("summary", "")).strip()
+            if summary:
+                summaries.append(summary)
+            raw_entries = context.get("entries", [])
+            if isinstance(raw_entries, list):
+                entries.extend(item for item in raw_entries if isinstance(item, dict))
+
+        deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in entries:
+            value = str(item.get("value", "")).strip()
+            if not value:
+                continue
+            key = (str(item.get("scope", "")), str(item.get("key", "")), value)
+            previous = deduped.get(key)
+            if previous is None or self._safe_int(item.get("weight"), default=0) > self._safe_int(previous.get("weight"), default=0):
+                deduped[key] = item
+
+        merged_entries = list(deduped.values())
+        merged_entries.sort(
+            key=lambda item: (
+                {"long": 3, "mid": 2, "short": 1}.get(str(item.get("scope", "")).lower(), 0),
+                self._safe_int(item.get("effective_weight", item.get("weight")), default=0),
+                self._safe_int(item.get("updated_at_epoch_ms", item.get("updatedAtEpochMs")), default=0),
+            ),
+            reverse=True,
+        )
+        merged_entries = merged_entries[:limit]
+        summary = "\n".join(dict.fromkeys(summaries)).strip()
+        if not summary and merged_entries:
+            summary = "\n".join(
+                f"- [{item.get('scope', '')}/{item.get('key', '')}/w{item.get('effective_weight', item.get('weight', 0))}] {str(item.get('value', ''))[:160]}"
+                for item in merged_entries[:8]
+            )
+        return {"summary": summary[:summary_limit], "entries": merged_entries} if summary or merged_entries else {}
+
+    def _memory_tokens(self, text: str) -> set[str]:
+        return {
+            token
+            for token in re.split(r"[^0-9A-Za-z\u4e00-\u9fff]+", text.lower())
+            if len(token) >= 2
+        }
+
+    def _safe_epoch_ms(self, value: Any) -> int:
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value or "").strip()
+        if not text:
+            return 0
+        try:
+            normalized = text.replace("Z", "+00:00")
+            return int(datetime.fromisoformat(normalized).timestamp() * 1000)
+        except Exception:
+            return 0
+
+    def _safe_int(self, value: Any, *, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
 
     def _turn_decision_system_prompt(self) -> str:
         return (
@@ -694,15 +1083,33 @@ class OpenTHULangGraphAgent:
             "return login-required when needed. "
             "Use conversation_context to resolve pronouns and ordinal references such as this, that, it, "
             "the second one, 刚才那个, 第二个, or 上一个 before choosing skills. "
+            "Use conversation_context.memory_context as durable user preferences and feedback; "
+            "respect long-term preferences unless the latest user message explicitly overrides them. "
             "Use only skill_name values from available_skills, and keep plans between 1 and 8 steps. "
             "Do not add show_summary only to produce the final answer; the runtime has a final summary node. "
             "Use get_homework_cookie only when the user explicitly provides a cookie/token/header. "
+            "For requests about course DDL/deadlines/作业DDL/作业截止时间, use get_assignments when available. "
             "For requests about unsubmitted/not submitted/missing homework or 未交/未提交作业, "
             "prefer crawl_unsubmitted_homeworks. For all homework lists, use crawl_course_homeworks. "
+            "For explicit homework submission/turn-in/提交/递交 requests, use submit_homework; "
+            "if that explicit submit request includes an attached file, plan upload_homework_attachment first "
+            "and then submit_homework. Do not satisfy submit/递交/提交 intent with upload_homework_attachment alone. "
+            "for upload-only homework attachment requests, use upload_homework_attachment. "
             "For class timetable/课表, use get_semesters first, then get_course_schedule. For campus events/活动/讲座, "
             "use get_campus_activities. For web or campus retrieval searches, use search. "
             "For alarms/reminders/calendar writes, plan the relevant action and let the safety layer ask "
             "for confirmation if needed. "
+            "For calendar writes or calendar conflict detection, start_time/end_time args may be concrete "
+            "ISO-8601 datetimes or the user's original time text. A calendar time is complete only when the "
+            "user explicitly provides a year, date, and time, or when it comes from an upstream skill result. "
+            "Month/day/time without a year is incomplete even if it sounds concrete: 6月21日下午4点, 06/21 16:00, "
+            "and June 21 at 4pm are year-underspecified. For relative or year-underspecified calendar requests, "
+            "you must plan get_current_time before calendar skills. For those cases, keep the original phrase in "
+            "time_text/start_time and set time_source=user_text; do not fill in a year yourself and do not mark it "
+            "explicit_absolute. If the user gives a full absolute date with explicit year and time, you may pass ISO "
+            "and set time_source=explicit_absolute. "
+            "If time comes from an upstream skill result such as an assignment deadline, pass that ISO and set time_source=upstream_skill with source_skill/source_field. "
+            "If you nevertheless infer missing date parts yourself, set time_source=planner_inferred. Do not invent current_time yourself. "
             "The reply should be natural and concise. If skill_plan is non-empty, reply with one short "
             "sentence saying what you are about to do, not the final result."
         )
@@ -721,7 +1128,15 @@ class OpenTHULangGraphAgent:
             "user_input": state.get("user_input", ""),
             "user_id": state.get("user_id", "demo_user"),
             "semester_id": state.get("semester_id", ""),
-            "conversation_context": state.get("conversation_context", self._build_conversation_context(history, user_input=state.get("user_input", ""))),
+            "conversation_context": state.get(
+                "conversation_context",
+                self._build_conversation_context(
+                    history,
+                    user_input=state.get("user_input", ""),
+                    session=state.get("session", {}),
+                    user_id=state.get("user_id", ""),
+                ),
+            ),
             "available_skills": self.skill_manager.list_for_planner(),
             "response_schema": {
                 "reply": "natural language reply shown to user",
@@ -766,7 +1181,10 @@ class OpenTHULangGraphAgent:
             raw_plan = parsed.get("skill_plan", [])
             if not isinstance(raw_plan, list):
                 raw_plan = []
-            sanitized_plan = self._sanitize_skill_plan(raw_plan, state["task_id"])
+            sanitized_plan = self._apply_search_scene_overrides(
+                self._sanitize_skill_plan(raw_plan, state["task_id"]),
+                state,
+            )
             structured_prompt = parsed.get("structured_prompt", {})
             if not isinstance(structured_prompt, dict):
                 structured_prompt = {}
@@ -809,7 +1227,12 @@ class OpenTHULangGraphAgent:
             "user_input": user_input,
             "user_id": user_id,
             "approve_sensitive": approve_sensitive,
-            "conversation_context": self._build_conversation_context(history or [], user_input=user_input),
+            "conversation_context": self._build_conversation_context(
+                history or [],
+                user_input=user_input,
+                session=session or {},
+                user_id=user_id,
+            ),
         }
 
     def _contextual_user_input(self, state: AgentState) -> str:
@@ -829,6 +1252,89 @@ class OpenTHULangGraphAgent:
         if not any(term in lowered for term in homework_terms):
             return None
 
+        submit_intent = (
+            any(term in lowered for term in ("submit", "turn in", "hand in"))
+            or any(term in text for term in ("提交", "递交"))
+            or re.search(r"(?:请|帮我|把|直接|现在).{0,16}交.{0,16}作业", text) is not None
+        )
+        upload_intent = any(term in lowered for term in ("upload", "attach")) or any(term in text for term in ("上传", "附件"))
+        if submit_intent or upload_intent:
+            attached_args = self._extract_attached_file_args(text)
+            id_args = self._extract_homework_identifier_args(text)
+            action_args = {**id_args, **attached_args}
+            constraints = self._extract_attached_file_constraints(text)
+            if not any(key in action_args for key in ("homework_id", "zyid", "homework_zyid", "xszyid", "student_homework_id")):
+                action_args["lookup_hint"] = text
+            planned_payloads: list[dict[str, Any]] = []
+            if not any(key in action_args for key in ("homework_id", "zyid", "homework_zyid", "xszyid", "student_homework_id")):
+                planned_payloads.append(
+                    {
+                        "skill_name": "crawl_unsubmitted_homeworks",
+                        "args": {},
+                        "description": "先读取未提交作业列表，帮助确认要提交的作业对象。",
+                    }
+                )
+            if submit_intent and attached_args:
+                upload_args = dict(action_args)
+                planned_payloads.append(
+                    {
+                        "skill_name": "upload_homework_attachment",
+                        "args": upload_args,
+                        "description": "先把本地附件上传到作业提交表单并准备提交会话。",
+                    }
+                )
+                submit_args = {
+                    key: value
+                    for key, value in action_args.items()
+                    if key not in {"file_uri", "file_path", "file_name"}
+                }
+                planned_payloads.append(
+                    {
+                        "skill_name": "submit_homework",
+                        "args": submit_args,
+                        "description": "在附件上传完成后提交作业。",
+                    }
+                )
+            else:
+                planned_payloads.append(
+                    {
+                        "skill_name": "submit_homework" if submit_intent else "upload_homework_attachment",
+                        "args": action_args,
+                        "description": (
+                            "提交作业内容或附件。"
+                            if submit_intent
+                            else "把本地附件上传到作业提交表单。"
+                        ),
+                    }
+                )
+            structured_prompt: StructuredPrompt = {
+                "objective": text,
+                "entities": ["homework", "submit" if submit_intent else "upload"],
+                "constraints": constraints,
+                "success_criteria": ["Create a homework submission/upload action for the Android device"],
+                "sensitivity": "high" if submit_intent else "medium",
+            }
+            planned = self._sanitize_skill_plan(planned_payloads, state["task_id"])
+            if not planned:
+                return None
+            return {
+                "standardized_prompt": structured_prompt,
+                "normalization_warnings": [],
+                "skill_plan": planned,
+                "normalizer_source": "deterministic",
+                "planner_source": "deterministic",
+                "task_status": "planned",
+                "trace_log": self._append_trace(
+                    state,
+                    node="deterministic_plan",
+                    detail={
+                        "planned_count": len(planned),
+                        "planned_skills": [item.get("skill_name", "") for item in planned],
+                        "source": "deterministic",
+                    },
+                ),
+            }
+
         unsubmitted_terms = (
             "未完成",
             "未提交",
@@ -842,15 +1348,20 @@ class OpenTHULangGraphAgent:
             "missing homework",
         )
         unsubmitted = any(term in lowered for term in unsubmitted_terms)
-        skill_name = "crawl_unsubmitted_homeworks" if unsubmitted else "crawl_course_homeworks"
+        ddl_terms = ("ddl", "deadline", "due date", "due dates", "截止", "期限")
+        wants_deadlines = any(term in lowered for term in ddl_terms) or any(term in text for term in ("截止", "期限"))
+        skill_name = "get_assignments" if wants_deadlines else ("crawl_unsubmitted_homeworks" if unsubmitted else "crawl_course_homeworks")
         description = (
+            "获取当前课程作业与 DDL。"
+            if wants_deadlines
+            else
             "检查网络学堂里尚未完成或未提交的作业。"
             if unsubmitted
             else "抓取网络学堂作业列表。"
         )
         structured_prompt: StructuredPrompt = {
             "objective": text,
-            "entities": ["homework", "unsubmitted"] if unsubmitted else ["homework"],
+            "entities": ["homework", "ddl"] if wants_deadlines else (["homework", "unsubmitted"] if unsubmitted else ["homework"]),
             "constraints": [],
             "success_criteria": ["Return homework records or login guidance"],
             "sensitivity": "low",
@@ -878,6 +1389,43 @@ class OpenTHULangGraphAgent:
                 },
             ),
         }
+
+    def _deterministic_reply_for_plan(self, plan: list[dict[str, Any]]) -> str:
+        skill_names = [str(item.get("skill_name", "")) for item in plan if isinstance(item, dict)]
+        if "submit_homework" in skill_names:
+            return "我会先把提交作业这一步规划出来，需要手机端用本地登录态和附件继续执行。"
+        if "upload_homework_attachment" in skill_names:
+            return "我会把附件上传到作业提交表单这一步交给手机端处理。"
+        if "crawl_unsubmitted_homeworks" in skill_names:
+            return "我来检查网络学堂里还没有完成的作业。"
+        if "crawl_course_homeworks" in skill_names:
+            return "我来抓取网络学堂作业列表。"
+        return "我会把这个任务拆成可执行步骤。"
+
+    def _extract_attached_file_args(self, source_text: str) -> dict[str, str]:
+        args: dict[str, str] = {}
+        for item in self._extract_attached_file_constraints(source_text):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            key = key.strip().removeprefix("attached_file.")
+            value = value.strip()
+            if key in {"file_uri", "file_name"} and value:
+                args[key] = value
+        return args
+
+    def _extract_homework_identifier_args(self, source_text: str) -> dict[str, str]:
+        patterns = {
+            "homework_id": r"(?:homework_id|homework id|作业ID|作业id|zyid|zy_id)\s*[:=：]\s*([A-Za-z0-9_-]+)",
+            "xszyid": r"(?:xszyid|student_homework_id|student homework id|学生作业ID|学生作业id)\s*[:=：]\s*([A-Za-z0-9_-]+)",
+            "course_id": r"(?:course_id|wlkcid|课程ID|课程id)\s*[:=：]\s*([A-Za-z0-9_-]+)",
+        }
+        args: dict[str, str] = {}
+        for key, pattern in patterns.items():
+            match = re.search(pattern, source_text, flags=re.IGNORECASE)
+            if match:
+                args[key] = match.group(1)
+        return args
 
     def _normalize_requirement(self, state: AgentState) -> dict[str, Any]:
         logger.debug(
@@ -1372,6 +1920,65 @@ class OpenTHULangGraphAgent:
             ),
         }
 
+    def _synthesize_summary(self, state: AgentState) -> dict[str, Any]:
+        user_input = state.get("user_input", "")
+        skill_results = state.get("skill_results", [])
+
+        logger.info(
+            "[node.synthesize_summary] arrived task_id=%s skill_result_count=%d",
+            state.get("task_id", ""),
+            len(skill_results),
+        )
+        
+        if not skill_results:
+            return {"final_summary_text": ""}
+
+        openai_key, llm_model, llm_base_url = self._llm_config_from_state(state)
+        if not openai_key:
+            logger.debug("[llm.synthesize] OPENAI_API_KEY not set, skipping LLM synthesis")
+            return {"final_summary_text": ""}
+
+        system_prompt = (
+            "你是一个贴心的校园生活助手。请根据用户的原始提问以及后台工具返回的 JSON 结果数据，"
+            "为用户撰写一段连贯、自然、排版美观的 Markdown 摘要总结。"
+            "剔除不需要关注的底层字段(如状态码、ID等)，突出用户关心的重点。"
+            "如果查询到了活动或日程等，可以用亲切的语气进行提示。如果没有有用信息，委婉地告知。"
+        )
+        user_content = f"【提问】\n{user_input}\n\n【返回数据】\n{json.dumps(skill_results, ensure_ascii=False)}"
+        
+        try:
+            from openai import OpenAI
+            client = self._create_openai_client(OpenAI, openai_key, base_url=llm_base_url)
+            response = client.chat.completions.create(
+                model=llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.7,
+                max_tokens=2048,
+            )
+            final_summary = response.choices[0].message.content or "操作已完成。"
+            logger.info(
+                "[node.synthesize_summary] llm_beautified_text task_id=%s text=%s",
+                state.get("task_id", ""),
+                _preview_text_for_log(final_summary),
+            )
+            return {
+                "final_summary_text": final_summary.strip(),
+                "trace_log": self._append_trace(
+                    state, "synthesize_summary", {"status": "success", "length": len(final_summary.strip())}
+                )
+            }
+        except Exception as e:
+            logger.warning(f"[llm.synthesize] LLM error: {e}")
+            return {
+                "final_summary_text": "",
+                "trace_log": self._append_trace(
+                    state, "synthesize_summary", {"status": "error", "error": str(e)}
+                )
+            }
+
     def _finalize(self, state: AgentState) -> dict[str, Any]:
         code, message = self._summarize_outcome(state)
         response = {
@@ -1395,6 +2002,7 @@ class OpenTHULangGraphAgent:
                 "replanned_skills": state.get("replanned_skills", []),
                 "audit_log": state.get("audit_log", []),
                 "memory_update": state.get("memory_update", {}),
+                "final_summary_text": state.get("final_summary_text", ""),
                 "available_skills": self.skill_manager.list_for_planner(),
                 "trace_log": state.get("trace_log", []),
                 "normalizer_source": state.get("normalizer_source", "not_run"),
@@ -1423,10 +2031,28 @@ class OpenTHULangGraphAgent:
         fallback_summary: str,
         conversation_context: dict[str, Any] | None = None,
     ) -> str:
+        server_results = task_doc.get("server_results", [])
+        device_results = task_doc.get("device_results", [])
+        logger.info(
+            "[agent.summary] arrived task_id=%s server_result_count=%d device_result_count=%d",
+            task_doc.get("task_id", ""),
+            len(server_results) if isinstance(server_results, list) else 0,
+            len(device_results) if isinstance(device_results, list) else 0,
+        )
         api_key, model, base_url = self._llm_config_from_session(session if isinstance(session, dict) else {})
         if not api_key:
             return fallback_summary
 
+        summary_context = (
+            conversation_context
+            if isinstance(conversation_context, dict) and conversation_context
+            else self._build_conversation_context(
+                [],
+                user_input=user_input,
+                session=session if isinstance(session, dict) else {},
+                user_id=str((session or {}).get("user_id", "")) if isinstance(session, dict) else "",
+            )
+        )
         results: list[dict[str, Any]] = []
         for key in ("server_results", "device_results"):
             raw_results = task_doc.get(key, [])
@@ -1435,7 +2061,7 @@ class OpenTHULangGraphAgent:
 
         payload = {
             "user_input": user_input,
-            "conversation_context": conversation_context or {},
+            "conversation_context": summary_context,
             "task_status": task_doc.get("status", ""),
             "results": results,
             "blocked_skills": [
@@ -1455,6 +2081,8 @@ class OpenTHULangGraphAgent:
             "你会收到用户原始请求、云端 skill 和手机端 skill 的结构化执行结果。"
             "请在所有结果基础上给用户一段自然、明确、有帮助的中文最终回复。"
             "不要暴露 request_id、内部 JSON、工具日志或实现细节；"
+            "可以参考 conversation_context.memory_context 中的用户偏好和近期反馈来决定表达重点，"
+            "但不要直接暴露这些内部记忆条目；"
             "如果有失败或权限问题，要说明用户下一步应该怎么做；"
             "如果已有具体结果，直接总结结果，不要只说任务已完成。"
         )
@@ -1473,6 +2101,11 @@ class OpenTHULangGraphAgent:
                 temperature=0.35,
             )
             text = (completion.choices[0].message.content or "").strip()
+            logger.info(
+                "[agent.summary] llm_beautified_text task_id=%s text=%s",
+                task_doc.get("task_id", ""),
+                _preview_text_for_log(text),
+            )
             return text or fallback_summary
         except Exception as exc:
             logger.warning("[agent.summary] final synthesis failed: %s", exc)
@@ -1491,11 +2124,18 @@ class OpenTHULangGraphAgent:
         if isinstance(data, dict):
             for key in (
                 "status",
+                "reason",
                 "message",
                 "answer",
                 "summary",
                 "query",
                 "count",
+                "candidate_count",
+                "selected_count",
+                "discarded_count",
+                "filter_status",
+                "filter_source",
+                "filter_summary",
                 "notification_count",
                 "semantic",
             ):
@@ -1505,7 +2145,12 @@ class OpenTHULangGraphAgent:
             for key in ("results", "citations", "activities", "notifications", "warnings"):
                 value = data.get(key)
                 if isinstance(value, list) and value:
-                    compact[key] = value[:6]
+                    item_limit = 10 if compact.get("skill_name") == "get_campus_activities" and key == "activities" else 6
+                    compact[key] = value[:item_limit]
+            for key in ("hard_constraints", "preference_signals"):
+                value = data.get(key)
+                if value not in (None, "", [], {}):
+                    compact[key] = value
         return compact
 
     def _plan_skills_via_llm(
@@ -1536,15 +2181,28 @@ class OpenTHULangGraphAgent:
             "If an available skill can satisfy the user's request, plan it instead of refusing because data is personal; "
             "the skill will report login-required/not-configured if credentials are missing. "
             "For alarm-related requests, prefer local-time semantics (`HH:mm`) in set_alarm args. "
-            "When user intent contains relative time words (e.g. 明天/后天/今晚), you may add `get_current_time` before `set_alarm`. "
+            "When user intent contains relative time words (e.g. 明天/后天/今晚/下周/tomorrow/next week) or a calendar date without a year, you must add `get_current_time` before time-dependent skills. "
+            "For `create_calendar_event` and `detect_calendar_conflicts`, `start_time` and `end_time` may be concrete ISO-8601 datetimes or the user's original time text. "
+            "A complete user-provided absolute calendar time must include an explicit year, date, and time. Month/day/time without a year is incomplete: examples include `6月21日下午4点`, `06/21 16:00`, and `June 21 at 4pm`. "
+            "For those relative or year-underspecified calendar requests, keep the calendar skill after `get_current_time`, keep the original time phrase in `time_text`/`start_time`, and set `time_source=user_text`; do not fill in a year yourself and do not set `time_source=explicit_absolute`. "
+            "If the user gives a full absolute date with explicit year and time, do not add `get_current_time` just for calendar timing; pass ISO if useful and set `time_source=explicit_absolute`. "
+            "If time comes from an upstream skill result such as a DDL/deadline, pass that ISO and set `time_source=upstream_skill`, `source_skill`, and `source_field`. "
+            "If you infer missing date parts yourself, set `time_source=planner_inferred` so the runtime can verify it. Do not invent `current_time` yourself. "
             "For campus activity/news/event queries, use `get_campus_activities` with the user's query; do not add `get_semesters` unless the user explicitly asks for semesters or courses. "
             "For class timetable or 课表 requests, use `get_semesters` before `get_course_schedule`; for course catalog/list requests, use `get_semesters` then `get_courses`. "
-            "For Tsinghua Learn homework queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "
+            "For course assignment DDL/deadline queries, use `get_assignments`; for Tsinghua Learn homework crawl queries, use crawl_unsubmitted_homeworks or crawl_course_homeworks; "
             "phrases like `check my homework that is not submitted`, `unsubmitted assignments`, `未交作业`, `未提交作业` map to crawl_unsubmitted_homeworks; "
+            "when the user explicitly asks to submit/turn in/递交/提交 homework, use submit_homework; "
+            "when that explicit submit/turn-in/递交/提交 request includes an attached file, plan upload_homework_attachment immediately followed by submit_homework; "
+            "never plan upload_homework_attachment alone for a submit/turn-in/递交/提交 request. "
+            "when the user asks only to upload/stage an attached file, use upload_homework_attachment; "
             "use get_homework_cookie only when the user provides a Learn cookie. "
             "Use conversation_context to resolve follow-up references like `the second one`, `that activity`, `刚才那个`, `第二个`, or `上一个`; "
             "when a reference maps to a prior result, copy the concrete title, time, query, or object from context into skill args. "
-            "If user_input or structured_prompt constraints include an [attached_file] block with file_uri/file_name, copy those exact values into upload_homework_attachment or submit_homework args when the user asks to upload or submit homework."
+            "Use conversation_context.memory_context as durable user preferences and feedback; "
+            "prefer plans that align with long-term preferences and avoid actions the user recently ignored, "
+            "unless the latest user_input clearly asks otherwise. "
+            "If user_input or structured_prompt constraints include an [attached_file] block with file_uri/file_name, copy those exact values into upload_homework_attachment args when the user asks to upload or submit homework."
         )
 
         try:
@@ -1601,7 +2259,10 @@ class OpenTHULangGraphAgent:
             if not isinstance(parsed, list):
                 logger.warning("[llm.planner] task_id=%s LLM returned non-list, ignoring", state.get("task_id", ""))
                 return []
-            sanitized = self._sanitize_skill_plan(parsed, state["task_id"])
+            sanitized = self._apply_search_scene_overrides(
+                self._sanitize_skill_plan(parsed, state["task_id"]),
+                state,
+            )
             logger.info(
                 "[llm.planner] task_id=%s parsed=%d sanitized=%d skills=%s",
                 state.get("task_id", ""),
@@ -1666,6 +2327,36 @@ class OpenTHULangGraphAgent:
             normalized.insert(first_schedule_index, semester_probe)
 
         return normalized[:8]
+
+    def _search_scene_prefers_general(self, state: AgentState) -> bool:
+        session = state.get("session", {})
+        if not isinstance(session, dict):
+            return False
+        return str(session.get("search_scene", "")).strip().lower() == "general"
+
+    def _apply_search_scene_overrides(
+        self,
+        plan: list[dict[str, Any]],
+        state: AgentState,
+    ) -> list[dict[str, Any]]:
+        if not plan or not self._search_scene_prefers_general(state):
+            return plan
+        overridden: list[dict[str, Any]] = []
+        for item in plan:
+            if item.get("skill_name") != "get_campus_activities":
+                overridden.append(item)
+                continue
+            args = dict(item.get("args") or {})
+            query = str(args.get("query") or state.get("user_input", "")).strip()
+            overridden.append(
+                self._build_skill_invocation(
+                    skill_name="search",
+                    task_id=state["task_id"],
+                    args={"query": query, "scene": "general"},
+                    description="按通用网页搜索范围检索相关信息。",
+                )
+            )
+        return overridden
 
     def _assess_skill_risk(
         self,

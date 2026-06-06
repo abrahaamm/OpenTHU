@@ -88,6 +88,7 @@ fun OpenCrayComposeApp(
   onAttachClick: () -> Unit,
   onClearAttachment: () -> Unit,
   onSendMessage: (String) -> Unit,
+  onLaunchLearnCookieLogin: (String) -> Unit,
 ) {
   var state by remember { mutableStateOf(viewModel.getUiState()) }
   val scope = rememberCoroutineScope()
@@ -183,6 +184,47 @@ fun OpenCrayComposeApp(
         viewModel.resolveConflict(strategy)
         refresh()
       },
+      onSettingsChange = { settings ->
+        viewModel.updateSettings(settings)
+        refresh()
+      },
+      onSaveSettings = {
+        val saved = viewModel.persistCurrentSettings()
+        refresh()
+        saved
+      },
+      onTestSettings = {
+        viewModel.settingsWarnings()
+      },
+      onConnectGateway = {
+        viewModel.connectToGateway()
+        refresh()
+      },
+      onLaunchLearnCookieLogin = onLaunchLearnCookieLogin,
+      onToggleCapability = { capabilityId, enabled ->
+        viewModel.toggleCapability(capabilityId, enabled)
+        refresh()
+      },
+      onAddPreference = { preference ->
+        val saved = viewModel.addPreference(preference)
+        refresh()
+        saved
+      },
+      onUpdatePreference = { index, preference ->
+        val saved = viewModel.updatePreference(index, preference)
+        refresh()
+        saved
+      },
+      onDeletePreference = { index ->
+        val deleted = viewModel.deletePreference(index)
+        refresh()
+        deleted
+      },
+      onClearAllMemory = {
+        val cleared = viewModel.clearAllMemory()
+        refresh()
+        cleared
+      },
     )
   }
 }
@@ -204,6 +246,16 @@ private fun OpenCrayMainSurface(
   onIgnoreAction: (String) -> Unit,
   onApproveActions: () -> Unit,
   onResolveConflict: (String) -> Unit,
+  onSettingsChange: (ai.opencray.app.SettingsUiState) -> Unit,
+  onSaveSettings: () -> Boolean,
+  onTestSettings: () -> List<String>,
+  onConnectGateway: () -> Unit,
+  onLaunchLearnCookieLogin: (String) -> Unit,
+  onToggleCapability: (String, Boolean) -> Unit,
+  onAddPreference: (String) -> Boolean,
+  onUpdatePreference: (Int, String) -> Boolean,
+  onDeletePreference: (Int) -> Boolean,
+  onClearAllMemory: () -> Boolean,
 ) {
   Column(
     modifier =
@@ -239,7 +291,28 @@ private fun OpenCrayMainSurface(
           onResolveConflict = onResolveConflict,
           modifier = Modifier.weight(1f),
         )
-      AppDestination.Settings -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) { SettingsScreen() }
+      AppDestination.Settings ->
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+          val capabilities = state.snapshot.capabilities.associateBy { it.id }
+          SettingsScreen(
+            settings = state.settings,
+            memoryRecords = state.memoryRecords,
+            recentEvents = state.snapshot.recentEvents,
+            safetyRecords = state.safetyRecords,
+            notificationContextEnabled = capabilities["notification_context"]?.enabled == true,
+            safetyGuardEnabled = capabilities["safety_guard"]?.enabled == true,
+            onSettingsChange = onSettingsChange,
+            onSaveSettings = onSaveSettings,
+            onTestSettings = onTestSettings,
+            onConnectGateway = onConnectGateway,
+            onLaunchLearnCookieLogin = onLaunchLearnCookieLogin,
+            onToggleCapability = onToggleCapability,
+            onAddPreference = onAddPreference,
+            onUpdatePreference = onUpdatePreference,
+            onDeletePreference = onDeletePreference,
+            onClearAllMemory = onClearAllMemory,
+          )
+        }
     }
   }
 }
