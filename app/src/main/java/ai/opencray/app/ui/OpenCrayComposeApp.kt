@@ -581,40 +581,43 @@ private fun isConnectedGatewayStatus(status: String): Boolean =
 private fun hasNetworkFallbackSignal(state: MainUiState): Boolean {
   val status = state.snapshot.connectionStatus
   if (isConnectedGatewayStatus(status)) return false
-  val statusLooksDisconnected =
-    status.contains("未连接") ||
-      status.contains("failed", ignoreCase = true) ||
-      status.contains("NETWORK_ERROR", ignoreCase = true) ||
-      status.contains("鏈嶅姟鍣ㄦ湭")
-  val recentNetworkFailure =
-    state.snapshot.recentEvents.any { event ->
-      event.contains("NETWORK_ERROR", ignoreCase = true) ||
-        event.contains("Gateway register failed", ignoreCase = true) ||
-        event.contains("Gateway plan failed", ignoreCase = true)
-    }
-  return statusLooksDisconnected || recentNetworkFailure
+  return isGatewayNetworkFailureText(status) ||
+    state.snapshot.recentEvents.any(::isGatewayNetworkFailureText)
 }
 
 private fun recentNetworkFailureCount(state: MainUiState): Int {
-  val status = state.snapshot.connectionStatus
-  val statusFailure =
-    status.contains("NETWORK_ERROR", ignoreCase = true) ||
-      status.contains("failed", ignoreCase = true) ||
-      status.contains("连接失败") ||
-      status.contains("未连接") ||
-      status.contains("鏈嶅姟鍣ㄦ湭")
-  val eventFailures =
-    state.snapshot.recentEvents.count { event ->
-      event.contains("NETWORK_ERROR", ignoreCase = true) ||
-        event.contains("Gateway register failed", ignoreCase = true) ||
-        event.contains("Gateway plan failed", ignoreCase = true) ||
-        event.contains("Gateway dispatch failed", ignoreCase = true) ||
-        event.contains("Gateway result failed", ignoreCase = true) ||
-        event.contains("timeout", ignoreCase = true) ||
-        event.contains("unexpected end of stream", ignoreCase = true)
-    }
-  return eventFailures + if (statusFailure) 1 else 0
+  val statusFailure = if (isGatewayNetworkFailureText(state.snapshot.connectionStatus)) 1 else 0
+  return statusFailure + state.snapshot.recentEvents.count(::isGatewayNetworkFailureText)
 }
+
+private fun isGatewayNetworkFailureText(text: String): Boolean {
+  if (text.isBlank()) return false
+  if (isDeviceExecutionWaitOrTimeout(text)) return false
+  val explicitGatewayFailure =
+    text.contains("Gateway register failed", ignoreCase = true) ||
+      text.contains("Gateway plan failed", ignoreCase = true) ||
+      text.contains("Gateway dispatch failed", ignoreCase = true) ||
+      text.contains("Gateway pull failed", ignoreCase = true) ||
+      text.contains("Gateway heartbeat failed", ignoreCase = true) ||
+      text.contains("Gateway result submit failed", ignoreCase = true) ||
+      text.contains("Queued result submit failed", ignoreCase = true) ||
+      text.contains("Gateway stream failed", ignoreCase = true)
+  return text.contains("NETWORK_ERROR", ignoreCase = true) ||
+    explicitGatewayFailure ||
+    text.contains("unexpected end of stream", ignoreCase = true) ||
+    text.contains("连接失败") ||
+    text.contains("未连接") ||
+    text.contains("鏈嶅姟鍣ㄦ湭")
+}
+
+private fun isDeviceExecutionWaitOrTimeout(text: String): Boolean =
+  text.contains("DEVICE_RESULT_TIMEOUT", ignoreCase = true) ||
+    text.contains("device_result_timeout", ignoreCase = true) ||
+    text.contains("device timeout", ignoreCase = true) ||
+    text.contains("timeout placeholder", ignoreCase = true) ||
+    text.contains("等待手机端执行结果") ||
+    text.contains("端侧执行结果") ||
+    text.contains("执行结果超时")
 
 @Composable
 private fun ChatMessageItem(

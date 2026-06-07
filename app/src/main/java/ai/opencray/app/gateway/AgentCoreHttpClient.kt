@@ -239,7 +239,7 @@ class AgentCoreHttpClient {
     val connection = (url.openConnection() as HttpURLConnection).apply {
       requestMethod = "POST"
       connectTimeout = 10_000
-      readTimeout = 120_000
+      readTimeout = 300_000
       useCaches = false
       doOutput = true
       setRequestProperty("Accept", "application/x-ndjson")

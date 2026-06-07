@@ -70,6 +70,17 @@ private data class LocalLlmConfig(
   }
 }
 
+private data class PendingGatewayResult(
+  val taskId: String,
+  val requestId: String,
+  val skillName: String,
+  val code: String,
+  val message: String,
+  val dataJson: String,
+  val enqueuedAtEpochMs: Long,
+  val attempts: Int = 0,
+)
+
 class OpenCrayRuntime(
   appContext: Context,
   private val runtimeRepository: RuntimeRepository,
@@ -90,12 +101,18 @@ class OpenCrayRuntime(
   @Volatile private var gatewayRegistered = false
   @Volatile private var dispatchLoopRunning = false
   @Volatile private var gatewayHeartbeatRunning = false
+  @Volatile private var pendingGatewayResultFlushRunning = false
   @Volatile private var appInForeground = true
   @Volatile private var lastUserActivityEpochMs = System.currentTimeMillis()
   @Volatile private var calendarPermissionDelegate: CalendarPermissionDelegate? = null
   private val serverSummaryTaskIds = Collections.synchronizedSet(mutableSetOf<String>())
+  private val pendingGatewayResults = Collections.synchronizedList(mutableListOf<PendingGatewayResult>())
   /** Stored callback invoked by [notifyCalendarPermissionGranted] to retry a deferred action. */
   @Volatile private var pendingPermissionCallback: (() -> Unit)? = null
+
+  init {
+    pendingGatewayResults.addAll(loadPendingGatewayResultQueue())
+  }
 
   fun snapshot(): RuntimeSnapshot = runtimeRepository.getSnapshot()
 
@@ -385,6 +402,7 @@ class OpenCrayRuntime(
           runtimeRepository.appendEvent("Gateway registered device_id=$deviceId")
           chatRepository.appendMessage(ChatRole.System, "Agent-Core 连接成功，后续将走服务端任务分发。")
           startGatewayHeartbeatLoop()
+          flushPendingGatewayResultsAsync("gateway_registered")
           return@thread
         }
         lastResultCode = result.code
@@ -431,6 +449,7 @@ class OpenCrayRuntime(
           val result = gatewayClient.healthCheck(currentGatewayConfig())
           if (result.success) {
             runtimeRepository.updateConnectionStatus("已连接服务器")
+            flushPendingGatewayResultsAsync("heartbeat")
           } else {
             gatewayRegistered = false
             gatewayHeartbeatRunning = false
@@ -946,10 +965,20 @@ class OpenCrayRuntime(
               }
             }
           }
-        }
+      }
 
       if (!result.success) {
-        runtimeRepository.appendEvent("Gateway stream failed: ${result.code} ${result.message}")
+        val streamEndedWhileWaitingForDevice =
+          assistantMessageId.isNotBlank() &&
+            serverSummaryTaskIds.isNotEmpty() &&
+            result.code == "NETWORK_ERROR"
+        runtimeRepository.appendEvent(
+          if (streamEndedWhileWaitingForDevice) {
+            "Gateway stream ended while waiting for device execution; device result will be retried through the result queue."
+          } else {
+            "Gateway stream failed: ${result.code} ${result.message}"
+          },
+        )
         if (assistantMessageId.isBlank()) {
           if (shouldPlanLocally(message)) {
             streamAssistant(agentCoreUnavailableMessage())
@@ -1474,6 +1503,9 @@ class OpenCrayRuntime(
     private const val GATEWAY_HEARTBEAT_ACTIVE_MS = 15L * 1000L
     private const val GATEWAY_HEARTBEAT_IDLE_MS = 30L * 1000L
     private const val GATEWAY_HEARTBEAT_BACKGROUND_MS = 120L * 1000L
+    private const val PENDING_GATEWAY_RESULT_PREFS = "openthu_pending_gateway_results"
+    private const val KEY_PENDING_GATEWAY_RESULTS = "pending_results"
+    private const val MAX_PENDING_GATEWAY_RESULTS = 50
   }
 
   private fun readSmallUtf8File(path: String, maxBytes: Long = 512L * 1024L): String? {
@@ -1586,6 +1618,7 @@ class OpenCrayRuntime(
     }
     dispatchLoopRunning = true
     runtimeRepository.updateConnectionStatus("Polling Agent-Core queue ...")
+    flushPendingGatewayResultsAsync("dispatch_loop")
 
     thread(name = "opencray-gateway-dispatch", isDaemon = true) {
       try {
@@ -2017,57 +2050,89 @@ class OpenCrayRuntime(
     report: ActionExecutionReport,
   ) {
     val requestId = action.requestId ?: return
-    thread(name = "opencray-gateway-submit", isDaemon = true) {
-      val code = mapGatewayResultCode(action, report)
-      val submitData: Map<String, Any?> = buildMap {
-        put("status", if (report.success) "executed" else "failed")
-        put("recoverable", report.recoverable)
-        put("action_id", action.id)
-        put("semantic", report.semantic)
-        // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
-        report.metadata.forEach { (key, value) ->
-          if (value != null) {
-            put(key, value)
-          }
+    val code = mapGatewayResultCode(action, report)
+    val submitData: Map<String, Any?> = buildMap {
+      put("status", if (report.success) "executed" else "failed")
+      put("recoverable", report.recoverable)
+      put("action_id", action.id)
+      put("semantic", report.semantic)
+      // Include all structured data from the executor (conflicts, event_ids, exceptions, etc.)
+      report.metadata.forEach { (key, value) ->
+        if (value != null) {
+          put(key, value)
         }
-        put("metadata", report.metadata)
       }
-      var result =
+      put("metadata", report.metadata)
+    }
+    enqueuePendingGatewayResult(
+      PendingGatewayResult(
+        taskId = taskId,
+        requestId = requestId,
+        skillName = action.id,
+        code = code,
+        message = report.message,
+        dataJson = mapToJsonObject(submitData).toString(),
+        enqueuedAtEpochMs = System.currentTimeMillis(),
+      ),
+    )
+    flushPendingGatewayResultsAsync("execution_report")
+  }
+
+  private fun enqueuePendingGatewayResult(pending: PendingGatewayResult) {
+    synchronized(pendingGatewayResults) {
+      pendingGatewayResults.removeAll { it.taskId == pending.taskId && it.requestId == pending.requestId }
+      pendingGatewayResults.add(pending)
+      while (pendingGatewayResults.size > MAX_PENDING_GATEWAY_RESULTS) {
+        pendingGatewayResults.removeAt(0)
+      }
+      savePendingGatewayResultQueueLocked()
+    }
+    runtimeRepository.appendEvent("Gateway result queued for ${pending.skillName} (${pending.requestId}).")
+  }
+
+  private fun flushPendingGatewayResultsAsync(reason: String) {
+    if (pendingGatewayResultFlushRunning) return
+    pendingGatewayResultFlushRunning = true
+    thread(name = "opencray-gateway-result-flush", isDaemon = true) {
+      try {
+        flushPendingGatewayResults(reason)
+      } finally {
+        pendingGatewayResultFlushRunning = false
+      }
+    }
+  }
+
+  private fun flushPendingGatewayResults(reason: String) {
+    var submittedCount = 0
+    while (true) {
+      val pending = synchronized(pendingGatewayResults) { pendingGatewayResults.firstOrNull() } ?: break
+      val data = runCatching { jsonObjectToMap(JSONObject(pending.dataJson)) }.getOrElse { emptyMap() }
+      val result =
         gatewayClient.submitResult(
           config = currentGatewayConfig(),
-          taskId = taskId,
+          taskId = pending.taskId,
           deviceId = deviceId,
-          requestId = requestId,
-          skillName = action.id,
-          code = code,
-          message = report.message,
-          data = submitData,
+          requestId = pending.requestId,
+          skillName = pending.skillName,
+          code = pending.code,
+          message = pending.message,
+          data = data,
         )
-      var attempt = 1
-      while (!result.success && attempt < 3) {
-        attempt += 1
-        Thread.sleep(800L * attempt)
-        result =
-          gatewayClient.submitResult(
-            config = currentGatewayConfig(),
-            taskId = taskId,
-            deviceId = deviceId,
-            requestId = requestId,
-            skillName = action.id,
-            code = code,
-            message = report.message,
-            data = submitData,
-          )
-      }
-      val current = snapshot()
+
       if (result.success) {
+        submittedCount += 1
+        synchronized(pendingGatewayResults) {
+          pendingGatewayResults.removeAll { it.taskId == pending.taskId && it.requestId == pending.requestId }
+          savePendingGatewayResultQueueLocked()
+        }
         val taskStatus = result.data?.taskStatus.orEmpty()
+        val current = snapshot()
         val updatedTasks =
           if (taskStatus.isBlank()) {
             current.tasks
           } else {
             current.tasks.map { task ->
-              if (task.id == taskId) {
+              if (task.id == pending.taskId) {
                 task.copy(status = taskStatus, updatedAtEpochMs = System.currentTimeMillis())
               } else {
                 task
@@ -2077,18 +2142,137 @@ class OpenCrayRuntime(
         runtimeRepository.replaceSnapshot(
           current.copy(
             tasks = updatedTasks,
-            recentEvents = listOf("Result submitted for ${action.id} ($requestId).") + current.recentEvents,
+            recentEvents = listOf("Queued result submitted for ${pending.skillName} (${pending.requestId}).") + current.recentEvents,
           ),
         )
       } else {
-        runtimeRepository.replaceSnapshot(
-          current.copy(
-            recentEvents = listOf("Result submit failed for ${action.id}: ${result.code} ${result.message}") + current.recentEvents,
-          ),
+        synchronized(pendingGatewayResults) {
+          val index = pendingGatewayResults.indexOfFirst { it.taskId == pending.taskId && it.requestId == pending.requestId }
+          if (index >= 0) {
+            pendingGatewayResults[index] = pending.copy(attempts = pending.attempts + 1)
+            savePendingGatewayResultQueueLocked()
+          }
+        }
+        if (result.code == "NETWORK_ERROR") {
+          gatewayRegistered = false
+          runtimeRepository.updateConnectionStatus("Gateway result submit failed")
+          val current = snapshot()
+          connectToGateway(host = current.host, port = current.port, tlsEnabled = current.tlsEnabled)
+        }
+        runtimeRepository.appendEvent(
+          "Queued result submit failed for ${pending.skillName}: ${result.code} ${result.message}; kept for retry.",
         )
+        break
       }
     }
+    if (submittedCount > 0) {
+      runtimeRepository.appendEvent("Gateway result queue flushed ($submittedCount) by $reason.")
+    }
   }
+
+  private fun loadPendingGatewayResultQueue(): List<PendingGatewayResult> {
+    val raw = appContext
+      .getSharedPreferences(PENDING_GATEWAY_RESULT_PREFS, Context.MODE_PRIVATE)
+      .getString(KEY_PENDING_GATEWAY_RESULTS, "")
+      .orEmpty()
+    if (raw.isBlank()) return emptyList()
+    return runCatching {
+      val arr = JSONArray(raw)
+      buildList {
+        for (i in 0 until arr.length()) {
+          val item = arr.optJSONObject(i) ?: continue
+          val pending = pendingGatewayResultFromJson(item) ?: continue
+          add(pending)
+        }
+      }
+    }.getOrDefault(emptyList())
+  }
+
+  private fun savePendingGatewayResultQueueLocked() {
+    val arr = JSONArray()
+    pendingGatewayResults.forEach { pending -> arr.put(pendingGatewayResultToJson(pending)) }
+    appContext
+      .getSharedPreferences(PENDING_GATEWAY_RESULT_PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_PENDING_GATEWAY_RESULTS, arr.toString())
+      .apply()
+  }
+
+  private fun pendingGatewayResultToJson(pending: PendingGatewayResult): JSONObject =
+    JSONObject()
+      .put("task_id", pending.taskId)
+      .put("request_id", pending.requestId)
+      .put("skill_name", pending.skillName)
+      .put("code", pending.code)
+      .put("message", pending.message)
+      .put("data", JSONObject(pending.dataJson))
+      .put("enqueued_at_epoch_ms", pending.enqueuedAtEpochMs)
+      .put("attempts", pending.attempts)
+
+  private fun pendingGatewayResultFromJson(item: JSONObject): PendingGatewayResult? {
+    val taskId = item.optString("task_id").trim()
+    val requestId = item.optString("request_id").trim()
+    val skillName = item.optString("skill_name").trim()
+    if (taskId.isBlank() || requestId.isBlank() || skillName.isBlank()) return null
+    return PendingGatewayResult(
+      taskId = taskId,
+      requestId = requestId,
+      skillName = skillName,
+      code = item.optString("code", "SKILL_EXECUTION_FAILED"),
+      message = item.optString("message", ""),
+      dataJson = (item.optJSONObject("data") ?: JSONObject()).toString(),
+      enqueuedAtEpochMs = item.optLong("enqueued_at_epoch_ms", System.currentTimeMillis()),
+      attempts = item.optInt("attempts", 0),
+    )
+  }
+
+  private fun mapToJsonObject(map: Map<String, Any?>): JSONObject {
+    val obj = JSONObject()
+    map.forEach { (key, value) -> obj.put(key, toJsonValue(value)) }
+    return obj
+  }
+
+  private fun toJsonValue(value: Any?): Any =
+    when (value) {
+      null -> JSONObject.NULL
+      is JSONObject -> value
+      is JSONArray -> value
+      is Map<*, *> -> {
+        val obj = JSONObject()
+        value.forEach { (key, child) ->
+          if (key != null) obj.put(key.toString(), toJsonValue(child))
+        }
+        obj
+      }
+      is Iterable<*> -> JSONArray(value.map { toJsonValue(it) })
+      is Array<*> -> JSONArray(value.map { toJsonValue(it) })
+      is Number, is Boolean, is String -> value
+      else -> value.toString()
+    }
+
+  private fun jsonObjectToMap(obj: JSONObject): Map<String, Any?> =
+    buildMap {
+      val keys = obj.keys()
+      while (keys.hasNext()) {
+        val key = keys.next()
+        put(key, jsonToValue(obj.opt(key)))
+      }
+    }
+
+  private fun jsonArrayToList(arr: JSONArray): List<Any?> =
+    buildList {
+      for (i in 0 until arr.length()) {
+        add(jsonToValue(arr.opt(i)))
+      }
+    }
+
+  private fun jsonToValue(value: Any?): Any? =
+    when (value) {
+      null, JSONObject.NULL -> null
+      is JSONObject -> jsonObjectToMap(value)
+      is JSONArray -> jsonArrayToList(value)
+      else -> value
+    }
 
   private fun mapGatewayResultCode(
     action: SystemAction,
