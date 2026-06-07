@@ -39,7 +39,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("agent_core_server")
 DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS = 8.0
+DEVICE_RESULT_WAIT_SLOW_HEARTBEAT_SECONDS = 20.0
 DEVICE_RESULT_WAIT_TIMEOUT_SECONDS = 300.0
+DEVICE_RESULT_WAIT_MAX_HEARTBEATS = 5
 DEBUG_LOG_VALUE_LIMIT = 6000
 DEVICE_EXECUTED_SKILLS = {
     "get_campus_activities",
@@ -53,6 +55,14 @@ DEVICE_EXECUTED_SKILLS = {
     "get_semesters",
     "get_courses",
     "get_course_schedule",
+}
+SLOW_DEVICE_EXECUTED_SKILLS = {
+    "get_assignments",
+    "crawl_course_homeworks",
+    "crawl_unsubmitted_homeworks",
+    "preview_homework_attachments",
+    "upload_homework_attachment",
+    "submit_homework",
 }
 
 
@@ -591,7 +601,30 @@ class AgentCoreStore:
 
             completed = set(str(item) for item in task_doc.get("completed_request_ids", []))
             if payload.request_id in completed:
-                return dict(task_doc)
+                results = task_doc.get("device_results", [])
+                if not isinstance(results, list):
+                    results = []
+                timeout_index = next(
+                    (
+                        index
+                        for index, item in enumerate(results)
+                        if isinstance(item, dict)
+                        and str(item.get("request_id", "")) == payload.request_id
+                        and str(item.get("code", "")) == "DEVICE_RESULT_TIMEOUT"
+                    ),
+                    -1,
+                )
+                if timeout_index < 0:
+                    return dict(task_doc)
+                results.pop(timeout_index)
+                task_doc["device_results"] = results
+                completed.remove(payload.request_id)
+                logger.info(
+                    "[result] replacing timeout placeholder with late device result task_id=%s request_id=%s skill_name=%s",
+                    task_id,
+                    payload.request_id,
+                    payload.skill_name,
+                )
 
             in_flight = set(str(item) for item in task_doc.get("in_flight_request_ids", []))
             if payload.request_id in in_flight:
@@ -1312,6 +1345,21 @@ def pending_runtime_request_ids(task_doc: dict[str, Any]) -> list[str]:
     return pending
 
 
+def device_wait_heartbeat_seconds(task_doc: dict[str, Any], pending_ids: list[str]) -> float:
+    pending_set = {str(item) for item in pending_ids if str(item)}
+    approved = task_doc.get("approved_skills", [])
+    if not isinstance(approved, list):
+        return DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS
+    for skill in approved:
+        if not isinstance(skill, dict):
+            continue
+        request_id = str(skill.get("request_id", ""))
+        skill_name = str(skill.get("skill_name", ""))
+        if request_id in pending_set and skill_name in SLOW_DEVICE_EXECUTED_SKILLS:
+            return DEVICE_RESULT_WAIT_SLOW_HEARTBEAT_SECONDS
+    return DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS
+
+
 def build_server_data_summary(results: Any) -> str:
     if not isinstance(results, list):
         return ""
@@ -1635,6 +1683,21 @@ def _final_content_from_task(task_doc: dict[str, Any]) -> str:
     if approved_count:
         return "我已经完成可在服务端处理的部分，剩余需要手机端执行的动作会继续处理。"
     return "我没有找到需要执行的步骤。你可以补充一下目标，我再继续。"
+
+
+def _has_terminal_device_failure(task_doc: dict[str, Any]) -> bool:
+    device_results = task_doc.get("device_results", [])
+    if not isinstance(device_results, list):
+        return False
+    for result in device_results:
+        if not isinstance(result, dict):
+            continue
+        if str(result.get("skill_name", "")) == "show_summary":
+            continue
+        code = str(result.get("code", "")).strip()
+        if code and code != "OK":
+            return True
+    return False
 
 
 def _planned_skill_items(task_doc: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1993,12 +2056,19 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         )
                     )
                     wait_started = time.monotonic()
-                    while pending_ids and time.monotonic() - wait_started < DEVICE_RESULT_WAIT_TIMEOUT_SECONDS:
+                    wait_heartbeat_count = 0
+                    while (
+                        pending_ids
+                        and wait_heartbeat_count < DEVICE_RESULT_WAIT_MAX_HEARTBEATS
+                        and time.monotonic() - wait_started < DEVICE_RESULT_WAIT_TIMEOUT_SECONDS
+                    ):
+                        wait_heartbeat_count += 1
+                        wait_heartbeat_seconds = device_wait_heartbeat_seconds(task_doc, pending_ids)
                         last_updated_at = str(task_doc.get("updated_at", ""))
                         waited_task = store.wait_for_task_update(
                             task_id=task_id,
                             last_updated_at=last_updated_at,
-                            timeout_seconds=DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS,
+                            timeout_seconds=wait_heartbeat_seconds,
                         )
                         if waited_task is None:
                             break
@@ -2008,15 +2078,31 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                             yield encode_ndjson(
                                 agent_event(
                                     "tool_call",
-                                    title="等待手机端执行结果",
-                                    content=f"还在等待 {len(pending_ids)} 个端侧步骤完成。",
+                                    title="\u7b49\u5f85\u624b\u673a\u7aef\u6267\u884c\u7ed3\u679c",
+                                    content=(
+                                        f"\u8fd8\u5728\u7b49\u5f85 {len(pending_ids)} \u4e2a\u7aef\u4fa7\u6b65\u9aa4\u5b8c\u6210\uff0c"
+                                        f"\u7b2c {wait_heartbeat_count}/{DEVICE_RESULT_WAIT_MAX_HEARTBEATS} \u6b21\u3002"
+                                    ),
                                     task_id=task_id,
                                     status="waiting",
+                                    data={
+                                        "wait_attempt": wait_heartbeat_count,
+                                        "max_wait_attempts": DEVICE_RESULT_WAIT_MAX_HEARTBEATS,
+                                        "wait_seconds": wait_heartbeat_seconds,
+                                        "pending_request_ids": pending_ids,
+                                    },
                                 )
                             )
 
                     timed_out_ids = pending_runtime_request_ids(task_doc)
                     if timed_out_ids:
+                        logger.warning(
+                            "[result] stop waiting for device results task_id=%s pending=%s wait_attempts=%d/%d",
+                            task_id,
+                            timed_out_ids,
+                            wait_heartbeat_count,
+                            DEVICE_RESULT_WAIT_MAX_HEARTBEATS,
+                        )
                         task_doc = store.mark_device_results_timeout(
                             task_id=task_id,
                             request_ids=timed_out_ids,
@@ -2075,6 +2161,9 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                     )
                 elif blocked_skills:
                     final_content = _final_content_from_task(task_doc)
+                elif _has_terminal_device_failure(task_doc):
+                    final_content = _final_content_from_task(task_doc)
+                    task_doc = store.set_final_summary(task_id=task_id, summary=final_content)
                 else:
                     final_content = agent.synthesize_summary_from_results(
                         user_input=payload.message,

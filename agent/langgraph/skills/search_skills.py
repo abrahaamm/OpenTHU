@@ -85,15 +85,59 @@ def _coerce_domains(raw: Any) -> list[str]:
     return [item for item in values if item]
 
 
+def _coerce_exclude_keywords(args: dict[str, Any]) -> list[str]:
+    raw_values: list[Any] = [
+        args.get("search_exclude_keywords"),
+        args.get("exclude_keywords"),
+    ]
+    memory_context = args.get("memory_context")
+    if isinstance(memory_context, dict):
+        raw_values.append(memory_context.get("exclude_keywords"))
+        hard_constraints = memory_context.get("hard_constraints")
+        if isinstance(hard_constraints, dict):
+            raw_values.append(hard_constraints.get("exclude_keywords"))
+
+    keywords: list[str] = []
+    for raw in raw_values:
+        if isinstance(raw, list):
+            candidates = raw
+        elif isinstance(raw, str):
+            candidates = re.split(r"[,;，；\n]+", raw)
+        else:
+            candidates = []
+        for item in candidates:
+            keyword = str(item).strip()
+            if keyword and keyword not in keywords:
+                keywords.append(keyword)
+    return keywords
+
+
+def _filter_excluded_results(
+    results: list[WebSearchResult],
+    exclude_keywords: list[str],
+) -> list[WebSearchResult]:
+    if not exclude_keywords:
+        return results
+    return [item for item in results if not _result_matches_exclude(item, exclude_keywords)]
+
+
+def _result_matches_exclude(
+    item: WebSearchResult,
+    exclude_keywords: list[str],
+) -> bool:
+    haystack = f"{item.title}\n{item.snippet}\n{item.url}".lower()
+    return any(keyword.lower() in haystack for keyword in exclude_keywords if keyword.strip())
+
+
 def _coerce_scene(raw: Any) -> str:
     value = str(raw or "hybrid").strip().lower()
     if value in {"campus", "general", "hybrid"}:
         return value
-    if value in {"internal", "inside", "school", "校内", "校内搜索", "校园"}:
+    if value in {"internal", "inside", "school", "\u6821\u5185", "\u6821\u5185\u641c\u7d22", "\u6821\u56ed"}:
         return "campus"
-    if value in {"external", "outside", "web", "校外", "通用", "通用搜索"}:
+    if value in {"external", "outside", "web", "\u6821\u5916", "\u901a\u7528", "\u901a\u7528\u641c\u7d22"}:
         return "general"
-    if value in {"mixed", "both", "混合", "校内外"}:
+    if value in {"mixed", "both", "\u6df7\u5408", "\u6821\u5185\u6821\u5916", "\u6821\u5185\u5916"}:
         return "hybrid"
     return "hybrid"
 
@@ -129,6 +173,7 @@ class SearchSkill(SkillHandler):
         freshness_days = _coerce_limit(merged_args, "freshness_days", 30, 3650)
         use_rag = _coerce_bool(merged_args.get("use_rag", True), default=True)
         language = str(merged_args.get("language", "zh-CN") or "zh-CN")
+        exclude_keywords = _coerce_exclude_keywords(merged_args)
         warnings: list[str] = []
 
         if scope not in {"web", "all"}:
@@ -164,6 +209,21 @@ class SearchSkill(SkillHandler):
                 source="search_provider",
             )
 
+        if exclude_keywords:
+            original_result_count = len(results)
+            original_supplemental_count = len(supplemental)
+            results = _filter_excluded_results(results, exclude_keywords)
+            supplemental = _filter_excluded_results(supplemental, exclude_keywords)
+            removed_count = (
+                (original_result_count - len(results)) + (original_supplemental_count - len(supplemental))
+            )
+            if removed_count > 0:
+                warnings.append(
+                    "Filtered "
+                    f"{removed_count} search result(s) by memory exclude keywords: "
+                    f"{', '.join(exclude_keywords[:8])}"
+                )
+
         documents = fetch_documents(results[:fetch_limit], warnings) if use_rag else []
         rag = build_search_answer(query, results, documents, max_results=max_results) if use_rag else {
             "answer": build_result_snippet_answer(query, results, max_results=max_results),
@@ -183,8 +243,10 @@ class SearchSkill(SkillHandler):
                 "answer": rag["answer"],
                 "results": [asdict(item) for item in results],
                 "supplemental_results": [asdict(item) for item in supplemental],
+                "result_source_counts": _result_source_counts(results),
                 "citations": rag["citations"],
                 "evidence": rag["evidence"],
+                "exclude_keywords": exclude_keywords,
                 "warnings": warnings,
                 "retrieved_at": _utc_now(),
                 "provider": provider.name,
@@ -442,22 +504,51 @@ def search_with_scene(
         if len(supplemental) >= supplemental_results:
             break
 
-    merged = merge_ranked_results(campus_results, supplemental, max_results)
+    merged = merge_hybrid_results(
+        campus_results=campus_results,
+        general_results=supplemental,
+        max_results=max_results,
+        min_general_results=min(supplemental_results, max(1, max_results // 2)),
+    )
     return merged, supplemental, from_cache_all
 
 
-def merge_ranked_results(
+def merge_hybrid_results(
     campus_results: list[WebSearchResult],
-    supplemental: list[WebSearchResult],
+    general_results: list[WebSearchResult],
     max_results: int,
+    min_general_results: int,
 ) -> list[WebSearchResult]:
-    merged: list[WebSearchResult] = []
-    merged.extend(campus_results)
-    merged.extend(supplemental)
-    scored = []
-    for item in merged:
-        score = rank_result(item, campus_preferred=True)
-        scored.append((score, item))
+    campus_ranked = _dedupe_ranked(campus_results, campus_preferred=True)
+    general_ranked = _dedupe_ranked(general_results, campus_preferred=False)
+
+    if not campus_ranked:
+        return general_ranked[:max_results]
+    if not general_ranked:
+        return campus_ranked[:max_results]
+
+    general_quota = min(len(general_ranked), min_general_results, max_results - 1)
+    campus_quota = max_results - general_quota
+    selected = campus_ranked[:campus_quota] + general_ranked[:general_quota]
+
+    remaining = campus_ranked[campus_quota:] + general_ranked[general_quota:]
+    seen = {item.url for item in selected}
+    for item in sorted(remaining, key=lambda candidate: rank_result(candidate, campus_preferred=False), reverse=True):
+        if item.url in seen:
+            continue
+        selected.append(item)
+        seen.add(item.url)
+        if len(selected) >= max_results:
+            break
+
+    return selected[:max_results]
+
+
+def _dedupe_ranked(
+    results: list[WebSearchResult],
+    campus_preferred: bool,
+) -> list[WebSearchResult]:
+    scored = [(rank_result(item, campus_preferred=campus_preferred), item) for item in results]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     deduped: list[WebSearchResult] = []
     seen: set[str] = set()
@@ -466,8 +557,6 @@ def merge_ranked_results(
             continue
         seen.add(item.url)
         deduped.append(item)
-        if len(deduped) >= max_results:
-            break
     return deduped
 
 
@@ -482,6 +571,18 @@ def rank_result(item: WebSearchResult, campus_preferred: bool) -> float:
     if any(keyword in title for keyword in ("讲座", "论坛", "活动", "报名", "通知")):
         score += 0.8
     return score
+
+
+def _result_source_counts(results: list[WebSearchResult]) -> dict[str, int]:
+    campus = 0
+    general = 0
+    for item in results:
+        host = urlparse(item.url).netloc.lower()
+        if any(domain in host for domain in DEFAULT_CAMPUS_DOMAINS):
+            campus += 1
+        else:
+            general += 1
+    return {"campus": campus, "general": general}
 
 
 def parse_duckduckgo_html(html: str) -> list[WebSearchResult]:

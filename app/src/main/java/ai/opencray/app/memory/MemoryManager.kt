@@ -6,6 +6,9 @@ import java.util.UUID
 
 class MemoryManager {
   fun updateFromGoal(existing: List<MemoryRecord>, goal: String): List<MemoryRecord> {
+    val normalized = goal.trim()
+    if (normalized.isEmpty()) return existing
+
     val now = System.currentTimeMillis()
     val mutable = existing.toMutableList()
 
@@ -15,41 +18,41 @@ class MemoryManager {
         id = UUID.randomUUID().toString(),
         scope = "short",
         key = "latest_goal",
-        value = goal,
+        value = normalized,
         weight = 100,
         updatedAtEpochMs = now,
       ),
     )
 
-    if (containsAny(goal, listOf("不要", "不再", "别", "减少"))) {
+    if (containsAny(normalized, NEGATIVE_PREFERENCE_KEYWORDS)) {
       mutable.add(
         0,
         MemoryRecord(
           id = UUID.randomUUID().toString(),
           scope = "long",
           key = "negative_preference",
-          value = goal,
-          weight = 80,
+          value = normalized,
+          weight = 86,
           updatedAtEpochMs = now,
         ),
       )
     }
 
-    if (containsAny(goal, listOf("课程", "考试", "ddl", "作业"))) {
+    if (containsAny(normalized, CAMPUS_FOCUS_KEYWORDS)) {
       mutable.add(
         0,
         MemoryRecord(
           id = UUID.randomUUID().toString(),
           scope = "mid",
           key = "campus_focus",
-          value = "schedule_and_deadline",
+          value = normalized.take(160),
           weight = 70,
           updatedAtEpochMs = now,
         ),
       )
     }
 
-    return mutable.distinctBy { "${it.scope}:${it.key}:${it.value}" }.take(20)
+    return mutable.distinctBy { "${it.scope}:${it.key}:${it.value}" }.take(MAX_MEMORY_RECORDS)
   }
 
   fun addManualPreference(existing: List<MemoryRecord>, preference: String): List<MemoryRecord> {
@@ -131,9 +134,45 @@ class MemoryManager {
       )
     return (listOf(record) + existing)
       .distinctBy { "${it.scope}:${it.key}:${it.value}" }
-      .take(50)
+      .take(MAX_MEMORY_RECORDS)
   }
 
   private fun containsAny(text: String, needles: List<String>): Boolean =
     needles.any { needle -> text.contains(needle, ignoreCase = true) }
+
+  private companion object {
+    private const val MAX_MEMORY_RECORDS = 100
+
+    private val NEGATIVE_PREFERENCE_KEYWORDS =
+      listOf(
+        "不要",
+        "不再",
+        "别",
+        "减少",
+        "不喜欢",
+        "不想",
+        "避免",
+        "排除",
+        "不要给我推送",
+        "不要推荐",
+        "don't",
+        "do not",
+        "avoid",
+        "exclude",
+      )
+
+    private val CAMPUS_FOCUS_KEYWORDS =
+      listOf(
+        "课程",
+        "课表",
+        "考试",
+        "ddl",
+        "deadline",
+        "作业",
+        "homework",
+        "assignment",
+        "日历",
+        "提醒",
+      )
+  }
 }
