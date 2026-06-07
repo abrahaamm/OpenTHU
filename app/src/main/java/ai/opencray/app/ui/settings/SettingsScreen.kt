@@ -22,6 +22,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.nativeCanvas
@@ -181,14 +185,7 @@ private fun SettingsDetail(
   SettingsTitle(route.title)
   Spacer(Modifier.height(18.dp))
   SettingsCard {
-    SettingsItemRow(
-      item =
-        SettingsItem(
-          label = "返回设置",
-          iconRes = R.drawable.ic_chevron_right_24,
-          onClick = onBack,
-        ),
-    )
+    SettingsBackRow(onBack = onBack)
   }
   Spacer(Modifier.height(16.dp))
   when (route) {
@@ -196,7 +193,7 @@ private fun SettingsDetail(
     SettingsRoute.Connection -> ConnectionSettings(settings, statusMessage, onSettingsChange, onSaveSettings, onTestSettings, onConnectGateway)
     SettingsRoute.Campus -> CampusSettings(settings, onSettingsChange, onLaunchLearnCookieLogin)
     SettingsRoute.Memory -> MemorySettings(settings, memoryRecords, onSettingsChange, onAddPreference, onUpdatePreference, onDeletePreference, onClearAllMemory)
-    SettingsRoute.Device -> DeviceSettings(settings, recentEvents, safetyRecords, onSettingsChange)
+    SettingsRoute.Device -> DeviceSettings(settings, onSettingsChange)
     SettingsRoute.Overview -> Unit
   }
 }
@@ -289,7 +286,10 @@ private fun CampusSettings(
     SettingsDivider(true)
     SettingInputRow("搜索 API Key", "仅部分 provider 需要。", settings.searchApiKey, "OPENTHU_SEARCH_API_KEY") { onSettingsChange(settings.copy(searchApiKey = it)) }
     SettingsDivider(true)
-    SettingInputRow("搜索范围", "campus / general / hybrid。", settings.searchScene, "hybrid") { onSettingsChange(settings.copy(searchScene = it)) }
+    SearchSceneDropdown(
+      value = settings.searchScene,
+      onChange = { onSettingsChange(settings.copy(searchScene = it)) },
+    )
     SettingsDivider(true)
     SettingInputRow("搜索缓存时长", "单位为秒。", settings.searchTtl, "3600") { onSettingsChange(settings.copy(searchTtl = it)) }
   }
@@ -361,24 +361,12 @@ private fun MemorySettings(
 @Composable
 private fun DeviceSettings(
   settings: SettingsUiState,
-  recentEvents: List<String>,
-  safetyRecords: List<SafetyRecord>,
   onSettingsChange: (SettingsUiState) -> Unit,
 ) {
   SettingsCard {
     SettingSwitchRow("跟随系统时区", "开启后自动使用设备系统时区。", settings.timezoneFollowSystem) { onSettingsChange(settings.copy(timezoneFollowSystem = it)) }
     SettingsDivider(true)
     SettingInputRow("日历时区", "例如 Asia/Shanghai。", settings.timezone, "Asia/Shanghai") { onSettingsChange(settings.copy(timezone = it)) }
-    SettingsDivider(true)
-    SettingInputRow("ADB 路径", "本机执行器可读取该路径。", settings.adbBin, "adb") { onSettingsChange(settings.copy(adbBin = it)) }
-    SettingsDivider(true)
-    SettingInputRow("ADB 设备序列号", "多设备调试时指定设备。", settings.adbSerial, "emulator-5554") { onSettingsChange(settings.copy(adbSerial = it)) }
-  }
-  Spacer(Modifier.height(14.dp))
-  SettingsCard {
-    StaticInfoRow("安全记录", safetyRecords.take(8).joinToString("\n\n") { "${it.title}\n${it.detail}\n状态：${it.status}" }.ifBlank { "暂无安全记录。" })
-    SettingsDivider(true)
-    StaticInfoRow("最近事件", recentEvents.take(12).joinToString("\n") { "• $it" }.ifBlank { "• 暂无最近事件。" })
   }
 }
 
@@ -436,6 +424,64 @@ private fun SettingSwitchRow(
       Text(description, color = SettingsColors.UnselectedText, fontSize = 12.sp, lineHeight = 16.sp)
     }
     Switch(checked = checked, onCheckedChange = onChange)
+  }
+}
+
+@Composable
+private fun SearchSceneDropdown(
+  value: String,
+  onChange: (String) -> Unit,
+) {
+  val options =
+    listOf(
+      "campus" to "校园",
+      "general" to "校外",
+      "hybrid" to "混合",
+    )
+  var expanded by remember { mutableStateOf(false) }
+  val label = options.firstOrNull { it.first == value.lowercase() }?.second ?: "混合"
+  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = SettingsSpacing.RowHorizontal, vertical = 12.dp)) {
+    Text("搜索范围", color = SettingsColors.BodyText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text("控制搜索来源：校园、校外或混合。", color = SettingsColors.UnselectedText, fontSize = 12.sp, lineHeight = 16.sp)
+    Spacer(Modifier.height(8.dp))
+    Box {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(SettingsColors.Track)
+            .clickable { expanded = true }
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(label, color = SettingsColors.BodyText, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Text("⌄", color = SettingsColors.BrandPurple, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+      }
+      DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = { expanded = false },
+        modifier = Modifier.background(SettingsColors.Card),
+      ) {
+        options.forEach { (raw, title) ->
+          DropdownMenuItem(
+            text = {
+              Text(
+                text = title,
+                color = if (raw == value.lowercase()) SettingsColors.BrandPurple else SettingsColors.BodyText,
+                fontSize = 14.sp,
+                fontWeight = if (raw == value.lowercase()) FontWeight.SemiBold else FontWeight.Medium,
+              )
+            },
+            onClick = {
+              expanded = false
+              onChange(raw)
+            },
+          )
+        }
+      }
+    }
   }
 }
 
@@ -513,12 +559,12 @@ private fun SettingsWideButton(
         .height(46.dp)
         .settingsButtonShadow(primary)
         .clip(RoundedCornerShape(16.dp))
-        .background(if (primary) SettingsColors.BrandPurple else SettingsColors.Card)
+        .background(if (primary) SettingsColors.Yellow else SettingsColors.Card)
         .clickable(onClick = onClick)
         .padding(horizontal = 12.dp),
     contentAlignment = Alignment.Center,
   ) {
-    Text(text, color = if (primary) Color.White else SettingsColors.BrandPurple, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    Text(text, color = if (primary) SettingsColors.BodyText else SettingsColors.BrandPurple, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
   }
 }
 
@@ -612,6 +658,33 @@ fun SettingsItemRow(
 }
 
 @Composable
+private fun SettingsBackRow(onBack: () -> Unit) {
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clickable(onClick = onBack)
+        .padding(horizontal = SettingsSpacing.RowHorizontal, vertical = SettingsSpacing.RowVertical),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Image(
+      painter = painterResource(id = R.drawable.ic_chevron_right_24),
+      contentDescription = null,
+      modifier = Modifier.size(20.dp).graphicsLayer(rotationZ = 180f),
+      contentScale = ContentScale.Fit,
+    )
+    Spacer(Modifier.width(SettingsSpacing.RowIconGap))
+    Text(
+      text = "返回设置",
+      color = SettingsColors.BodyText,
+      fontSize = SettingsTypography.BodySize,
+      fontWeight = SettingsTypography.BodyWeight,
+      modifier = Modifier.weight(1f),
+    )
+  }
+}
+
+@Composable
 fun SettingIcon(
   @DrawableRes iconRes: Int,
   modifier: Modifier = Modifier,
@@ -648,10 +721,21 @@ private fun Modifier.settingsButtonShadow(primary: Boolean): Modifier =
     val paint =
       Paint().asFrameworkPaint().apply {
         isAntiAlias = true
-        color = if (primary) SettingsColors.BrandPurple.toArgb() else android.graphics.Color.WHITE
+        color = if (primary) SettingsColors.Yellow.toArgb() else android.graphics.Color.WHITE
         style = android.graphics.Paint.Style.FILL
       }
-    paint.setShadowLayer(14.dp.toPx(), 0f, 5.dp.toPx(), Color(0x22660874).toArgb())
+    paint.setShadowLayer(
+      if (primary) 18.dp.toPx() else 14.dp.toPx(),
+      0f,
+      if (primary) 8.dp.toPx() else 5.dp.toPx(),
+      if (primary) Color(0x4AF2C94C).toArgb() else Color(0x22660874).toArgb(),
+    )
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    if (primary) {
+      paint.setShadowLayer(10.dp.toPx(), 0f, 3.dp.toPx(), Color(0x22660874).toArgb())
+    } else {
+      paint.setShadowLayer(6.dp.toPx(), 0f, 2.dp.toPx(), Color(0x14660874).toArgb())
+    }
     drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
     paint.clearShadowLayer()
   }

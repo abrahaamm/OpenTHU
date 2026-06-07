@@ -1,15 +1,13 @@
-package ai.opencray.app.ui.drawer
+﻿package ai.opencray.app.ui.drawer
 
 import android.graphics.RectF
-import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -47,8 +46,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,16 +61,16 @@ import ai.opencray.app.R
 import ai.opencray.app.domain.model.AppDestination
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Composable
 fun OpenCrayDrawerMenu(
   state: MainUiState,
-  quickSkillsExpanded: Boolean,
   onDestinationSelected: (AppDestination) -> Unit,
   onCreateConversation: () -> Unit,
   onConversationSelected: (String) -> Unit,
-  onQuickSkillsToggle: () -> Unit,
-  onSkillInvoked: (String) -> Unit,
+  onDeleteConversation: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -103,14 +102,8 @@ fun OpenCrayDrawerMenu(
       conversations = state.conversationSummaries,
       onCreateConversation = onCreateConversation,
       onConversationSelected = onConversationSelected,
-    )
-
-    Spacer(Modifier.height(16.dp))
-
-    QuickSkillsSection(
-      expanded = quickSkillsExpanded,
-      onToggle = onQuickSkillsToggle,
-      onSkillInvoked = onSkillInvoked,
+      onDeleteConversation = onDeleteConversation,
+      modifier = Modifier.weight(1f),
     )
   }
 }
@@ -205,10 +198,12 @@ private fun ConversationSection(
   conversations: List<ConversationSummary>,
   onCreateConversation: () -> Unit,
   onConversationSelected: (String) -> Unit,
+  onDeleteConversation: (String) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
   Column(
     modifier =
-      Modifier
+      modifier
         .fillMaxWidth()
         .roundedSection()
         .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 10.dp),
@@ -235,7 +230,7 @@ private fun ConversationSection(
         modifier =
           Modifier
             .fillMaxWidth()
-            .height(186.dp),
+            .weight(1f),
         contentAlignment = Alignment.Center,
       ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -267,13 +262,14 @@ private fun ConversationSection(
         modifier =
           Modifier
             .fillMaxWidth()
-            .height(186.dp)
+            .weight(1f)
             .verticalScroll(rememberScrollState()),
       ) {
         conversations.forEach { summary ->
           ConversationRow(
             summary = summary,
             onClick = { onConversationSelected(summary.id) },
+            onDelete = { onDeleteConversation(summary.id) },
           )
         }
       }
@@ -285,125 +281,100 @@ private fun ConversationSection(
 private fun ConversationRow(
   summary: ConversationSummary,
   onClick: () -> Unit,
+  onDelete: () -> Unit,
 ) {
+  val density = LocalDensity.current
+  val deleteWidth = 72.dp
+  val deleteWidthPx = with(density) { deleteWidth.toPx() }
+  var targetOffsetPx by remember { mutableStateOf(0f) }
+  var dragOffsetPx by remember { mutableStateOf(0f) }
+  val targetOffsetDp = with(density) { targetOffsetPx.toDp() }
+  val animatedOffset by animateDpAsState(
+    targetValue = targetOffsetDp,
+    animationSpec = tween(180, easing = CubicBezierEasing(0.2f, 0f, 0.2f, 1f)),
+    label = "conversationDeleteReveal",
+  )
+  val contentOffset =
+    if (abs(dragOffsetPx - targetOffsetPx) > 0.5f) {
+      with(density) { dragOffsetPx.toDp() }
+    } else {
+      animatedOffset
+    }
+  val revealProgress = (-with(density) { contentOffset.toPx() } / deleteWidthPx).coerceIn(0f, 1f)
+  val deleteVisibleWidth = deleteWidth * revealProgress
+  val deleteSlideOffset = deleteWidth * (1f - revealProgress)
+  val deleteAlpha = revealProgress
+
   Box(
     modifier =
       Modifier
         .fillMaxWidth()
-        .height(28.dp)
-        .conversationChrome(selected = summary.selected)
-        .clickable(onClick = onClick)
-        .padding(horizontal = 8.dp),
-    contentAlignment = Alignment.CenterStart,
+        .height(32.dp)
+        .clip(RoundedCornerShape(8.dp)),
   ) {
-    Text(
-      text = "${summary.title} \u00b7 ${summary.subtitle}",
-      color = DrawerColors.Ink,
-      fontSize = 13.sp,
-      fontFamily = FontFamily.Serif,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-  }
-}
-
-@Composable
-private fun QuickSkillsSection(
-  expanded: Boolean,
-  onToggle: () -> Unit,
-  onSkillInvoked: (String) -> Unit,
-) {
-  val skills =
-    listOf(
-      SkillItem("get_assignments", "\u8bfe\u7a0b DDL", "\u67e5\u770b\u5373\u5c06\u5230\u671f\u7684\u4f5c\u4e1a", R.drawable.ic_clock_24),
-      SkillItem("get_campus_activities", "\u6d3b\u52a8\u63a8\u8350", "\u63a2\u7d22\u6821\u56ed\u6700\u65b0\u6d3b\u52a8", R.drawable.ic_compass_24),
-      SkillItem("create_calendar_event", "\u52a0\u5165\u65e5\u5386", "\u5feb\u901f\u5b89\u6392\u65e5\u7a0b", R.drawable.ic_calendar_24),
-      SkillItem("read_notifications", "\u6574\u7406\u901a\u77e5", "\u96c6\u4e2d\u7ba1\u7406\u91cd\u8981\u4fe1\u606f", R.drawable.ic_inbox_24),
-    )
-
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .roundedSection()
-        .padding(12.dp),
-  ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      Text(
-        text = "\u5feb\u6377\u80fd\u529b",
-        color = DrawerColors.Ink,
-        fontSize = 19.sp,
-        fontWeight = FontWeight.Bold,
-        fontFamily = FontFamily.SansSerif,
-        modifier = Modifier.weight(1f),
-      )
-      SmallNeutralButton(
-        text = if (expanded) "\u6536\u8d77" else "\u5c55\u5f00",
-        onClick = onToggle,
-      )
-    }
-
-    if (expanded) {
-      Spacer(Modifier.height(10.dp))
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        skills.chunked(2).forEach { row ->
-          Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            row.forEach { skill ->
-              SkillCard(
-                item = skill,
-                onClick = { onSkillInvoked(skill.id) },
-                modifier = Modifier.weight(1f),
-              )
-            }
-            if (row.size == 1) {
-              Spacer(Modifier.weight(1f))
-            }
-          }
-        }
+    Box(
+      modifier =
+        Modifier
+          .align(Alignment.CenterEnd)
+          .offset(x = deleteSlideOffset)
+          .width(deleteVisibleWidth)
+          .height(28.dp)
+          .alpha(deleteAlpha)
+          .clickable(enabled = revealProgress > 0.92f, onClick = onDelete),
+      contentAlignment = Alignment.Center,
+    ) {
+      if (deleteVisibleWidth >= 42.dp) {
+        Text(
+          text = "删除",
+          color = DrawerColors.Danger,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.Bold,
+          maxLines = 1,
+        )
       }
     }
-  }
-}
-
-@Composable
-private fun SkillCard(
-  item: SkillItem,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Column(
-    modifier =
-      modifier
-        .height(112.dp)
-        .skillCardSurface()
-        .clickable(onClick = onClick)
-        .padding(12.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.Center,
-  ) {
-    Image(
-      painter = painterResource(item.iconRes),
-      contentDescription = null,
-      modifier = Modifier.size(28.dp),
-      contentScale = ContentScale.Fit,
-    )
-    Spacer(Modifier.height(9.dp))
-    Text(
-      text = item.title,
-      color = DrawerColors.Ink,
-      fontSize = 15.sp,
-      fontWeight = FontWeight.Bold,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-    Spacer(Modifier.height(3.dp))
-    Text(
-      text = item.subtitle,
-      color = DrawerColors.Muted,
-      fontSize = 11.sp,
-      maxLines = 2,
-      overflow = TextOverflow.Ellipsis,
-    )
+    Box(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .height(28.dp)
+          .offset(x = contentOffset)
+          .conversationChrome(selected = summary.selected)
+          .pointerInput(summary.id) {
+            detectHorizontalDragGestures(
+              onDragEnd = {
+                val shouldReveal = dragOffsetPx < -deleteWidthPx * 0.38f
+                targetOffsetPx = if (shouldReveal) -deleteWidthPx else 0f
+                dragOffsetPx = targetOffsetPx
+              },
+              onDragCancel = {
+                dragOffsetPx = targetOffsetPx
+              },
+              onHorizontalDrag = { _, dragAmount ->
+                dragOffsetPx = (dragOffsetPx + dragAmount).coerceIn(-deleteWidthPx, 0f)
+              },
+            )
+          }
+          .clickable {
+            if (targetOffsetPx < 0f) {
+              targetOffsetPx = 0f
+              dragOffsetPx = 0f
+            } else {
+              onClick()
+            }
+          }
+          .padding(horizontal = 8.dp),
+      contentAlignment = Alignment.CenterStart,
+    ) {
+      Text(
+        text = "${summary.title} \u00b7 ${summary.subtitle}",
+        color = DrawerColors.Ink,
+        fontSize = 13.sp,
+        fontFamily = FontFamily.SansSerif,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 
@@ -431,32 +402,6 @@ private fun SmallLimeButton(
   }
 }
 
-@Composable
-private fun SmallNeutralButton(
-  text: String,
-  onClick: () -> Unit,
-) {
-  Box(
-    modifier =
-      Modifier
-        .height(40.dp)
-        .clip(RoundedCornerShape(999.dp))
-        .background(DrawerColors.Card)
-        .clickable(onClick = onClick)
-        .padding(horizontal = 14.dp),
-    contentAlignment = Alignment.Center,
-  ) {
-    Text(text = text, color = DrawerColors.Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-  }
-}
-
-private data class SkillItem(
-  val id: String,
-  val title: String,
-  val subtitle: String,
-  @DrawableRes val iconRes: Int,
-)
-
 private object DrawerColors {
   val Background = Color(0xFFF8F4FA)
   val Card = Color.White
@@ -468,6 +413,8 @@ private object DrawerColors {
   val Track = Color(0xFFF0EBF3)
   val Lime = Color(0xFFB7D83A)
   val Yellow = Color(0xFFF2C94C)
+  val Danger = Color(0xFFB42318)
+  val DangerSoft = Color(0x18B42318)
 }
 
 private fun Modifier.drawerSurface(): Modifier =
@@ -593,16 +540,6 @@ private fun Modifier.limeButtonSurface(): Modifier =
     )
   }
 
-private fun Modifier.skillCardSurface(): Modifier =
-  drawBehind {
-    val radius = 20.dp.toPx()
-    drawRoundRect(color = Color.White, cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius))
-    drawRoundRect(
-      color = Color(0x08000000),
-      cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
-      style = Stroke(width = 1.dp.toPx()),
-    )
-  }
 
 private fun Modifier.conversationChrome(selected: Boolean): Modifier =
   drawBehind {
@@ -619,3 +556,32 @@ private fun Modifier.conversationChrome(selected: Boolean): Modifier =
       strokeWidth = 1.dp.toPx(),
     )
   }
+
+private fun Modifier.conversationDeleteButtonSurface(): Modifier =
+  drawBehind {
+    val rect = RectF(0f, 0f, size.width, size.height)
+    val radius = size.height / 2f
+    val paint =
+      Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        color = DrawerColors.DangerSoft.toArgb()
+        style = android.graphics.Paint.Style.FILL
+      }
+    paint.setShadowLayer(9.dp.toPx(), 0f, 4.dp.toPx(), DrawerColors.Danger.copy(alpha = 0.13f).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.setShadowLayer(7.dp.toPx(), 0f, 0f, DrawerColors.Yellow.copy(alpha = 0.13f).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.clearShadowLayer()
+    drawRoundRect(DrawerColors.DangerSoft, cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius))
+    drawRoundRect(
+      color = DrawerColors.Danger.copy(alpha = 0.22f),
+      cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
+      style = Stroke(width = 1.dp.toPx()),
+    )
+    drawRoundRect(
+      color = DrawerColors.Yellow.copy(alpha = 0.12f),
+      cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
+      style = Stroke(width = 0.7.dp.toPx()),
+    )
+  }
+

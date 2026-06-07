@@ -1,6 +1,11 @@
 ﻿package ai.opencray.app.ui
 
 import android.graphics.RectF
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -59,11 +65,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,9 +82,13 @@ import ai.opencray.app.MainUiState
 import ai.opencray.app.MainViewModel
 import ai.opencray.app.domain.model.AppDestination
 import ai.opencray.app.domain.model.ContextSignal
+import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.PlanningCard
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
+import ai.opencray.app.feature.chat.AgentEvent
+import ai.opencray.app.feature.chat.AgentEventOption
+import ai.opencray.app.feature.chat.AgentEventType
 import ai.opencray.app.feature.chat.ChatMessage
 import ai.opencray.app.feature.chat.ChatRole
 import ai.opencray.app.ui.drawer.OpenCrayDrawerMenu
@@ -112,7 +127,6 @@ fun OpenCrayComposeApp(
     drawerContent = {
       OpenCrayDrawerMenu(
         state = state,
-        quickSkillsExpanded = true,
         onDestinationSelected = { destination ->
           viewModel.selectDestination(destination)
           refresh()
@@ -128,11 +142,9 @@ fun OpenCrayComposeApp(
           refresh()
           scope.launch { drawerState.close() }
         },
-        onQuickSkillsToggle = {},
-        onSkillInvoked = { skillId ->
-          viewModel.invokeSkill(skillId)
+        onDeleteConversation = { conversationId ->
+          viewModel.deleteConversation(conversationId)
           refresh()
-          scope.launch { drawerState.close() }
         },
       )
     },
@@ -225,6 +237,19 @@ fun OpenCrayComposeApp(
         refresh()
         cleared
       },
+      onReconnectGateway = {
+        viewModel.reconnectGateway()
+        refresh()
+      },
+      onSubmitAgentDecision = { event, decision ->
+        viewModel.submitAgentDecision(
+          taskId = event.taskId,
+          requestId = event.requestId,
+          eventId = event.id,
+          decision = decision,
+        )
+        refresh()
+      },
     )
   }
 }
@@ -256,74 +281,121 @@ private fun OpenCrayMainSurface(
   onUpdatePreference: (Int, String) -> Boolean,
   onDeletePreference: (Int) -> Boolean,
   onClearAllMemory: () -> Boolean,
+  onReconnectGateway: () -> Unit,
+  onSubmitAgentDecision: (AgentEvent, String) -> Unit,
 ) {
-  Column(
+  var hadNetworkFallback by remember { mutableStateOf(false) }
+  var showConnectedCapsule by remember { mutableStateOf(false) }
+  val hasNetworkFallbackSignal = hasNetworkFallbackSignal(state)
+  val showNetworkFallback = hasNetworkFallbackSignal && recentNetworkFailureCount(state) >= 3
+  val connected = isConnectedGatewayStatus(state.snapshot.connectionStatus)
+  LaunchedEffect(showNetworkFallback, connected) {
+    if (showNetworkFallback) {
+      hadNetworkFallback = true
+      showConnectedCapsule = false
+    } else if (connected && hadNetworkFallback) {
+      showConnectedCapsule = true
+      hadNetworkFallback = false
+      delay(1800L)
+      showConnectedCapsule = false
+    }
+  }
+  val connectionCapsuleState =
+    when {
+      showNetworkFallback -> ConnectionCapsuleState.Disconnected
+      showConnectedCapsule -> ConnectionCapsuleState.Connected
+      else -> null
+    }
+
+  Box(
     modifier =
       Modifier
         .fillMaxSize()
-        .background(OpenCrayUi.Background)
-        .padding(start = 18.dp, top = 22.dp, end = 18.dp, bottom = 14.dp)
-        .imePadding(),
+        .background(OpenCrayUi.Background),
   ) {
-    TopOpenCrayBar(onMenuClick = onMenuClick)
-    Spacer(Modifier.height(12.dp))
-    when (state.currentDestination) {
-      AppDestination.Chat ->
-        ChatScreen(
-          messages = state.chatMessages,
-          selectedFileName = selectedFileName,
-          onSend = onSend,
-          onAttachClick = onAttachClick,
-          onClearAttachment = onClearAttachment,
-          onRetry = onRetry,
-          modifier = Modifier.weight(1f),
-        )
-      AppDestination.Planning ->
-        PlanningScreen(
-          state = state,
-          onMoveCard = onMovePlanningCard,
-          onDeleteCard = onDeletePlanningCard,
-          onRunAgentPlan = onRunAgentPlan,
-          onExecuteAction = onExecuteAction,
-          onSnoozeAction = onSnoozeAction,
-          onIgnoreAction = onIgnoreAction,
-          onApproveActions = onApproveActions,
-          onResolveConflict = onResolveConflict,
-          modifier = Modifier.weight(1f),
-        )
-      AppDestination.Settings ->
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-          val capabilities = state.snapshot.capabilities.associateBy { it.id }
-          SettingsScreen(
-            settings = state.settings,
-            memoryRecords = state.memoryRecords,
-            recentEvents = state.snapshot.recentEvents,
-            safetyRecords = state.safetyRecords,
-            notificationContextEnabled = capabilities["notification_context"]?.enabled == true,
-            safetyGuardEnabled = capabilities["safety_guard"]?.enabled == true,
-            onSettingsChange = onSettingsChange,
-            onSaveSettings = onSaveSettings,
-            onTestSettings = onTestSettings,
-            onConnectGateway = onConnectGateway,
-            onLaunchLearnCookieLogin = onLaunchLearnCookieLogin,
-            onToggleCapability = onToggleCapability,
-            onAddPreference = onAddPreference,
-            onUpdatePreference = onUpdatePreference,
-            onDeletePreference = onDeletePreference,
-            onClearAllMemory = onClearAllMemory,
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .padding(start = 18.dp, top = 22.dp, end = 18.dp, bottom = 14.dp)
+          .imePadding(),
+    ) {
+      TopOpenCrayBar(
+        connectionCapsuleState = connectionCapsuleState,
+        onMenuClick = onMenuClick,
+        onNetworkFallbackClick = onReconnectGateway,
+      )
+      Spacer(Modifier.height(12.dp))
+      when (state.currentDestination) {
+        AppDestination.Chat ->
+          ChatScreen(
+            messages = state.chatMessages,
+            selectedFileName = selectedFileName,
+            onSend = onSend,
+            onAttachClick = onAttachClick,
+            onClearAttachment = onClearAttachment,
+            onRetry = onRetry,
+            onSubmitAgentDecision = onSubmitAgentDecision,
+            showPlanningDetails = state.settings.showPlanningDetails,
+            modifier = Modifier.weight(1f),
           )
-        }
+        AppDestination.Planning ->
+          PlanningScreen(
+            state = state,
+            onMoveCard = onMovePlanningCard,
+            onDeleteCard = onDeletePlanningCard,
+            onRunAgentPlan = onRunAgentPlan,
+            onExecuteAction = onExecuteAction,
+            onSnoozeAction = onSnoozeAction,
+            onIgnoreAction = onIgnoreAction,
+            onApproveActions = onApproveActions,
+            onResolveConflict = onResolveConflict,
+            modifier = Modifier.weight(1f),
+          )
+        AppDestination.Settings ->
+          Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            val capabilities = state.snapshot.capabilities.associateBy { it.id }
+            SettingsScreen(
+              settings = state.settings,
+              memoryRecords = state.memoryRecords,
+              recentEvents = state.snapshot.recentEvents,
+              safetyRecords = state.safetyRecords,
+              notificationContextEnabled = capabilities["notification_context"]?.enabled == true,
+              safetyGuardEnabled = capabilities["safety_guard"]?.enabled == true,
+              onSettingsChange = onSettingsChange,
+              onSaveSettings = onSaveSettings,
+              onTestSettings = onTestSettings,
+              onConnectGateway = onConnectGateway,
+              onLaunchLearnCookieLogin = onLaunchLearnCookieLogin,
+              onToggleCapability = onToggleCapability,
+              onAddPreference = onAddPreference,
+              onUpdatePreference = onUpdatePreference,
+              onDeletePreference = onDeletePreference,
+              onClearAllMemory = onClearAllMemory,
+            )
+          }
+      }
     }
+
   }
 }
 
 @Composable
-private fun TopOpenCrayBar(onMenuClick: () -> Unit) {
+private fun TopOpenCrayBar(
+  connectionCapsuleState: ConnectionCapsuleState?,
+  onMenuClick: () -> Unit,
+  onNetworkFallbackClick: () -> Unit,
+) {
   Row(
     modifier = Modifier.fillMaxWidth(),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     SliderLikeIconButton(onClick = onMenuClick)
+    Spacer(Modifier.width(10.dp))
+    if (connectionCapsuleState != null) {
+      ConnectionStatusCapsule(state = connectionCapsuleState, onClick = onNetworkFallbackClick)
+      Spacer(Modifier.width(10.dp))
+    }
     Spacer(Modifier.weight(1f))
     Text(
       text = "OpenTHU",
@@ -334,6 +406,11 @@ private fun TopOpenCrayBar(onMenuClick: () -> Unit) {
       style = TextStyle(shadow = Shadow(Color(0x227A35D8), Offset(0f, 3f), 8f)),
     )
   }
+}
+
+private enum class ConnectionCapsuleState {
+  Disconnected,
+  Connected,
 }
 
 @Composable
@@ -357,6 +434,31 @@ private fun SliderLikeIconButton(onClick: () -> Unit) {
 }
 
 @Composable
+private fun ConnectionStatusCapsule(
+  state: ConnectionCapsuleState,
+  modifier: Modifier = Modifier,
+  onClick: () -> Unit,
+) {
+  val connected = state == ConnectionCapsuleState.Connected
+  Box(
+    modifier =
+      modifier
+        .connectionStatusSurface(connected = connected)
+        .clip(RoundedCornerShape(999.dp))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 14.dp, vertical = 8.dp),
+  ) {
+    Text(
+      text = if (connected) "已连接" else "网络未连接",
+      color = if (connected) OpenCrayUi.Success.copy(alpha = 0.92f) else OpenCrayUi.Danger.copy(alpha = 0.92f),
+      fontSize = 12.sp,
+      lineHeight = 15.sp,
+      fontWeight = FontWeight.SemiBold,
+    )
+  }
+}
+
+@Composable
 private fun ChatScreen(
   messages: List<ChatMessage>,
   selectedFileName: String,
@@ -364,11 +466,21 @@ private fun ChatScreen(
   onAttachClick: () -> Unit,
   onClearAttachment: () -> Unit,
   onRetry: (String) -> Unit,
+  onSubmitAgentDecision: (AgentEvent, String) -> Unit,
+  showPlanningDetails: Boolean,
   modifier: Modifier = Modifier,
 ) {
   var input by remember { mutableStateOf("") }
   val hiddenAssistantIds = remember { mutableStateMapOf<String, Boolean>() }
-  val visibleMessages = messages.filterNot { hiddenAssistantIds[it.id] == true }
+  val visibleMessages = messages.filterNot { hiddenAssistantIds[it.id] == true || shouldHideNetworkFallbackMessage(it) }
+  val latestAssistantMessageId = visibleMessages.lastOrNull { it.role == ChatRole.Assistant }?.id
+  val hasPendingDecision =
+    visibleMessages.any { message ->
+      message.events.any { event ->
+        (event.type == AgentEventType.ConfirmationRequired || event.type == AgentEventType.PermissionRequired) &&
+          isDecisionPending(event.status)
+      }
+    }
   val listState = rememberLazyListState()
   val scope = rememberCoroutineScope()
   val showScrollToBottom by remember {
@@ -401,12 +513,15 @@ private fun ChatScreen(
           ChatMessageItem(
             message = message,
             retryPrompt = retryPrompt,
+            showAssistantFooter = message.id == latestAssistantMessageId && !hasPendingDecision,
+            showPlanningDetails = showPlanningDetails,
             onRetry = {
               if (message.role == ChatRole.Assistant && retryPrompt.isNotBlank()) {
                 hiddenAssistantIds[message.id] = true
                 onRetry(retryPrompt)
               }
             },
+            onSubmitAgentDecision = onSubmitAgentDecision,
           )
         }
       }
@@ -444,11 +559,71 @@ private fun ChatScreen(
   }
 }
 
+private fun shouldHideNetworkFallbackMessage(message: ChatMessage): Boolean {
+  if (message.role != ChatRole.System) return false
+  val text = message.text
+  return text.contains("Agent-Core", ignoreCase = true) &&
+    (
+      text.contains("NETWORK_ERROR", ignoreCase = true) ||
+        text.contains("连接成功") ||
+        text.contains("连接失败") ||
+        text.contains("lastResultCode") ||
+        text.contains("杩炴帴鎴愬姛") ||
+        text.contains("杩炴帴澶辫触")
+    )
+}
+
+private fun isConnectedGatewayStatus(status: String): Boolean =
+  status.contains("已连接") ||
+    status.contains("Connected", ignoreCase = true) ||
+    status.contains("宸茶繛")
+
+private fun hasNetworkFallbackSignal(state: MainUiState): Boolean {
+  val status = state.snapshot.connectionStatus
+  if (isConnectedGatewayStatus(status)) return false
+  val statusLooksDisconnected =
+    status.contains("未连接") ||
+      status.contains("failed", ignoreCase = true) ||
+      status.contains("NETWORK_ERROR", ignoreCase = true) ||
+      status.contains("鏈嶅姟鍣ㄦ湭")
+  val recentNetworkFailure =
+    state.snapshot.recentEvents.any { event ->
+      event.contains("NETWORK_ERROR", ignoreCase = true) ||
+        event.contains("Gateway register failed", ignoreCase = true) ||
+        event.contains("Gateway plan failed", ignoreCase = true)
+    }
+  return statusLooksDisconnected || recentNetworkFailure
+}
+
+private fun recentNetworkFailureCount(state: MainUiState): Int {
+  val status = state.snapshot.connectionStatus
+  val statusFailure =
+    status.contains("NETWORK_ERROR", ignoreCase = true) ||
+      status.contains("failed", ignoreCase = true) ||
+      status.contains("连接失败") ||
+      status.contains("未连接") ||
+      status.contains("鏈嶅姟鍣ㄦ湭")
+  val eventFailures =
+    state.snapshot.recentEvents.count { event ->
+      event.contains("NETWORK_ERROR", ignoreCase = true) ||
+        event.contains("Gateway register failed", ignoreCase = true) ||
+        event.contains("Gateway plan failed", ignoreCase = true) ||
+        event.contains("Gateway dispatch failed", ignoreCase = true) ||
+        event.contains("Gateway result failed", ignoreCase = true) ||
+        event.contains("timeout", ignoreCase = true) ||
+        event.contains("unexpected end of stream", ignoreCase = true)
+    }
+  return eventFailures + if (statusFailure) 1 else 0
+}
+
 @Composable
 private fun ChatMessageItem(
   message: ChatMessage,
   retryPrompt: String,
+  showAssistantFooter: Boolean,
+  showPlanningDetails: Boolean,
   onRetry: () -> Unit,
+  onSubmitAgentDecision: (AgentEvent, String) -> Unit,
 ) {
   when (message.role) {
     ChatRole.User -> {
@@ -461,7 +636,7 @@ private fun ChatMessageItem(
               .background(OpenCrayUi.UserBubble)
               .padding(horizontal = 14.dp, vertical = 11.dp),
         ) {
-          Text(text = message.text, color = OpenCrayUi.Ink, fontSize = 15.sp, lineHeight = 21.sp)
+          MarkdownText(text = message.text, color = OpenCrayUi.Ink, fontSize = 15, lineHeight = 21)
         }
       }
     }
@@ -469,13 +644,48 @@ private fun ChatMessageItem(
     ChatRole.System,
     -> {
       Column(Modifier.fillMaxWidth()) {
-        Text(
-          text = message.text,
-          color = OpenCrayUi.Ink,
-          fontSize = 15.sp,
-          lineHeight = 23.sp,
-        )
-        if (message.role == ChatRole.Assistant && message.text.isNotBlank()) {
+        val toolEvents =
+          if (showPlanningDetails) {
+            message.events.filter { it.type == AgentEventType.ToolCall || it.type == AgentEventType.ToolResult }
+          } else {
+            emptyList()
+          }
+        if (toolEvents.isNotEmpty()) {
+          ToolProcessBlock(events = toolEvents)
+          if (displayableAssistantText(message.text).isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+          }
+        }
+        val confirmationEvents =
+          message.events.filter { it.type == AgentEventType.ConfirmationRequired || it.type == AgentEventType.PermissionRequired }
+        if (confirmationEvents.isNotEmpty()) {
+          ConfirmationRequestBlock(
+            events = confirmationEvents,
+            onSubmitAgentDecision = onSubmitAgentDecision,
+          )
+          if (displayableAssistantText(message.text).isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+          }
+        }
+        val displayText = displayableAssistantText(message.text)
+        if (displayText.isNotBlank()) {
+          MarkdownText(
+            text = displayText,
+            color = OpenCrayUi.Ink,
+            fontSize = 15,
+            lineHeight = 23,
+          )
+        }
+        val hasAssistantFinal = message.events.any { it.type == AgentEventType.AssistantFinal }
+        if (message.role == ChatRole.Assistant && displayText.isBlank() && !hasAssistantFinal && confirmationEvents.isEmpty()) {
+          ThinkingDots()
+        }
+        val isCompleteAssistantMessage =
+          message.role == ChatRole.Assistant &&
+            showAssistantFooter &&
+            displayText.isNotBlank() &&
+            (message.events.isEmpty() || hasAssistantFinal)
+        if (isCompleteAssistantMessage) {
           Spacer(Modifier.height(9.dp))
           AssistantActionStrip(
             answer = message.text,
@@ -498,6 +708,336 @@ private fun ChatMessageItem(
       }
     }
   }
+}
+
+@Composable
+private fun ToolProcessBlock(events: List<AgentEvent>) {
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    events.forEach { event ->
+      Text(
+        text = toolProcessText(event),
+        color = OpenCrayUi.Muted.copy(alpha = 0.82f),
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
+      )
+    }
+  }
+}
+
+@Composable
+private fun ConfirmationRequestBlock(
+  events: List<AgentEvent>,
+  onSubmitAgentDecision: (AgentEvent, String) -> Unit,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    events.forEach { event ->
+      Column(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .confirmationRequestSurface()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+      ) {
+        Text(
+          text = confirmationTitle(event),
+          color = OpenCrayUi.BrandPurple,
+          fontSize = 13.sp,
+          fontWeight = FontWeight.Bold,
+          lineHeight = 18.sp,
+        )
+        val detail = event.content.ifBlank { event.title }.trim()
+        if (detail.isNotBlank()) {
+          Spacer(Modifier.height(5.dp))
+          Text(
+            text = detail,
+            color = OpenCrayUi.Muted,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+          )
+        }
+        Spacer(Modifier.height(9.dp))
+        val pending = isDecisionPending(event.status)
+        if (pending) {
+          Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+            decisionOptions(event).forEach { option ->
+              val primary = isApproveDecision(option.value)
+              ConfirmationDecisionButton(
+                text = option.label.ifBlank { if (primary) "确认" else "拒绝" },
+                primary = primary,
+                onClick = { onSubmitAgentDecision(event, option.value.ifBlank { if (primary) "approve" else "reject" }) },
+              )
+            }
+          }
+        } else {
+          Text(
+            text = confirmationStatusText(event.status),
+            color = if (event.status.equals("approved", ignoreCase = true)) OpenCrayUi.Success else OpenCrayUi.Danger,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ConfirmationDecisionButton(
+  text: String,
+  primary: Boolean,
+  onClick: () -> Unit,
+) {
+  Box(
+    modifier =
+      Modifier
+        .height(34.dp)
+        .confirmationButtonSurface(primary = primary)
+        .clip(RoundedCornerShape(999.dp))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 14.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      text = text,
+      color = if (primary) OpenCrayUi.Ink else OpenCrayUi.Danger,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.Bold,
+      maxLines = 1,
+    )
+  }
+}
+
+private fun confirmationTitle(event: AgentEvent): String {
+  val name = event.skillName.ifBlank { event.title }.ifBlank { "高危动作" }
+  return when (event.type) {
+    AgentEventType.PermissionRequired -> "需要权限确认：$name"
+    else -> "执行前需要确认：$name"
+  }
+}
+
+private fun decisionOptions(event: AgentEvent): List<AgentEventOption> {
+  val options = event.options.filter { it.value.isNotBlank() || it.label.isNotBlank() }
+  if (options.isNotEmpty()) return options
+  return listOf(
+    AgentEventOption(label = "确认", value = "approve"),
+    AgentEventOption(label = "拒绝", value = "reject"),
+  )
+}
+
+private fun isApproveDecision(value: String): Boolean {
+  val normalized = value.lowercase()
+  return normalized in setOf("approve", "approved", "allow", "allowed", "confirm", "yes", "true")
+}
+
+private fun isDecisionPending(status: String): Boolean {
+  val normalized = status.lowercase()
+  return normalized.isBlank() ||
+    normalized in setOf("pending", "queued", "required", "awaiting_confirmation", "confirmation_required")
+}
+
+private fun confirmationStatusText(status: String): String =
+  when (status.lowercase()) {
+    "submitting" -> "正在提交确认..."
+    "approved" -> "已确认"
+    "rejected" -> "已拒绝"
+    "failed" -> "确认提交失败"
+    else -> status.ifBlank { "等待确认" }
+  }
+
+private fun toolProcessText(event: AgentEvent): String {
+  val name = event.skillName.ifBlank { event.title }.ifBlank { "未知工具" }
+  val status = event.status.ifBlank { "running" }
+  val content = event.content.replace(Regex("\\s+"), " ").take(96)
+  val suffix = if (content.isBlank()) "" else " · $content"
+  return when (event.type) {
+    AgentEventType.ToolCall -> "调用工具：$name · $status$suffix"
+    AgentEventType.ToolResult -> "工具结果：$name · $status$suffix"
+    else -> "$name · $status$suffix"
+  }
+}
+
+private fun displayableAssistantText(text: String): String =
+  text
+    .replace("鈥?", "")
+    .replace("�", "")
+    .replace("我先理解你的意思。", "")
+    .replace("我先理解你的意思", "")
+    .replace("…", "")
+    .trim()
+
+@Composable
+private fun ThinkingDots() {
+  val transition = rememberInfiniteTransition(label = "thinkingDots")
+  val phase by transition.animateFloat(
+    initialValue = 0f,
+    targetValue = 1f,
+    animationSpec = infiniteRepeatable(animation = tween(durationMillis = 1200, easing = LinearEasing)),
+    label = "thinkingDotsPhase",
+  )
+  Row(
+    modifier = Modifier.padding(start = 2.dp, top = 3.dp, bottom = 3.dp),
+    horizontalArrangement = Arrangement.spacedBy(7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    repeat(3) { index ->
+      val progress = dotPulseProgress(phase, index)
+      val size = 5.5f + progress * 4.5f
+      val alpha = 0.42f + progress * 0.5f
+      Box(
+        modifier =
+          Modifier
+            .size(size.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(OpenCrayUi.MenuBrandPurple.copy(alpha = alpha)),
+      )
+    }
+  }
+}
+
+private fun dotPulseProgress(
+  phase: Float,
+  index: Int,
+): Float {
+  val shifted = (phase - index * 0.18f + 1f) % 1f
+  val wave =
+    when {
+      shifted < 0.5f -> shifted * 2f
+      else -> (1f - shifted) * 2f
+    }
+  return wave.coerceIn(0f, 1f)
+}
+
+@Composable
+private fun MarkdownText(
+  text: String,
+  color: Color,
+  fontSize: Int,
+  lineHeight: Int,
+) {
+  val uriHandler = LocalUriHandler.current
+  val annotated = remember(text) { markdownRichText(text) }
+  ClickableText(
+    text = annotated,
+    style =
+      TextStyle(
+        color = color,
+        fontSize = fontSize.sp,
+        lineHeight = lineHeight.sp,
+      ),
+    onClick = { offset ->
+      annotated
+        .getStringAnnotations(tag = MarkdownUrlTag, start = offset, end = offset)
+        .firstOrNull()
+        ?.let { annotation ->
+          runCatching { uriHandler.openUri(annotation.item) }
+        }
+    },
+  )
+}
+
+private const val MarkdownUrlTag = "URL"
+
+private fun markdownRichText(text: String): AnnotatedString =
+  buildAnnotatedString {
+    val linkRegex = Regex("""\[([^\]]+)]\(([^)\s]+)\)""")
+    var index = 0
+    linkRegex.findAll(text).forEach { match ->
+      val start = match.range.first
+      if (start > index) {
+        appendMarkdownBold(text.substring(index, start))
+      }
+      val label = match.groupValues[1]
+      val url = normalizeMarkdownUrl(match.groupValues[2])
+      pushStringAnnotation(tag = MarkdownUrlTag, annotation = url)
+      withStyle(
+        SpanStyle(
+          color = OpenCrayUi.MenuBrandPurple,
+          fontWeight = FontWeight.SemiBold,
+          textDecoration = TextDecoration.Underline,
+        ),
+      ) {
+        appendMarkdownBold(label)
+      }
+      pop()
+      index = match.range.last + 1
+    }
+    if (index < text.length) {
+      appendMarkdownBold(text.substring(index))
+    }
+  }
+
+private fun normalizeMarkdownUrl(raw: String): String {
+  val value = raw.trim()
+  return when {
+    value.startsWith("http://", ignoreCase = true) -> value
+    value.startsWith("https://", ignoreCase = true) -> value
+    value.startsWith("mailto:", ignoreCase = true) -> value
+    else -> "https://$value"
+  }
+}
+
+private fun AnnotatedString.Builder.appendMarkdownBold(text: String) {
+  var index = 0
+  while (index < text.length) {
+    val start = text.indexOf("**", index)
+    val singleStart = text.indexOf("*", index)
+    val markerStart =
+      when {
+        singleStart < 0 -> -1
+        start < 0 -> singleStart
+        else -> minOf(start, singleStart)
+      }
+    if (markerStart < 0) {
+      append(text.substring(index))
+      break
+    }
+    append(text.substring(index, markerStart))
+    val delimiterLength = boldDelimiterLength(text, markerStart)
+    val contentStart = markerStart + delimiterLength
+    if (contentStart >= text.length || text[contentStart].isWhitespace()) {
+      append(text[markerStart])
+      index = markerStart + 1
+      continue
+    }
+    val end = findBoldEnd(text, contentStart, delimiterLength)
+    if (end < 0) {
+      append(text.substring(markerStart))
+      break
+    }
+    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+      append(text.substring(contentStart, end))
+    }
+    index = end + delimiterLength
+  }
+}
+
+private fun boldDelimiterLength(text: String, start: Int): Int {
+  var count = 0
+  while (start + count < text.length && text[start + count] == '*') {
+    count += 1
+  }
+  return when {
+    count >= 4 -> 4
+    count >= 2 -> 2
+    else -> 1
+  }
+}
+
+private fun findBoldEnd(
+  text: String,
+  start: Int,
+  delimiterLength: Int,
+): Int {
+  val delimiter = "*".repeat(delimiterLength)
+  var index = text.indexOf(delimiter, start)
+  while (index >= 0) {
+    val previous = text.getOrNull(index - 1)
+    if (previous != null && !previous.isWhitespace()) {
+      return index
+    }
+    index = text.indexOf(delimiter, index + delimiterLength)
+  }
+  return -1
 }
 
 @Composable
@@ -657,10 +1197,13 @@ private fun PlanningScreen(
   onResolveConflict: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val focusedAction = focusedAction(state.systemActions)
+  var showMemoryPanel by remember { mutableStateOf(false) }
+
   LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-    item { PlanningOverview(state = state) }
-    item { PlanningFocus(state = state) }
+    item { PlanningOverview(state = state, onMemoryClick = { showMemoryPanel = !showMemoryPanel }) }
+    if (showMemoryPanel) {
+      item { MemoryInspectorSection(memoryRecords = state.memoryRecords) }
+    }
     item {
       Column {
         SectionTitle("规划卡片")
@@ -672,65 +1215,26 @@ private fun PlanningScreen(
         )
       }
     }
-    item { PlanningContextSection(state = state) }
-    item {
-      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        PlanningMiniSection(
-          title = "课程与提醒",
-          body = planningScheduleText(state),
-          secondaryBody = planningAlarmText(state),
-          modifier = Modifier.weight(1f),
-        )
-        PlanningMiniSection(
-          title = "待办与节奏",
-          body = planningTodoText(state),
-          secondaryBody = homeQuickActionsText(),
-          modifier = Modifier.weight(1f),
-        )
-      }
-    }
-    item { PlanningFlowSection() }
-    item {
-      ActionsPanel(
-        state = state,
-        focusedAction = focusedAction,
-        onRunAgentPlan = onRunAgentPlan,
-        onExecuteAction = onExecuteAction,
-        onSnoozeAction = onSnoozeAction,
-        onIgnoreAction = onIgnoreAction,
-        onApproveActions = onApproveActions,
-        onResolveConflict = onResolveConflict,
-      )
-    }
-    item { SafetyAndEventsSection(state = state) }
   }
 }
 
 @Composable
-private fun PlanningOverview(state: MainUiState) {
+private fun PlanningOverview(
+  state: MainUiState,
+  onMemoryClick: () -> Unit,
+) {
   Column(
     modifier =
       Modifier
         .fillMaxWidth()
-        .heroPlanningSurface()
-        .padding(16.dp),
+        .planningStatsSurface()
+        .padding(14.dp),
   ) {
-    Text("PLAN OVERVIEW", color = Color.White.copy(alpha = 0.9f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-    Spacer(Modifier.height(6.dp))
-    Text("今日计划中心", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-    Spacer(Modifier.height(12.dp))
-    Text(
-      text = "今天的工作台已经为你收拢了任务、动作、提醒与长期偏好。\n先看当前焦点，再决定是继续执行、补充计划，还是调整提醒节奏。",
-      color = Color.White,
-      fontSize = 14.sp,
-      lineHeight = 20.sp,
-    )
-    Spacer(Modifier.height(14.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       MetricTile("任务", state.tasks.size.toString(), Modifier.weight(1f))
       MetricTile("动作", state.systemActions.size.toString(), Modifier.weight(1f))
       MetricTile("提醒", state.safetyRecords.size.toString(), Modifier.weight(1f))
-      MetricTile("记忆", state.memoryRecords.size.toString(), Modifier.weight(1f))
+      MetricTile("记忆", state.memoryRecords.size.toString(), Modifier.weight(1f), onClick = onMemoryClick)
     }
   }
 }
@@ -740,17 +1244,147 @@ private fun MetricTile(
   label: String,
   value: String,
   modifier: Modifier = Modifier,
+  onClick: (() -> Unit)? = null,
+) {
+  val tileModifier = if (onClick == null) modifier else modifier.clickable(onClick = onClick)
+  Column(
+    modifier =
+      tileModifier
+        .metricTileSurface()
+        .padding(10.dp),
+  ) {
+    Text(label, color = OpenCrayUi.Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(4.dp))
+    Text(value, color = OpenCrayUi.BrandPurple, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+  }
+}
+
+@Composable
+private fun MemoryInspectorSection(memoryRecords: List<MemoryRecord>) {
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .planningCardSurface()
+        .padding(14.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      SectionTitle("系统记忆")
+      Spacer(Modifier.weight(1f))
+      Text(
+        text = "${memoryRecords.size} 条",
+        color = OpenCrayUi.BrandPurple,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+      )
+    }
+    Spacer(Modifier.height(10.dp))
+    if (memoryRecords.isEmpty()) {
+      Text(
+        text = "暂无记忆。发送一条消息后，系统会立即写入短期记忆。",
+        color = OpenCrayUi.Muted,
+        fontSize = 13.sp,
+        lineHeight = 19.sp,
+      )
+      return@Column
+    }
+
+    MemoryScopeBlock(
+      title = "短期记忆",
+      description = "最近用户目标，用于当前几轮对话和任务规划。",
+      records = memoryRecords.filter { it.scope.equals("short", ignoreCase = true) },
+    )
+    Spacer(Modifier.height(10.dp))
+    MemoryScopeBlock(
+      title = "中期记忆",
+      description = "近期校园焦点、动作反馈和可复用上下文。",
+      records = memoryRecords.filter { it.scope.equals("mid", ignoreCase = true) },
+    )
+    Spacer(Modifier.height(10.dp))
+    MemoryScopeBlock(
+      title = "长期偏好",
+      description = "用户明确保存或系统识别出的稳定偏好。",
+      records = memoryRecords.filter { it.scope.equals("long", ignoreCase = true) },
+    )
+  }
+}
+
+@Composable
+private fun MemoryScopeBlock(
+  title: String,
+  description: String,
+  records: List<MemoryRecord>,
 ) {
   Column(
     modifier =
-      modifier
-        .clip(RoundedCornerShape(14.dp))
-        .background(Color.White.copy(alpha = 0.82f))
-        .padding(10.dp),
+      Modifier
+        .fillMaxWidth()
+        .metricTileSurface()
+        .padding(12.dp),
   ) {
-    Text(label, color = OpenCrayUi.BrandPurple, fontSize = 11.sp)
-    Spacer(Modifier.height(4.dp))
-    Text(value, color = OpenCrayUi.BrandPurple, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(title, color = OpenCrayUi.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+      Spacer(Modifier.width(8.dp))
+      Text("${records.size}", color = OpenCrayUi.BrandPurple, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
+    Spacer(Modifier.height(3.dp))
+    Text(description, color = OpenCrayUi.Muted, fontSize = 11.sp, lineHeight = 16.sp)
+    Spacer(Modifier.height(8.dp))
+    if (records.isEmpty()) {
+      Text("暂无", color = OpenCrayUi.Muted, fontSize = 12.sp)
+    } else {
+      records
+        .sortedByDescending { it.updatedAtEpochMs }
+        .take(8)
+        .forEach { record ->
+          MemoryRecordRow(record)
+          Spacer(Modifier.height(7.dp))
+        }
+    }
+  }
+}
+
+@Composable
+private fun MemoryRecordRow(record: MemoryRecord) {
+  Column {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(
+        text = record.key,
+        color = OpenCrayUi.BrandPurple,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f),
+      )
+      Text(
+        text = "w${record.weight} · ${formatMemoryAge(record.updatedAtEpochMs)}",
+        color = OpenCrayUi.Muted,
+        fontSize = 11.sp,
+      )
+    }
+    Spacer(Modifier.height(3.dp))
+    Text(
+      text = record.value,
+      color = OpenCrayUi.Ink,
+      fontSize = 12.sp,
+      lineHeight = 17.sp,
+      maxLines = 3,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+private fun formatMemoryAge(updatedAtEpochMs: Long): String {
+  val elapsedMs = (System.currentTimeMillis() - updatedAtEpochMs).coerceAtLeast(0L)
+  val minute = 60_000L
+  val hour = 60L * minute
+  val day = 24L * hour
+  return when {
+    elapsedMs < minute -> "刚刚"
+    elapsedMs < hour -> "${elapsedMs / minute} 分钟前"
+    elapsedMs < day -> "${elapsedMs / hour} 小时前"
+    else -> "${elapsedMs / day} 天前"
   }
 }
 
@@ -1268,6 +1902,10 @@ private object OpenCrayUi {
   val BrandPurple = Color(0xFF660874)
   val MenuBrandPurple = Color(0xFF7A35D8)
   val Yellow = Color(0xFFF2C94C)
+  val Danger = Color(0xFFB42318)
+  val DangerSoft = Color(0x18B42318)
+  val Success = Color(0xFF0F6F55)
+  val SuccessSoft = Color(0x180F6F55)
   val UserBubble = Color(0xFFE5DCE9)
 }
 
@@ -1345,6 +1983,146 @@ private fun Modifier.scrollToBottomSurface(): Modifier =
       strokeWidth = 1.dp.toPx(),
       cap = StrokeCap.Round,
     )
+  }
+
+private fun Modifier.connectionStatusSurface(connected: Boolean): Modifier =
+  drawBehind {
+    val rect = RectF(0f, 0f, size.width, size.height)
+    val radius = size.height / 2f
+    val mainColor = if (connected) OpenCrayUi.Success else OpenCrayUi.Danger
+    val fillColor = if (connected) OpenCrayUi.SuccessSoft else OpenCrayUi.DangerSoft
+    val paint =
+      Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        color = fillColor.toArgb()
+        style = android.graphics.Paint.Style.FILL
+      }
+    paint.setShadowLayer(10.dp.toPx(), 0f, 4.dp.toPx(), mainColor.copy(alpha = 0.14f).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.setShadowLayer(7.dp.toPx(), 0f, 0f, OpenCrayUi.Yellow.copy(alpha = if (connected) 0.18f else 0.12f).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.clearShadowLayer()
+    drawRoundRect(fillColor, cornerRadius = CornerRadius(radius, radius))
+    drawRoundRect(
+      color = mainColor.copy(alpha = 0.22f),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 1.dp.toPx()),
+    )
+    drawRoundRect(
+      color = OpenCrayUi.Yellow.copy(alpha = 0.12f),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 0.7.dp.toPx()),
+    )
+  }
+
+private fun Modifier.planningStatsSurface(): Modifier =
+  drawBehind {
+    val rect = RectF(0f, 0f, size.width, size.height)
+    val radius = 22.dp.toPx()
+    val paint =
+      Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.FILL
+      }
+    paint.setShadowLayer(18.dp.toPx(), 0f, 7.dp.toPx(), Color(0x18660874).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.setShadowLayer(14.dp.toPx(), 0f, 0f, Color(0x22F2C94C).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.clearShadowLayer()
+    drawRoundRect(Color.White.copy(alpha = 0.76f), cornerRadius = CornerRadius(radius, radius))
+    drawRoundRect(
+      color = Color(0x1F660874),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 1.dp.toPx()),
+    )
+    drawRoundRect(
+      color = Color(0x24F2C94C),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 0.8.dp.toPx()),
+    )
+  }
+
+private fun Modifier.metricTileSurface(): Modifier =
+  drawBehind {
+    val rect = RectF(0f, 0f, size.width, size.height)
+    val radius = 14.dp.toPx()
+    drawRoundRect(Color(0xFFFDFBFF).copy(alpha = 0.9f), cornerRadius = CornerRadius(radius, radius))
+    drawRoundRect(
+      color = Color(0x18660874),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 1.dp.toPx()),
+    )
+    drawLine(
+      color = Color.White.copy(alpha = 0.86f),
+      start = Offset(radius, 1.dp.toPx()),
+      end = Offset(size.width - radius, 1.dp.toPx()),
+      strokeWidth = 1.dp.toPx(),
+      cap = StrokeCap.Round,
+    )
+  }
+
+private fun Modifier.confirmationRequestSurface(): Modifier =
+  drawBehind {
+    val rect = RectF(0f, 0f, size.width, size.height)
+    val radius = 16.dp.toPx()
+    val paint =
+      Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.FILL
+      }
+    paint.setShadowLayer(12.dp.toPx(), 0f, 4.dp.toPx(), Color(0x12660874).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.setShadowLayer(10.dp.toPx(), 0f, 0f, Color(0x18F2C94C).toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    paint.clearShadowLayer()
+    drawRoundRect(Color.White.copy(alpha = 0.78f), cornerRadius = CornerRadius(radius, radius))
+    drawRoundRect(
+      color = Color(0x18660874),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 1.dp.toPx()),
+    )
+    drawRoundRect(
+      color = Color(0x18F2C94C),
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 0.8.dp.toPx()),
+    )
+  }
+
+private fun Modifier.confirmationButtonSurface(primary: Boolean): Modifier =
+  drawBehind {
+    val rect = RectF(0f, 0f, size.width, size.height)
+    val radius = size.height / 2f
+    val fill = if (primary) Color(0xFFE7F6D5).copy(alpha = 0.96f) else OpenCrayUi.DangerSoft
+    val border = if (primary) Color(0xFF5D8F28).copy(alpha = 0.62f) else OpenCrayUi.Danger.copy(alpha = 0.22f)
+    val shadow = if (primary) Color(0x2E5D8F28) else OpenCrayUi.Danger.copy(alpha = 0.12f)
+    val paint =
+      Paint().asFrameworkPaint().apply {
+        isAntiAlias = true
+        color = fill.toArgb()
+        style = android.graphics.Paint.Style.FILL
+      }
+    paint.setShadowLayer(10.dp.toPx(), 0f, 4.dp.toPx(), shadow.toArgb())
+    drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    if (primary) {
+      paint.setShadowLayer(9.dp.toPx(), 0f, 0f, OpenCrayUi.Yellow.copy(alpha = 0.2f).toArgb())
+      drawContext.canvas.nativeCanvas.drawRoundRect(rect, radius, radius, paint)
+    }
+    paint.clearShadowLayer()
+    drawRoundRect(fill, cornerRadius = CornerRadius(radius, radius))
+    drawRoundRect(
+      color = border,
+      cornerRadius = CornerRadius(radius, radius),
+      style = Stroke(width = 1.dp.toPx()),
+    )
+    if (primary) {
+      drawRoundRect(
+        color = OpenCrayUi.Yellow.copy(alpha = 0.16f),
+        cornerRadius = CornerRadius(radius, radius),
+        style = Stroke(width = 0.7.dp.toPx()),
+      )
+    }
   }
 
 private fun Modifier.selectedIconGlow(): Modifier =

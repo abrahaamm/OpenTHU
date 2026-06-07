@@ -40,6 +40,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("agent_core_server")
 DEVICE_RESULT_WAIT_HEARTBEAT_SECONDS = 8.0
 DEVICE_RESULT_WAIT_TIMEOUT_SECONDS = 300.0
+DEVICE_RESULT_WAIT_MAX_HEARTBEATS = 5
 DEBUG_LOG_VALUE_LIMIT = 6000
 DEVICE_EXECUTED_SKILLS = {
     "get_campus_activities",
@@ -1993,7 +1994,13 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                         )
                     )
                     wait_started = time.monotonic()
-                    while pending_ids and time.monotonic() - wait_started < DEVICE_RESULT_WAIT_TIMEOUT_SECONDS:
+                    wait_heartbeat_count = 0
+                    while (
+                        pending_ids
+                        and wait_heartbeat_count < DEVICE_RESULT_WAIT_MAX_HEARTBEATS
+                        and time.monotonic() - wait_started < DEVICE_RESULT_WAIT_TIMEOUT_SECONDS
+                    ):
+                        wait_heartbeat_count += 1
                         last_updated_at = str(task_doc.get("updated_at", ""))
                         waited_task = store.wait_for_task_update(
                             task_id=task_id,
@@ -2008,15 +2015,30 @@ def create_app(agent: OpenTHULangGraphAgent, store: AgentCoreStore) -> FastAPI:
                             yield encode_ndjson(
                                 agent_event(
                                     "tool_call",
-                                    title="等待手机端执行结果",
-                                    content=f"还在等待 {len(pending_ids)} 个端侧步骤完成。",
+                                    title="\u7b49\u5f85\u624b\u673a\u7aef\u6267\u884c\u7ed3\u679c",
+                                    content=(
+                                        f"\u8fd8\u5728\u7b49\u5f85 {len(pending_ids)} \u4e2a\u7aef\u4fa7\u6b65\u9aa4\u5b8c\u6210\uff0c"
+                                        f"\u7b2c {wait_heartbeat_count}/{DEVICE_RESULT_WAIT_MAX_HEARTBEATS} \u6b21\u3002"
+                                    ),
                                     task_id=task_id,
                                     status="waiting",
+                                    data={
+                                        "wait_attempt": wait_heartbeat_count,
+                                        "max_wait_attempts": DEVICE_RESULT_WAIT_MAX_HEARTBEATS,
+                                        "pending_request_ids": pending_ids,
+                                    },
                                 )
                             )
 
                     timed_out_ids = pending_runtime_request_ids(task_doc)
                     if timed_out_ids:
+                        logger.warning(
+                            "[result] stop waiting for device results task_id=%s pending=%s wait_attempts=%d/%d",
+                            task_id,
+                            timed_out_ids,
+                            wait_heartbeat_count,
+                            DEVICE_RESULT_WAIT_MAX_HEARTBEATS,
+                        )
                         task_doc = store.mark_device_results_timeout(
                             task_id=task_id,
                             request_ids=timed_out_ids,

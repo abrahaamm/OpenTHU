@@ -510,8 +510,15 @@ class OpenCrayRuntime(
       return
     }
 
+    if (isNotificationReadAction(action) && !notificationContextEnabled()) {
+      runtimeRepository.appendEvent("Notification context is disabled; skipped ${action.id}.")
+      return
+    }
+
     val reviewedStatus =
       if (action.status == "approved") {
+        "Approved"
+      } else if (!safetyGuardEnabled()) {
         "Approved"
       } else {
         current.safetyRecords.firstOrNull { it.actionId == action.id }?.status
@@ -666,6 +673,7 @@ class OpenCrayRuntime(
 
     markUserActivity()
     chatRepository.sendMessage(displayGoal)
+    recordGoalMemory(displayGoal)
 
     if (maybeDeleteManualPlanningCard(displayGoal)) {
       return false
@@ -688,6 +696,18 @@ class OpenCrayRuntime(
 
     streamAssistant(agentCoreUnavailableMessage())
     return false
+  }
+
+  private fun recordGoalMemory(goal: String) {
+    val current = snapshot()
+    val updated = memoryManager.updateFromGoal(current.memoryRecords, goal)
+    if (updated == current.memoryRecords) return
+    runtimeRepository.replaceSnapshot(
+      current.copy(
+        memoryRecords = updated,
+        recentEvents = listOf("Short-term memory updated.") + current.recentEvents,
+      ),
+    )
   }
 
   private fun maybeDeleteManualPlanningCard(message: String): Boolean {
@@ -909,6 +929,14 @@ class OpenCrayRuntime(
               chatRepository.appendEvent(id, event.toChatEvent())
               if (event.type == "tool_call" || event.type == "tool_result") {
                 streamEventPlanningCard(event)?.let { upsertPlanningCard(it) }
+              }
+              if ((event.type == "confirmation_required" || event.type == "permission_required") && !safetyGuardEnabled()) {
+                submitAgentDecision(
+                  taskId = event.taskId,
+                  requestId = event.requestId,
+                  eventId = event.eventId,
+                  decision = "approve",
+                )
               }
               if (event.type == "tool_call" && event.status == "queued") {
                 if (event.taskId.isNotBlank()) {
@@ -1154,8 +1182,9 @@ class OpenCrayRuntime(
     runtimeRepository.appendEvent("Chat history cleared from prototype UI.")
   }
 
-  private fun supportedGatewayCapabilities(): List<String> =
-    listOf(
+  private fun supportedGatewayCapabilities(): List<String> {
+    val base =
+      listOf(
       "get_current_time",
       "set_alarm",
       "get_semesters",
@@ -1179,6 +1208,8 @@ class OpenCrayRuntime(
       "show_summary",
       "send_notification",
     )
+    return if (notificationContextEnabled()) base else base.filterNot { it == "read_notifications" }
+  }
 
   private fun currentGatewayConfig(): GatewayConfig {
     val current = snapshot()
@@ -1250,7 +1281,13 @@ class OpenCrayRuntime(
     if (searchApiKey.isNotEmpty()) session["search_api_key"] = searchApiKey
     if (searchScene.isNotEmpty()) session["search_scene"] = searchScene
     if (searchTtl.isNotEmpty()) session["search_ttl"] = searchTtl
-    if (memoryContext.isNotEmpty()) session["memory_context"] = memoryContext
+    if (memoryContext.isNotEmpty()) {
+      session["memory_context"] = memoryContext
+      val excludeKeywords = memoryContext["exclude_keywords"]
+      if (excludeKeywords is List<*> && excludeKeywords.isNotEmpty()) {
+        session["search_exclude_keywords"] = excludeKeywords
+      }
+    }
     return session
   }
 
@@ -1273,6 +1310,7 @@ class OpenCrayRuntime(
     if (entries.isEmpty()) return emptyMap()
     val policy = memoryPolicy()
     val valueLimit = profile.memoryValueCharLimit
+    val excludeKeywords = memorySearchExcludeKeywords(entries)
     return mapOf(
       "summary" to memorySummaryText(entries, valueLimit = (valueLimit / 2).coerceAtLeast(120)).take(profile.memorySummaryCharLimit),
       "policy" to mapOf(
@@ -1280,6 +1318,11 @@ class OpenCrayRuntime(
         "mid_ttl_days" to policy.midTtlDays,
         "short_ttl_days" to policy.shortTtlDays,
         "half_life_days" to policy.halfLifeDays,
+      ),
+      "exclude_keywords" to excludeKeywords,
+      "hard_constraints" to mapOf(
+        "exclude_keywords" to excludeKeywords,
+        "source" to "long_memory",
       ),
       "entries" to entries.map { record ->
         mapOf(
@@ -1293,6 +1336,39 @@ class OpenCrayRuntime(
         )
       },
     )
+  }
+
+  private fun memorySearchExcludeKeywords(entries: List<RankedMemoryRecord>): List<String> {
+    val values =
+      entries
+        .map { it.record }
+        .filter { record ->
+          record.scope.equals("long", ignoreCase = true) &&
+            (record.key.contains("preference", ignoreCase = true) ||
+              record.key.contains("negative", ignoreCase = true))
+        }
+        .joinToString(" ") { it.value.lowercase(Locale.getDefault()) }
+
+    if (values.isBlank()) return emptyList()
+
+    val keywords = mutableSetOf<String>()
+    fun addIfPresent(
+      marker: String,
+      vararg excludes: String,
+    ) {
+      if (values.contains(marker.lowercase(Locale.getDefault()))) {
+        excludes.forEach { keywords.add(it) }
+      }
+    }
+
+    addIfPresent("足球", "足球", "足球比赛", "世界杯")
+    addIfPresent("世界杯", "世界杯")
+    addIfPresent("football", "football", "soccer", "world cup")
+    addIfPresent("篮球", "篮球", "篮球比赛")
+    addIfPresent("演唱会", "演唱会")
+    addIfPresent("讲座", "讲座")
+
+    return keywords.toList()
   }
 
   private fun buildMemoryPromptText(profile: ContextWindowProfile): String {
@@ -1471,7 +1547,6 @@ class OpenCrayRuntime(
           upsertPlanningCardList(cards, card)
         }
       }
-    val memory = memoryManager.updateFromGoal(current.memoryRecords, goal)
     val audit =
       allActions.map { action ->
         AuditEntry(
@@ -1491,7 +1566,7 @@ class OpenCrayRuntime(
         planningCards = planningCards,
         safetyRecords = safetyRecords + current.safetyRecords,
         tasks = listOf(task) + current.tasks.filterNot { it.id == task.id }.take(9),
-        memoryRecords = memory,
+        memoryRecords = current.memoryRecords,
         auditTrail = audit + current.auditTrail.take(99),
         recentEvents = listOf("Gateway planned task ${task.id}.") + current.recentEvents,
       ),
@@ -1577,6 +1652,19 @@ class OpenCrayRuntime(
 
     val goal = snapshot().tasks.firstOrNull { it.id == task.id }?.goal ?: "Server dispatched task"
 
+    if (isNotificationReadAction(action) && !notificationContextEnabled()) {
+      val report =
+        ActionExecutionReport(
+          success = false,
+          message = "通知上下文已关闭，已跳过读取系统通知。",
+          recoverable = false,
+          semantic = "notification_context_disabled",
+          metadata = mapOf("reason" to "notification_context_disabled"),
+        )
+      applyExecutionReport(task = task, action = action, report = report, submitGatewayResult = true)
+      return
+    }
+
     // If this skill needs calendar permission, request it and defer execution.
     if (requiresCalendarPermission(action) && !hasCalendarPermissions()) {
       val delegate = calendarPermissionDelegate
@@ -1644,9 +1732,29 @@ class OpenCrayRuntime(
       return
     }
 
+    val executableTargetActions =
+      if (notificationContextEnabled()) {
+        targetActions
+      } else {
+        val blocked = targetActions.filter { isNotificationReadAction(it) }
+        if (blocked.isNotEmpty()) {
+          runtimeRepository.appendEvent("Notification context is disabled; skipped ${blocked.joinToString { it.id }}.")
+        }
+        targetActions.filterNot { isNotificationReadAction(it) }
+      }
+
+    if (executableTargetActions.isEmpty()) {
+      runtimeRepository.appendEvent("No executable actions found after capability filtering.")
+      return
+    }
+
     val approvalGated =
-      targetActions.filter { action ->
-        action.status != "approved" && policyEngine.review(action).status == "Awaiting approval"
+      if (safetyGuardEnabled()) {
+        executableTargetActions.filter { action ->
+          action.status != "approved" && policyEngine.review(action).status == "Awaiting approval"
+        }
+      } else {
+        emptyList()
       }
     if (approvalGated.isNotEmpty()) {
       val gatedIds = approvalGated.map { it.id }.toSet()
@@ -1686,7 +1794,7 @@ class OpenCrayRuntime(
       }
     }
 
-    val approvedTargetActions = targetActions - approvalGated.toSet()
+    val approvedTargetActions = executableTargetActions - approvalGated.toSet()
 
     // Partition: defer calendar actions that still need runtime permission.
     val calendarDeferred = if (!hasCalendarPermissions()) {
@@ -2336,6 +2444,18 @@ class OpenCrayRuntime(
       "detect_calendar_conflicts",
       "delete_calendar_event",
     )
+
+  private fun isNotificationReadAction(action: SystemAction): Boolean =
+    action.id.substringBefore("#") == "read_notifications"
+
+  private fun notificationContextEnabled(): Boolean =
+    capabilityEnabled("notification_context")
+
+  private fun safetyGuardEnabled(): Boolean =
+    capabilityEnabled("safety_guard")
+
+  private fun capabilityEnabled(capabilityId: String): Boolean =
+    snapshot().capabilities.firstOrNull { it.id == capabilityId }?.enabled != false
 
   private fun hasCalendarPermissions(): Boolean {
     val read = ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALENDAR) ==

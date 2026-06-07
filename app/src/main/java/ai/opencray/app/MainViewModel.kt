@@ -379,7 +379,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       ChatMessage(
         id = "sys_${UUID.randomUUID().toString().take(8)}",
         role = ChatRole.Assistant,
-        text = "New chat started. You can chat directly, or use natural language to delegate tasks.",
+        text = "需要我做什么？",
       )
     conversations[id] =
       ConversationThread(
