@@ -50,3 +50,24 @@ flowchart TD
     G --> H[memory_update]
     H --> I[finalize]
 ```
+
+LangGraph local run:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r agent/langgraph/requirements.txt
+
+python3 agent/langgraph/openthu_agent.py \
+  --input "帮我整理本周作业并加到提醒和日历"
+```
+
+Agent-Core server run (PC host):
+
+```bash
+python3 -m agent.langgraph.agent_core_server \
+  --host 0.0.0.0 \
+  --port 18789 \
+  --store-file agent/langgraph/agent_core_store.json \
+  --memory-file agent/langgraph/memory_store.json
+```

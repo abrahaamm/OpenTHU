@@ -3,7 +3,7 @@ package ai.opencray.app.domain.model
 enum class AppDestination(
   val label: String,
 ) {
-  Context(label = "Context"),
-  Actions(label = "Actions"),
-  Safety(label = "Safety"),
+  Chat(label = "Chat"),
+  Planning(label = "Planning"),
+  Settings(label = "Settings"),
 }

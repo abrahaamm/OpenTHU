@@ -2,24 +2,25 @@ package ai.opencray.app.data.repository
 
 import ai.opencray.app.data.model.RuntimeSnapshot
 import ai.opencray.app.domain.model.AgentCapability
-import ai.opencray.app.domain.model.CommonApp
 import ai.opencray.app.domain.model.ContextSignal
 import ai.opencray.app.domain.model.MemoryRecord
 import ai.opencray.app.domain.model.SafetyRecord
 import ai.opencray.app.domain.model.SystemAction
 import java.util.UUID
 
-class FakeRuntimeRepository : RuntimeRepository {
+class FakeRuntimeRepository(
+  private val memoryStore: RuntimeMemoryStore? = null,
+) : RuntimeRepository {
   private var snapshot =
     RuntimeSnapshot(
       appTitle = "OpenTHU",
       nodeName = "Cray Node Alpha",
       connectionStatus = "Bootstrapping",
       transportLabel = "Android system agent prototype",
-      host = "192.168.0.88",
+      host = "10.0.2.2",
       port = 18789,
       tlsEnabled = false,
-      featureFlags = listOf("context-aware", "cross-app", "safety-audit", "action-loop", "memory"),
+      featureFlags = listOf("context-aware", "system-intents", "safety-audit", "action-loop", "memory"),
       capabilities =
         listOf(
           AgentCapability(
@@ -28,24 +29,10 @@ class FakeRuntimeRepository : RuntimeRepository {
             description = "读取通知和近期事件，给系统级 agent 提供现场上下文。",
           ),
           AgentCapability(
-            id = "cross_app_actions",
-            title = "Cross-App Actions",
-            description = "预留跨 App 操作、Intent 跳转和 UI 自动化执行链路。",
-          ),
-          AgentCapability(
             id = "safety_guard",
             title = "Safety Guard",
             description = "高风险动作确认、审计记录和可回放执行轨迹。",
           ),
-        ),
-      commonApps =
-        listOf(
-          CommonApp(id = "wechat", label = "WeChat", packageName = "com.tencent.mm"),
-          CommonApp(id = "alipay", label = "Alipay", packageName = "com.eg.android.AlipayGphone"),
-          CommonApp(id = "amap", label = "Amap", packageName = "com.autonavi.minimap"),
-          CommonApp(id = "taobao", label = "Taobao", packageName = "com.taobao.taobao"),
-          CommonApp(id = "meituan", label = "Meituan", packageName = "com.sankuai.meituan"),
-          CommonApp(id = "qq", label = "QQ", packageName = "com.tencent.mobileqq"),
         ),
       contextSignals =
         listOf(
@@ -71,9 +58,9 @@ class FakeRuntimeRepository : RuntimeRepository {
       systemActions =
         listOf(
           SystemAction(
-            id = "open_tsinghua_news",
-            title = "Open Campus News",
-            summary = "Open Tsinghua portal page for latest campus updates.",
+            id = "get_campus_activities",
+            title = "Get Campus Activities",
+            summary = "Fetch campus activity information and official source links.",
             riskLevel = "low",
             requiresApproval = false,
             confidence = 90,
@@ -83,8 +70,13 @@ class FakeRuntimeRepository : RuntimeRepository {
             id = "create_calendar_event",
             title = "Create Calendar Event",
             summary = "Create schedule item from parsed campus event/course info.",
-            riskLevel = "low",
-            requiresApproval = false,
+            riskLevel = "medium",
+            requiresApproval = true,
+            params =
+              mapOf(
+                "title" to "OpenTHU campus task",
+                "description" to "Seed event from prototype",
+              ),
             confidence = 80,
             explain = "Seed action for schedule setup.",
           ),
@@ -108,17 +100,7 @@ class FakeRuntimeRepository : RuntimeRepository {
           ),
         ),
       tasks = emptyList(),
-      memoryRecords =
-        listOf(
-          MemoryRecord(
-            id = UUID.randomUUID().toString(),
-            scope = "long",
-            key = "default_preference",
-            value = "prefer_calendar_and_alarm",
-            weight = 60,
-            updatedAtEpochMs = System.currentTimeMillis(),
-          ),
-        ),
+      memoryRecords = initialMemoryRecords(),
       auditTrail = emptyList(),
       recentEvents =
         listOf(
@@ -131,7 +113,7 @@ class FakeRuntimeRepository : RuntimeRepository {
   override fun getSnapshot(): RuntimeSnapshot = snapshot
 
   override fun replaceSnapshot(snapshot: RuntimeSnapshot) {
-    this.snapshot = snapshot
+    updateSnapshot(snapshot)
   }
 
   override fun markRuntimeBooted() {
@@ -218,11 +200,29 @@ class FakeRuntimeRepository : RuntimeRepository {
       )
   }
 
-  override fun updateCommonApps(apps: List<CommonApp>) {
-    snapshot = snapshot.copy(commonApps = apps)
-  }
-
   override fun appendEvent(event: String) {
     snapshot = snapshot.copy(recentEvents = listOf(event) + snapshot.recentEvents)
   }
+
+  private fun updateSnapshot(next: RuntimeSnapshot) {
+    val memoryChanged = snapshot.memoryRecords != next.memoryRecords
+    snapshot = next
+    if (memoryChanged) {
+      memoryStore?.save(next.memoryRecords)
+    }
+  }
+
+  private fun initialMemoryRecords(): List<MemoryRecord> =
+    memoryStore
+      ?.load()
+      ?: listOf(
+        MemoryRecord(
+          id = UUID.randomUUID().toString(),
+          scope = "long",
+          key = "default_preference",
+          value = "prefer_calendar_and_alarm",
+          weight = 60,
+          updatedAtEpochMs = System.currentTimeMillis(),
+        ),
+      )
 }

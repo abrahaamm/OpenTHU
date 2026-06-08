@@ -1,4 +1,5 @@
 .gradle/
+.gradle-local/
 .idea/
 local.properties
 build/
@@ -7,3 +8,15 @@ captures/
 *.iml
 .DS_Store
 test-apks/*.apk
+agent/langgraph/memory_store.json
+*.zip
+*.xlsx
+test_output/
+__pycache__/
+.kotlin/
+.env
+log/
+agent/langgraph/agent/langgraph/
+.venv/
+openthu_agent_core_store.json
+openthu_agent_memory.json
