@@ -1,113 +1,54 @@
 # OpenTHU
 
-OpenTHU is a mobile agent project for Tsinghua student scenarios. It combines:
+OpenTHU 是一个面向校园场景的移动端 Agent 项目，采用“服务端智能规划 + 端侧安全执行”的总体思路，目标是将自然语言目标转化为可控、可审计的系统动作。
 
-- an Android prototype app in `app/`
-- a LangGraph-based agent core in `agent/langgraph/`
-- a skill-first architecture defined in `docs/`
+## 项目规划
 
-The current direction is "PC Agent-Core Server + Android Device Executor":
+- 阶段一：核心链路打通  
+  完成从用户目标输入到任务规划、安全审查、设备执行、结果回传的端到端闭环。
+- 阶段二：技能体系扩展  
+  围绕课程、作业、通知、日历、闹钟等校园高频需求，沉淀可复用的 Skill 能力。
+- 阶段三：可靠性与工程化完善  
+  强化鉴权、审计、任务持久化与失败重试机制，提升多设备与长期运行稳定性。
 
-- server-side LangGraph handles normalize / plan / safety / audit / memory
-- Android app pulls approved tasks and executes system actions locally
-- execution results are reported back to the server for task state updates
-- FCM can be used as wake-up signal, while task payload stays on HTTPS pull
+## 技术栈
 
-## Current Architecture
+- Android 客户端：Kotlin、Android SDK（minSdk 26）
+- 服务端：Python、FastAPI
+- 智能工作流：LangGraph
+- 模型接入：OpenAI 兼容接口（可配置模型与 base URL）
+- 数据与状态：JSON 文件持久化（任务状态、记忆数据）
 
-```mermaid
-flowchart LR
-    A["User Goal"] --> B["PC Agent-Core Server"]
-    B --> C["normalize -> plan -> safety"]
-    C --> D["Approved Skill Queue"]
-    D --> E["Android App Pulls /tasks/next"]
-    E --> F["Local Action Execution"]
-    F --> G["POST task result to server"]
-    G --> H["audit + memory + task status"]
+## 项目框架
+
+```text
+OpenCray/
+├── app/                    # Android 端：UI、运行时调度、动作执行、安全审核
+├── agent/langgraph/        # Agent-Core：规划、安全、审计、记忆、技能管理
+├── docs/                   # 架构、接口与研发文档
+├── scripts/                # 本地调试与验证脚本
+└── test-apks/              # 测试说明与相关资源
 ```
 
-## Project Layout
+### 架构说明
 
-- `/app`
-  - existing Android prototype
-  - UI, runtime state, safety layer, and local system integration experiments
-- `/agent/langgraph`
-  - current agent core framework
-  - skill registry, workflow orchestration, safety review, audit, memory
-- `/docs`
-  - `RD.md`: product scope and system boundary
-  - `API.md`: skill contracts and workflow state model
-  - `AGENT_CORE_SERVER.md`: server-dispatch architecture and HTTP API
-  - `API_http.md`: upstream Tsinghua interface references for future skill implementers
-- `/scripts`
-  - prototype Android testing helpers
-  - `run_calendar_preset_gateway_server.py`: preset-plan gateway stub for calendar emulator e2e tests
+- Agent-Core（PC/Server）：负责目标标准化、技能规划、安全审查、审计记录与记忆更新。
+- Android Executor（Device）：负责拉取待执行技能，调用本地系统能力执行，并回传结构化结果。
+- 通信方式：以 HTTP API 进行设备注册、任务下发、结果回传，形成任务闭环。
 
-## What Changed
+### LangGraph 流程图
 
-The architecture has been shifted to a skill-first model:
-
-1. Agent-core can now run as a standalone server on a personal computer.
-2. Reminders, calendar, alarms, assignments, courses, notices, activities, search, and related capabilities are all modeled as skills.
-3. The workflow keeps the original core loop:
-   - requirement normalization
-   - planning
-   - safety check
-   - approval
-   - execution
-   - replan
-   - audit
-   - memory update
-4. Concrete skill implementations are intentionally decoupled from the planning server.
-
-## Current Status
-
-The LangGraph core now provides:
-
-- a docs-aligned `AgentState`
-- a `SkillRegistry` boundary for injecting skills
-- LLM-first skill planning with deterministic fallback
-- hybrid safety review
-  - rule-based risk assessment
-  - optional LLM risk assessment
-  - final risk uses the stricter result
-- execution through registered skill handlers (local mode) and device dispatch mode (server mode)
-- failure replanning
-- audit log generation
-- lightweight memory persistence
-
-What is not implemented here:
-
-- most data/auth skill bodies
-- upstream Tsinghua HTTP adapters
-- complete device bridge coverage for all action skills (in progress)
-
-Those are meant to be added later by separate skill implementers behind the same registry interface.
-
-## LangGraph Core
-
-The current agent entrypoint is:
-
-- [openthu_agent.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/openthu_agent.py)
-- [agent_core_server.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/agent_core_server.py)
-
-The skill abstraction lives in:
-
-- [skill_core.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skill_core.py)
-- [skill_manager.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skill_manager.py)
-
-Skill developer docs:
-
-- [SKILL_MANAGER_SCHEMA_GUIDE.md](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/SKILL_MANAGER_SCHEMA_GUIDE.md)
-- [skill_json_schema.template.json](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skills/skill_json_schema.template.json)
-- [skill_test_template.py](/Users/jasonlau/Documents/homeworks/mobile/openthu/OpenCray/agent/langgraph/skills/skill_test_template.py)
-
-## Build
-
-Android build:
-
-```bash
-./gradlew -Dhttp.proxyHost= -Dhttp.proxyPort= -Dhttps.proxyHost= -Dhttps.proxyPort= :app:assembleDebug
+```mermaid
+flowchart TD
+    A[normalize_requirement] --> B[plan_skills]
+    B --> C[safety_check]
+    C --> D[execute_skills]
+    D --> E{failed skills?}
+    E -- yes --> F[replan_failed]
+    E -- no --> G[audit_record]
+    F --> G
+    G --> H[memory_update]
+    H --> I[finalize]
 ```
 
 LangGraph local run:
